@@ -1,0 +1,191 @@
+{
+  "subject": "考研数学",
+  "nodes": [
+    {
+      "code": "math.calculus",
+      "name": "高等数学",
+      "ordinal": 1,
+      "is_assessable": false,
+      "children": [
+        {
+          "code": "math.calculus.limit",
+          "name": "极限与连续",
+          "ordinal": 1,
+          "is_assessable": false,
+          "children": [
+            {
+              "code": "math.calculus.limit.lhopital",
+              "name": "洛必达法则",
+              "ordinal": 1,
+              "is_assessable": true,
+              "summary": "用导数把 0/0 与无穷比无穷型未定式化成可求极限的形式。",
+              "learning_goal": "能判断未定式类型，先验证可导条件，再决定是否使用洛必达法则。",
+              "strategy": {
+                "min_confirmations": 4,
+                "min_real_questions": 4,
+                "required_question_types": {
+                  "single_choice": 1,
+                  "fill_blank": 1,
+                  "calculation": 2
+                },
+                "excluded_question_types": [
+                  "proof",
+                  "subjective"
+                ],
+                "required_skill_tags": [
+                  "适用条件",
+                  "0/0 型"
+                ],
+                "required_variant_count": 1,
+                "min_day_span": 2,
+                "note": "混合考查：先判断适用条件，再做计算。"
+              }
+            },
+            {
+              "code": "math.calculus.limit.infinitesimal",
+              "name": "等价无穷小替换",
+              "ordinal": 2,
+              "is_assessable": true,
+              "summary": "在乘除结构中用等价无穷小简化极限，加减结构中不能直接替换。",
+              "learning_goal": "能识别常见等价无穷小，并说明为什么加减结构中替换会出错。",
+              "strategy": {
+                "min_confirmations": 3,
+                "min_real_questions": 3,
+                "required_question_types": {
+                  "single_choice": 1,
+                  "fill_blank": 2
+                },
+                "excluded_question_types": [
+                  "calculation",
+                  "proof",
+                  "subjective"
+                ],
+                "required_skill_tags": [
+                  "同阶与等价",
+                  "加减不能换"
+                ],
+                "required_variant_count": 1,
+                "min_day_span": 2,
+                "note": "只考客观题：不做计算大题。"
+              }
+            }
+          ]
+        },
+        {
+          "code": "math.calculus.differential",
+          "name": "一元函数微分学",
+          "ordinal": 2,
+          "is_assessable": false,
+          "children": [
+            {
+              "code": "math.calculus.differential.implicit",
+              "name": "隐函数求导",
+              "ordinal": 1,
+              "is_assessable": true,
+              "summary": "对方程两边同时求导，把 y 视为 x 的函数后解出 dy/dx。",
+              "learning_goal": "能独立写出隐函数求导步骤，并用导数值求切线方程。",
+              "strategy": {
+                "min_confirmations": 4,
+                "min_real_questions": 4,
+                "required_question_types": {
+                  "single_choice": 1,
+                  "calculation": 3
+                },
+                "excluded_question_types": [
+                  "proof",
+                  "subjective"
+                ],
+                "required_skill_tags": [
+                  "两边求导",
+                  "切线方程"
+                ],
+                "required_variant_count": 1,
+                "min_day_span": 2,
+                "note": "以计算为主：选择题 1 道，计算题 3 道。"
+              }
+            }
+          ]
+        },
+        {
+          "code": "math.calculus.series",
+          "name": "无穷级数",
+          "ordinal": 3,
+          "is_assessable": false,
+          "children": [
+            {
+              "code": "math.calculus.series.geometric",
+              "name": "等比级数的敛散性与求和",
+              "ordinal": 1,
+              "is_assessable": true,
+              "summary": "等比级数在公比绝对值小于 1 时收敛，和为 首项 / (1 - 公比)。",
+              "learning_goal": "能判断等比级数是否收敛，并在收敛时用公式求和。",
+              "strategy": {
+                "min_confirmations": 3,
+                "min_real_questions": 3,
+                "required_question_types": {
+                  "single_choice": 1,
+                  "fill_blank": 2
+                },
+                "excluded_question_types": [
+                  "calculation",
+                  "proof",
+                  "subjective"
+                ],
+                "required_skill_tags": [
+                  "收敛条件",
+                  "求和公式"
+                ],
+                "required_variant_count": 1,
+                "min_day_span": 2,
+                "note": "只考客观题。"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "code": "math.linear-algebra",
+      "name": "线性代数",
+      "ordinal": 2,
+      "is_assessable": false,
+      "children": [
+        {
+          "code": "math.linear-algebra.determinant",
+          "name": "行列式",
+          "ordinal": 1,
+          "is_assessable": false,
+          "children": [
+            {
+              "code": "math.linear-algebra.determinant.properties",
+              "name": "行列式的性质",
+              "ordinal": 1,
+              "is_assessable": true,
+              "summary": "行列式对换行、数乘、可逆与乘积的取值规律。",
+              "learning_goal": "能用行列式性质计算 |kA|、|AB| 与 |A^-1|，不需要展开每一项。",
+              "strategy": {
+                "min_confirmations": 4,
+                "min_real_questions": 4,
+                "required_question_types": {
+                  "single_choice": 2,
+                  "calculation": 2
+                },
+                "excluded_question_types": [
+                  "proof",
+                  "subjective"
+                ],
+                "required_skill_tags": [
+                  "对换行",
+                  "数乘与可逆"
+                ],
+                "required_variant_count": 1,
+                "min_day_span": 2,
+                "note": "选择题与计算题并重。"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

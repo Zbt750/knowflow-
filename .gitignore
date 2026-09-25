@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# 环境与密钥：绝不提交；仅保留可公开分享的示例模板
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# 前端
+node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+frontend/.vite/
+# TypeScript 增量构建产物（由 vue-tsc --build 生成，不应入库）
+*.tsbuildinfo
+# Playwright 在测试文件旁生成的一次性临时目录
+*.tmpdir/
+
+# 运行期数据
+storage/
+.pgdata/
+chroma/
+# 开发启动脚本写出的日志
+.devlogs/
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 部署用的真实密码配置（模板见 .env.compose.example）
+.env.compose

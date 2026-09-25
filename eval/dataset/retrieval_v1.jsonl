@@ -1,0 +1,14 @@
+{"id": "q01", "query": "洛必达法则的适用条件", "expected_headings": ["第一章 洛必达法则"], "difficulty": "literal", "note": "查询词与标题几乎一致"}
+{"id": "q02", "query": "什么时候不能用洛必达法则", "expected_headings": ["第一章 洛必达法则"], "difficulty": "semantic", "note": "问法完全不同，需要理解语义"}
+{"id": "q03", "query": "反复求导以后还需要检查什么", "expected_headings": ["第一章 洛必达法则"], "difficulty": "semantic", "note": "指常见错误一节的内容"}
+{"id": "q04", "query": "加减法里能不能直接替换等价无穷小", "expected_headings": ["第二章 等价无穷小替换"], "difficulty": "literal", "note": "标题含「加减」与「替换」"}
+{"id": "q05", "query": "x 趋于零时有哪些常用的等价关系", "expected_headings": ["第二章 等价无穷小替换"], "difficulty": "semantic", "note": "指常见等价无穷小一节"}
+{"id": "q06", "query": "隐函数怎么求导数", "expected_headings": ["第三章 隐函数求导"], "difficulty": "literal", "note": "标题含「隐函数求导」"}
+{"id": "q07", "query": "求曲线在某一点的切线方程", "expected_headings": ["第三章 隐函数求导"], "difficulty": "semantic", "note": "只提到应用场景，未提隐函数"}
+{"id": "q08", "query": "等比级数什么时候收敛", "expected_headings": ["第四章 等比级数的敛散性与求和"], "difficulty": "literal", "note": "标题含「等比级数」与「敛散性」"}
+{"id": "q09", "query": "公比绝对值小于一的时候和等于多少", "expected_headings": ["第四章 等比级数的敛散性与求和"], "difficulty": "semantic", "note": "只描述条件，未出现「等比」"}
+{"id": "q10", "query": "行列式整体乘以一个数怎么变化", "expected_headings": ["第五章 行列式的性质"], "difficulty": "semantic", "note": "指数乘性质，注意不是简单数乘"}
+{"id": "q11", "query": "方阵可逆的充要条件是什么", "expected_headings": ["第五章 行列式的性质"], "difficulty": "semantic", "note": "指可逆性与行列式的关系"}
+{"id": "q12", "query": "交换行列式的两行会有什么影响", "expected_headings": ["第五章 行列式的性质"], "difficulty": "literal", "note": "标题未含，但正文含「交换」「两行」"}
+{"id": "q13", "query": "这个软件怎么安装", "expected_headings": [], "difficulty": "out_of_scope", "note": "干扰项：知识库里根本没有这个问题，系统不应编造命中"}
+{"id": "q14", "query": "高等数学核心考点讲义", "expected_headings": ["高等数学核心考点讲义"], "difficulty": "literal", "note": "命中资料自身标题的那个块"}

@@ -1,0 +1,10 @@
+# 前端构建上下文只需要源码与配置文件。
+node_modules
+dist
+test-results
+playwright-report
+blob-report
+*.tmpdir
+*.tsbuildinfo
+e2e
+playwright.config.ts

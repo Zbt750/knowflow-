@@ -1,0 +1,3110 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Kaoyan KB",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health",
+        "description": "数据库可用返回 200，不可用返回统一的 503 错误契约。",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/sessions": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Create Session",
+        "operationId": "create_session_api_chat_sessions_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List Sessions",
+        "description": "列出「未归档」且「已经有消息」的会话。\n\n两条筛选都是有意的：\n\n- `mode`（可选）：篇 01「两种问答模式严格隔离」规定，两种模式的检索范围、\n  matched_kp、追练推荐与学习事件**完全不同**。混在同一个列表里用户分不清\n  哪条属于哪个范围，所以允许按模式取。\n- **空会话不返回**：没有任何消息的会话只是「点了一下新建」留下的残留。\n  真实会话在发第一条问题时就会随事务写入 user 消息，因此这不会漏掉任何会话，\n  只会让列表里剩下的每一条都能点开看。\n\n契约：响应字段与原来完全一致；`mode` 是可选参数，不传即原来的行为。",
+        "operationId": "list_sessions_api_chat_sessions_get",
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "builtin",
+                    "user"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mode"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/sessions/{session_id}": {
+      "patch": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Rename Session",
+        "description": "会话标题仅供历史导航；不会改写消息、引用或学习事实。",
+        "operationId": "rename_session_api_chat_sessions__session_id__patch",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Delete Session",
+        "description": "**物理删除**会话，连同它的消息与引用一起从库里移除。\n\n2026-09-20 之前这里是**归档**（只置 `archived_at`），理由是「问答与引用要可追溯」。\n产品方明确要求列表里的 × 真的删掉记录，因此改成物理删除；\n该决策与取舍记在 `docs/reference-build-changes.md` 的 D-31。\n\n按依赖顺序逐条删（引用 → 消息 → 会话），而不是只删会话行、靠数据库级联：\n模式里虽然声明了 `ON DELETE CASCADE`，但显式删除不依赖那份约束是否真的建成，\n换库或重建约束时也不会静默留下孤儿行。\n\n注意：`learning_events.source_id` **故意没有外键**（见 `backend/models/learning.py`），\n所以这里不会、也不应该连带删除学习事件 —— 掌握度与弱信号是学习事实，\n不该因为用户清理了一轮对话就抹掉；代价是那几条事件的 `source_id` 会变成悬空 id。",
+        "operationId": "delete_session_api_chat_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/sessions/{session_id}/messages": {
+      "get": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "List Messages",
+        "operationId": "list_messages_api_chat_sessions__session_id__messages_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/sessions/{session_id}/answers": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Ask",
+        "operationId": "ask_api_chat_sessions__session_id__answers_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/sessions/{session_id}/answers:stream": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Ask Stream",
+        "operationId": "ask_stream_api_chat_sessions__session_id__answers_stream_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/sessions/{session_id}/followup-candidates": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Followup Candidates",
+        "description": "只从服务端已归因叶子的既有题库读取候选；绝不在问答层造题或改掌握状态。",
+        "operationId": "followup_candidates_api_chat_sessions__session_id__followup_candidates_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FollowupCandidatesRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/chat/sessions/{session_id}/mark-confused": {
+      "post": {
+        "tags": [
+          "chat"
+        ],
+        "summary": "Mark Confused",
+        "description": "把困惑写成弱信号；它绝不伪造成作答、更不清空毕业证据。",
+        "operationId": "mark_confused_api_chat_sessions__session_id__mark_confused_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans/today": {
+      "get": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Read Today Plan",
+        "description": "没有今天的计划就返回 setup；页面据此渲染准备页，而不是直接塞题。",
+        "operationId": "read_today_plan_api_plans_today_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TodaySetup"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TodayActive"
+                    }
+                  ],
+                  "title": "Response Read Today Plan Api Plans Today Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans/today/generate": {
+      "post": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Generate Today Plan",
+        "description": "生成动作只允许成功一次；“今天学什么”由用户在准备页确认后交给服务冻结。",
+        "operationId": "generate_today_plan_api_plans_today_generate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeneratePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodayActive"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans/{plan_id}/items": {
+      "get": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Read Plan Items",
+        "operationId": "read_plan_items_api_plans__plan_id__items_get",
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Plan Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodayActive"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/plans/{plan_id}/questions": {
+      "post": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Append Plan Questions",
+        "description": "追加只从已有题库取题，永远是卷尾；不重洗、不生成、不显示来源。",
+        "operationId": "append_plan_questions_api_plans__plan_id__questions_post",
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Plan Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendQuestionsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TodayActive"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/practice-items/{item_id}/answer": {
+      "get": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Read Practice Item Answer",
+        "description": "返回答案与解析。\n\n这里**只读**：不写 revealed_at、不改掌握度、不影响毕业与复习计划、\n也不影响用户自评。做题前、中、后都可以调用。",
+        "operationId": "read_practice_item_answer_api_practice_items__item_id__answer_get",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeItemAnswer"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/practice-items/{item_id}/self-assessments": {
+      "post": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Submit Self Assessment",
+        "description": "一次自评的完整事务：attempt + 状态投影 + 审计事件一起提交。",
+        "operationId": "submit_self_assessment_api_practice_items__item_id__self_assessments_post",
+        "parameters": [
+          {
+            "name": "item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitSelfAssessmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssessmentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/knowledge/tree": {
+      "get": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Read Knowledge Tree",
+        "operationId": "read_knowledge_tree_api_knowledge_tree_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeTreeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/knowledge/{kp_id}": {
+      "get": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Read Knowledge Node",
+        "operationId": "read_knowledge_node_api_knowledge__kp_id__get",
+        "parameters": [
+          {
+            "name": "kp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kp Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnowledgeNodeDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/knowledge/{kp_id}/self-assessment": {
+      "post": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Submit Node Self Assessment",
+        "description": "叶子整体自评：mastered 只写 2 个透明基础确认，绝不伪造两条作答。",
+        "operationId": "submit_node_self_assessment_api_knowledge__kp_id__self_assessment_post",
+        "parameters": [
+          {
+            "name": "kp_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Kp Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeSelfAssessmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeSelfAssessmentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/materials": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Upload Material",
+        "description": "上传一份资料并立即入队处理。",
+        "operationId": "upload_material_api_materials_post",
+        "parameters": [
+          {
+            "name": "title",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Title"
+            }
+          },
+          {
+            "name": "source_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "user",
+              "title": "Source Type"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_material_api_materials_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialUploadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "List Materials",
+        "operationId": "list_materials_api_materials_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "source_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Type"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/materials/search": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Search Materials",
+        "description": "调试用混合检索：与后续问答用的是同一条检索链路。",
+        "operationId": "search_materials_api_materials_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/materials/{material_id}": {
+      "get": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Get Material",
+        "operationId": "get_material_api_materials__material_id__get",
+        "parameters": [
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Delete Material",
+        "operationId": "delete_material_api_materials__material_id__delete",
+        "parameters": [
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/materials/{material_id}/content": {
+      "get": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Get Material Content",
+        "description": "读取已入库的规范化正文；文件路径与原始二进制不对外暴露。",
+        "operationId": "get_material_content_api_materials__material_id__content_get",
+        "parameters": [
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialContentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/materials/{material_id}/chunks": {
+      "get": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "List Material Chunks",
+        "description": "块预览：用来核对「这份资料实际被切成了什么」。",
+        "operationId": "list_material_chunks_api_materials__material_id__chunks_get",
+        "parameters": [
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "focus_chunk_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Focus Chunk Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialChunkListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/materials/{material_id}/reindex": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Reindex Material",
+        "operationId": "reindex_material_api_materials__material_id__reindex_post",
+        "parameters": [
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialJobView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/materials/{material_id}/retry": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "summary": "Retry Material",
+        "operationId": "retry_material_api_materials__material_id__retry_post",
+        "parameters": [
+          {
+            "name": "material_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Material Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialJobView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AppendQuestionsRequest": {
+        "properties": {
+          "question_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Question Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question_ids"
+        ],
+        "title": "AppendQuestionsRequest"
+      },
+      "AskRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Question"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "AskRequest"
+      },
+      "AssessmentResponse": {
+        "properties": {
+          "practice_item_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Practice Item Id"
+          },
+          "kp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Kp Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "reason_code": {
+            "type": "string",
+            "title": "Reason Code"
+          },
+          "effective_confirmation_count": {
+            "type": "integer",
+            "title": "Effective Confirmation Count"
+          },
+          "manual_credit_count": {
+            "type": "integer",
+            "title": "Manual Credit Count"
+          },
+          "next_review_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Review At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "practice_item_id",
+          "kp_id",
+          "state",
+          "reason_code",
+          "effective_confirmation_count",
+          "manual_credit_count"
+        ],
+        "title": "AssessmentResponse"
+      },
+      "Body_upload_material_api_materials_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_material_api_materials_post"
+      },
+      "ChunkPreviewView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "ordinal": {
+            "type": "integer",
+            "title": "Ordinal"
+          },
+          "heading_path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Heading Path"
+          },
+          "char_count": {
+            "type": "integer",
+            "title": "Char Count"
+          },
+          "preview": {
+            "type": "string",
+            "title": "Preview"
+          },
+          "kp_hint_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kp Hint Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "ordinal",
+          "heading_path",
+          "char_count",
+          "preview"
+        ],
+        "title": "ChunkPreviewView",
+        "description": "块预览：用于「资料到底被切成了什么」的自查。"
+      },
+      "CreateSessionRequest": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "default": "新对话"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "user"
+            ],
+            "title": "Mode",
+            "default": "builtin"
+          }
+        },
+        "type": "object",
+        "title": "CreateSessionRequest"
+      },
+      "FollowupCandidatesRequest": {
+        "properties": {
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          }
+        },
+        "type": "object",
+        "title": "FollowupCandidatesRequest"
+      },
+      "GapItemView": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "current": {
+            "type": "integer",
+            "title": "Current"
+          },
+          "required": {
+            "type": "integer",
+            "title": "Required"
+          },
+          "satisfied": {
+            "type": "boolean",
+            "title": "Satisfied"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "current",
+          "required",
+          "satisfied"
+        ],
+        "title": "GapItemView",
+        "description": "一条毕业条件的进度。key 是稳定机器码，页面按它决定展示方式。"
+      },
+      "GeneratePlanRequest": {
+        "properties": {
+          "selected_kp_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Selected Kp Ids"
+          },
+          "budget": {
+            "type": "string",
+            "pattern": "^(light|standard|deep)$",
+            "title": "Budget",
+            "default": "standard"
+          }
+        },
+        "type": "object",
+        "required": [
+          "selected_kp_ids"
+        ],
+        "title": "GeneratePlanRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "database": {
+            "type": "string",
+            "title": "Database"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "test",
+              "prod"
+            ],
+            "title": "Environment"
+          },
+          "retrieval": {
+            "type": "string",
+            "title": "Retrieval",
+            "default": "unknown"
+          },
+          "retrieval_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Reason"
+          },
+          "worker": {
+            "type": "string",
+            "title": "Worker",
+            "default": "unknown"
+          },
+          "llm_configured": {
+            "type": "boolean",
+            "title": "Llm Configured",
+            "default": false
+          },
+          "llm_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "database",
+          "environment"
+        ],
+        "title": "HealthResponse"
+      },
+      "KnowledgeNodeDetail": {
+        "properties": {
+          "node": {
+            "$ref": "#/components/schemas/KnowledgeNodeView"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/NodeQuestionView"
+            },
+            "type": "array",
+            "title": "Questions"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/NodeAttemptView"
+            },
+            "type": "array",
+            "title": "Attempts"
+          },
+          "materials_ready": {
+            "type": "boolean",
+            "title": "Materials Ready",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "node",
+          "questions",
+          "attempts"
+        ],
+        "title": "KnowledgeNodeDetail"
+      },
+      "KnowledgeNodeView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "subject": {
+            "type": "string",
+            "title": "Subject"
+          },
+          "ordinal": {
+            "type": "integer",
+            "title": "Ordinal"
+          },
+          "is_assessable": {
+            "type": "boolean",
+            "title": "Is Assessable"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "learning_goal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learning Goal"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "next_review_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Review At"
+          },
+          "mastered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mastered At"
+          },
+          "node_self_grade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Self Grade"
+          },
+          "manual_credit_count": {
+            "type": "integer",
+            "title": "Manual Credit Count",
+            "default": 0
+          },
+          "effective_confirmation_count": {
+            "type": "integer",
+            "title": "Effective Confirmation Count",
+            "default": 0
+          },
+          "has_real_variant": {
+            "type": "boolean",
+            "title": "Has Real Variant",
+            "default": false
+          },
+          "first_confirmed_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Confirmed On"
+          },
+          "last_confirmed_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Confirmed On"
+          },
+          "day_span": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Span"
+          },
+          "gap_items": {
+            "items": {
+              "$ref": "#/components/schemas/GapItemView"
+            },
+            "type": "array",
+            "title": "Gap Items",
+            "default": []
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "required_question_types": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Required Question Types",
+            "default": {}
+          },
+          "excluded_question_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Excluded Question Types",
+            "default": []
+          },
+          "required_skill_tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Skill Tags",
+            "default": []
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeNodeView"
+            },
+            "type": "array",
+            "title": "Children",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "subject",
+          "ordinal",
+          "is_assessable"
+        ],
+        "title": "KnowledgeNodeView",
+        "description": "知识树节点；父节点 state 必须为 None，由页面汇总 children。"
+      },
+      "KnowledgeTreeResponse": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeNodeView"
+            },
+            "type": "array",
+            "title": "Nodes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nodes"
+        ],
+        "title": "KnowledgeTreeResponse"
+      },
+      "MaterialChunkListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChunkPreviewView"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "MaterialChunkListResponse"
+      },
+      "MaterialContentResponse": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "MaterialContentResponse",
+        "description": "资料的规范化全文，仅用于阅读；不暴露磁盘路径。"
+      },
+      "MaterialDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "source_type": {
+            "type": "string",
+            "title": "Source Type"
+          },
+          "original_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Filename"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "file_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size"
+          },
+          "active_index_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Index Version"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "chunk_count": {
+            "type": "integer",
+            "title": "Chunk Count",
+            "default": 0
+          },
+          "latest_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MaterialJobView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "source_type",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MaterialDetail",
+        "description": "资料详情：额外带上块数与最近任务。"
+      },
+      "MaterialJobView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "job_type": {
+            "type": "string",
+            "title": "Job Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "max_attempts": {
+            "type": "integer",
+            "title": "Max Attempts"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "result_index_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Index Version"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "job_type",
+          "status",
+          "attempts",
+          "max_attempts",
+          "created_at"
+        ],
+        "title": "MaterialJobView",
+        "description": "最近一次处理任务的状态。"
+      },
+      "MaterialListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MaterialView"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "stats": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Stats"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "stats"
+        ],
+        "title": "MaterialListResponse"
+      },
+      "MaterialUploadResponse": {
+        "properties": {
+          "material": {
+            "$ref": "#/components/schemas/MaterialView"
+          },
+          "job_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Job Id"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "material",
+          "job_id",
+          "message"
+        ],
+        "title": "MaterialUploadResponse",
+        "description": "上传成功后的即时响应：任务在后台执行，前端轮询详情即可。"
+      },
+      "MaterialView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "source_type": {
+            "type": "string",
+            "title": "Source Type"
+          },
+          "original_filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Filename"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "file_size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size"
+          },
+          "active_index_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Index Version"
+          },
+          "last_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error Code"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "source_type",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MaterialView",
+        "description": "资料列表项。"
+      },
+      "NodeAttemptView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "question_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Question Id"
+          },
+          "question_stem": {
+            "type": "string",
+            "title": "Question Stem"
+          },
+          "self_grade": {
+            "type": "string",
+            "title": "Self Grade"
+          },
+          "objective_result": {
+            "type": "string",
+            "title": "Objective Result"
+          },
+          "result_state": {
+            "type": "string",
+            "title": "Result State"
+          },
+          "reason_code": {
+            "type": "string",
+            "title": "Reason Code"
+          },
+          "submitted_at": {
+            "type": "string",
+            "title": "Submitted At"
+          },
+          "raw_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "question_id",
+          "question_stem",
+          "self_grade",
+          "objective_result",
+          "result_state",
+          "reason_code",
+          "submitted_at"
+        ],
+        "title": "NodeAttemptView",
+        "description": "练习记录：永久保存的作答历史。"
+      },
+      "NodeQuestionView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "question_type": {
+            "type": "string",
+            "title": "Question Type"
+          },
+          "difficulty": {
+            "type": "string",
+            "title": "Difficulty"
+          },
+          "is_variant": {
+            "type": "boolean",
+            "title": "Is Variant"
+          },
+          "stem": {
+            "type": "string",
+            "title": "Stem"
+          },
+          "kp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Kp Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "question_type",
+          "difficulty",
+          "is_variant",
+          "stem",
+          "kp_id"
+        ],
+        "title": "NodeQuestionView",
+        "description": "知识节点题库里的一道题；这里绝不返回答案与解析。"
+      },
+      "NodeSelfAssessmentRequest": {
+        "properties": {
+          "self_grade": {
+            "type": "string",
+            "title": "Self Grade"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "self_grade",
+          "idempotency_key"
+        ],
+        "title": "NodeSelfAssessmentRequest"
+      },
+      "NodeSelfAssessmentResponse": {
+        "properties": {
+          "kp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Kp Id"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "reason_code": {
+            "type": "string",
+            "title": "Reason Code"
+          },
+          "effective_confirmation_count": {
+            "type": "integer",
+            "title": "Effective Confirmation Count"
+          },
+          "manual_credit_count": {
+            "type": "integer",
+            "title": "Manual Credit Count"
+          },
+          "next_review_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Review At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kp_id",
+          "state",
+          "reason_code",
+          "effective_confirmation_count",
+          "manual_credit_count"
+        ],
+        "title": "NodeSelfAssessmentResponse"
+      },
+      "PlanItemView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "ordinal": {
+            "type": "integer",
+            "title": "Ordinal"
+          },
+          "kp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Kp Id"
+          },
+          "kp_name": {
+            "type": "string",
+            "title": "Kp Name"
+          },
+          "question_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Question Id"
+          },
+          "question_type": {
+            "type": "string",
+            "title": "Question Type"
+          },
+          "question_role": {
+            "type": "string",
+            "title": "Question Role",
+            "default": "basic"
+          },
+          "difficulty": {
+            "type": "string",
+            "title": "Difficulty"
+          },
+          "stem": {
+            "type": "string",
+            "title": "Stem"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "skill_tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skill Tags",
+            "default": []
+          },
+          "is_variant": {
+            "type": "boolean",
+            "title": "Is Variant"
+          },
+          "estimated_minutes": {
+            "type": "integer",
+            "title": "Estimated Minutes",
+            "default": 5
+          },
+          "completed": {
+            "type": "boolean",
+            "title": "Completed"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "latest_self_grade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Self Grade"
+          },
+          "is_review": {
+            "type": "boolean",
+            "title": "Is Review",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "ordinal",
+          "kp_id",
+          "kp_name",
+          "question_id",
+          "question_type",
+          "difficulty",
+          "stem",
+          "is_variant",
+          "completed"
+        ],
+        "title": "PlanItemView",
+        "description": "今日练习卷里的一道题。\n\n这里**绝不返回 correct_answer / explanation**：答案必须通过专门的\nGET /api/practice-items/{item_id}/answer 拉取，且该接口是纯读取。"
+      },
+      "PracticeItemAnswer": {
+        "properties": {
+          "practice_item_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Practice Item Id"
+          },
+          "question_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Question Id"
+          },
+          "stem": {
+            "type": "string",
+            "title": "Stem"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "correct_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correct Answer"
+          },
+          "explanation": {
+            "type": "string",
+            "title": "Explanation"
+          },
+          "question_type": {
+            "type": "string",
+            "title": "Question Type"
+          },
+          "grading_mode": {
+            "type": "string",
+            "title": "Grading Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "practice_item_id",
+          "question_id",
+          "stem",
+          "explanation",
+          "question_type",
+          "grading_mode"
+        ],
+        "title": "PracticeItemAnswer",
+        "description": "答案与解析；纯读取，不写 revealed_at，不影响掌握度与毕业。"
+      },
+      "RecommendationItem": {
+        "properties": {
+          "kp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Kp Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "next_step": {
+            "type": "string",
+            "title": "Next Step",
+            "default": ""
+          },
+          "missing_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Types",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "kp_id",
+          "name",
+          "state",
+          "reason"
+        ],
+        "title": "RecommendationItem",
+        "description": "准备页的一条推荐；reason 是稳定层级码，页面负责映射成中文。"
+      },
+      "RenameSessionRequest": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "title": "RenameSessionRequest"
+      },
+      "SearchHitView": {
+        "properties": {
+          "chunk_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Chunk Id"
+          },
+          "material_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Material Id"
+          },
+          "material_title": {
+            "type": "string",
+            "title": "Material Title"
+          },
+          "source_type": {
+            "type": "string",
+            "title": "Source Type"
+          },
+          "index_version": {
+            "type": "string",
+            "title": "Index Version"
+          },
+          "ordinal": {
+            "type": "integer",
+            "title": "Ordinal"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "heading_path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Heading Path"
+          },
+          "kp_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Kp Ids"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "vector_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Rank"
+          },
+          "keyword_rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keyword Rank"
+          },
+          "rerank_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "material_id",
+          "material_title",
+          "source_type",
+          "index_version",
+          "ordinal",
+          "content",
+          "heading_path",
+          "kp_ids",
+          "score"
+        ],
+        "title": "SearchHitView",
+        "description": "一条检索结果：正文 + 出处，供前端做引用卡片与回跳。"
+      },
+      "SearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "top_k": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "default": 6
+          },
+          "candidate_k": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Candidate K",
+            "default": 20
+          },
+          "material_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material Ids"
+          },
+          "source_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Types"
+          },
+          "kp_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kp Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "SearchRequest",
+        "description": "检索请求。"
+      },
+      "SearchResponse": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHitView"
+            },
+            "type": "array",
+            "title": "Hits"
+          },
+          "degraded": {
+            "type": "boolean",
+            "title": "Degraded",
+            "default": false
+          },
+          "degraded_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Degraded Reasons"
+          },
+          "vector_candidates": {
+            "type": "integer",
+            "title": "Vector Candidates",
+            "default": 0
+          },
+          "keyword_candidates": {
+            "type": "integer",
+            "title": "Keyword Candidates",
+            "default": 0
+          },
+          "reranked": {
+            "type": "boolean",
+            "title": "Reranked",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "hits"
+        ],
+        "title": "SearchResponse"
+      },
+      "SubmitSelfAssessmentRequest": {
+        "properties": {
+          "self_grade": {
+            "type": "string",
+            "pattern": "^(mastered|partial|not_mastered|skip)$",
+            "title": "Self Grade"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 8,
+            "title": "Idempotency Key"
+          },
+          "raw_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Answer"
+          },
+          "selected_option": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Option"
+          }
+        },
+        "type": "object",
+        "required": [
+          "self_grade",
+          "idempotency_key"
+        ],
+        "title": "SubmitSelfAssessmentRequest"
+      },
+      "TodayActive": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "plan_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Plan Id"
+          },
+          "study_date": {
+            "type": "string",
+            "title": "Study Date"
+          },
+          "completed_count": {
+            "type": "integer",
+            "title": "Completed Count"
+          },
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlanItemView"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "focus_item_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus Item Id"
+          },
+          "summary_kps": {
+            "items": {
+              "$ref": "#/components/schemas/TodaySummaryKp"
+            },
+            "type": "array",
+            "title": "Summary Kps"
+          },
+          "type_summary": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Type Summary",
+            "default": {}
+          },
+          "estimated_minutes": {
+            "type": "integer",
+            "title": "Estimated Minutes",
+            "default": 0
+          },
+          "remaining_minutes": {
+            "type": "integer",
+            "title": "Remaining Minutes",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "plan_id",
+          "study_date",
+          "completed_count",
+          "total_count",
+          "items",
+          "summary_kps"
+        ],
+        "title": "TodayActive",
+        "description": "已有活动练习卷（或已完成）。"
+      },
+      "TodaySetup": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "setup"
+          },
+          "study_date": {
+            "type": "string",
+            "title": "Study Date"
+          },
+          "recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendationItem"
+            },
+            "type": "array",
+            "title": "Recommendations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "study_date",
+          "recommendations"
+        ],
+        "title": "TodaySetup",
+        "description": "当天还没有活动练习卷：展示准备页，等用户确认后才生成。"
+      },
+      "TodaySummaryKp": {
+        "properties": {
+          "kp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Kp Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "completed_count": {
+            "type": "integer",
+            "title": "Completed Count"
+          },
+          "total_count": {
+            "type": "integer",
+            "title": "Total Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kp_id",
+          "name",
+          "completed_count",
+          "total_count"
+        ],
+        "title": "TodaySummaryKp"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

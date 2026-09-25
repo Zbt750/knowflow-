@@ -1,0 +1,88 @@
+# 本地部署编排：数据库 + 后端 + 前端。
+#
+# 使用方式（项目根执行）：
+#   1) 复制 .env.compose.example 为 .env.compose 并改成自己的密码；
+#   2) docker compose --env-file .env.compose up --build
+#
+# 安全约定：本文件里不写任何真实密码，全部来自 .env.compose（不进 Git）。
+
+# 显式写死项目名。
+#
+# 为什么必须写：Compose 默认用「项目目录名」推项目名，而本项目目录名是中文
+# （D:\考研跑通项目）—— 非 ASCII 会被剥掉，推出来的名字是空串，于是
+# `docker compose config` 直接报 `project name must not be empty`，
+# 连阶段 F 的静态门禁都过不去（实测踩到）。
+# 写死之后，无论目录叫什么、从哪个路径调用，命令都能跑通。
+name: kaoyan
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER 未设置}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置}
+      POSTGRES_DB: ${POSTGRES_DB:-kaoyan}
+      TZ: ${TIMEZONE:-Asia/Shanghai}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready 是唯一可靠的「数据库真的能连」判断（端口监听不等于就绪）。
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-kaoyan}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        # 需要向量检索时改成 1（会显著增大镜像、延长构建）。
+        INSTALL_EMBED: ${INSTALL_EMBED:-0}
+        # 构建加速用；**留空即走官方源**（apt: deb.debian.org / pip: pypi.org），
+        # 所以不配这两项时行为与以前完全一致。官方源慢的环境再在
+        # .env.compose 里指定（说明见 backend/Dockerfile 顶部注释）。
+        APT_MIRROR: ${APT_MIRROR:-}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+    environment:
+      APP_ENV: dev
+      # 容器内用服务名 db 访问数据库；密码来自 .env.compose。
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kaoyan}
+      TIMEZONE: ${TIMEZONE:-Asia/Shanghai}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      RERANKER_MODEL: ${RERANKER_MODEL:-}
+      # 向量库与关键词索引都在容器内构建，目录挂载到卷以便重建容器后不丢。
+      UPLOAD_DIR: storage/uploads
+      CHROMA_DIR: storage/chroma
+      MODEL_CACHE_DIR: storage/models
+      # 离线部署：模型必须已在 MODEL_CACHE_DIR 中，否则检索接口返回 503。
+      HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE:-1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+    volumes:
+      - storage_data:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      # 上下文必须是 frontend/：package.json 与 src 都在这里，
+      # 用项目根做上下文时 Dockerfile 里所有 COPY 都会找不到源。
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      # 只暴露前端：浏览器统一访问 8080，/api 由 Nginx 转发到后端。
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  storage_data:
