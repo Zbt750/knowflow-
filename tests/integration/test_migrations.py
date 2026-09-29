@@ -27,6 +27,9 @@ BATCH_B_TABLES = {
     "document_jobs",
 }
 
+# 第三批：只保存年份/题号/来源的历年真题关联，不复制题干。
+BATCH_C_TABLES = {"exam_question_references"}
+
 # 旧稿表名不得复活。
 FORBIDDEN_TABLES = {"daily_plan_items", "practice_sessions"}
 
@@ -53,10 +56,11 @@ def test_alembic_upgrade_head_creates_learning_tables_from_empty_database() -> N
             tables = set(inspector.get_table_names())
             assert BATCH_A_TABLES <= tables, f"缺少表: {sorted(BATCH_A_TABLES - tables)}"
             assert BATCH_B_TABLES <= tables, f"缺少表: {sorted(BATCH_B_TABLES - tables)}"
+            assert BATCH_C_TABLES <= tables, f"缺少表: {sorted(BATCH_C_TABLES - tables)}"
             assert not (FORBIDDEN_TABLES & tables), "旧稿表名不应存在"
             # UUID 主键、外键与唯一约束都要真的落到数据库。
             kp_columns = {c["name"] for c in inspector.get_columns("knowledge_points")}
-            assert {"id", "code", "subject", "name", "is_assessable"} <= kp_columns
+            assert {"id", "code", "subject", "name", "is_assessable", "is_reference_only"} <= kp_columns
             kp_uniques = inspector.get_unique_constraints("knowledge_points")
             assert any(set(u["column_names"]) == {"code"} for u in kp_uniques)
             fk_targets = {
@@ -64,6 +68,40 @@ def test_alembic_upgrade_head_creates_learning_tables_from_empty_database() -> N
                 for fk in inspector.get_foreign_keys("practice_items")
             }
             assert {"daily_plans", "questions", "knowledge_points"} <= fk_targets
+            reference_columns = {
+                c["name"] for c in inspector.get_columns("exam_question_references")
+            }
+            assert {
+                "subject",
+                "year",
+                "question_number",
+                "knowledge_point_id",
+                "question_source_url",
+                "topic_source_url",
+                "local_folder",
+            } <= reference_columns
+            practice_columns = {
+                c["name"]: c for c in inspector.get_columns("practice_items")
+            }
+            assert practice_columns["question_id"]["nullable"] is True
+            assert practice_columns["exam_reference_id"]["nullable"] is True
+            attempt_columns = {
+                c["name"]: c for c in inspector.get_columns("question_attempts")
+            }
+            assert attempt_columns["question_id"]["nullable"] is True
+            assert attempt_columns["exam_reference_id"]["nullable"] is True
+            attempt_fks = {
+                fk["referred_table"] for fk in inspector.get_foreign_keys("question_attempts")
+            }
+            assert {"questions", "exam_question_references"} <= attempt_fks
+            practice_checks = {
+                check["name"] for check in inspector.get_check_constraints("practice_items")
+            }
+            attempt_checks = {
+                check["name"] for check in inspector.get_check_constraints("question_attempts")
+            }
+            assert "ck_practice_items_practice_item_exactly_one_source" in practice_checks
+            assert "ck_question_attempts_question_attempt_exactly_one_source" in attempt_checks
     finally:
         engine.dispose()
 
@@ -140,7 +178,8 @@ def test_study_date_column_is_string_ten_chars() -> None:
             length = connection.execute(
                 text(
                     "SELECT character_maximum_length FROM information_schema.columns "
-                    "WHERE table_name = 'daily_plans' AND column_name = 'study_date'"
+                    "WHERE table_schema = 'public' AND table_name = 'daily_plans' "
+                    "AND column_name = 'study_date'"
                 )
             ).scalar_one()
         assert length == 10

@@ -1,6 +1,12 @@
 # 构建上下文越小，构建越快；这些内容在镜像里一律不需要。
 .git
 .gitignore
+.env
+.env.*
+**/.env
+**/.env.*
+*.pem
+*.key
 .devlogs
 .pgdata
 .pytest_cache

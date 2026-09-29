@@ -70,9 +70,15 @@ class MasteryPolicy:
 
     @property
     def available_question_types(self) -> tuple[str, ...]:
-        """本知识点允许使用的题型（排除 excluded 之后）。"""
+        """本知识点允许使用的题型。外部原卷任务必须由策略显式启用。"""
         return tuple(
-            item.value for item in QuestionType if item.value not in self.excluded_question_types
+            item.value
+            for item in QuestionType
+            if item.value not in self.excluded_question_types
+            and (
+                item.value != QuestionType.EXTERNAL_EXAM.value
+                or item.value in self.required_question_types
+            )
         )
 
     @property

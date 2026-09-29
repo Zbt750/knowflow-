@@ -14,6 +14,7 @@ import asyncio
 import json
 import time
 from collections.abc import Iterator
+from threading import Event
 from uuid import UUID
 
 import pytest
@@ -66,6 +67,16 @@ class DisconnectAfterRequest:
         return self._checks > self._after
 
 
+class DisconnectAfterFirstDeltaRequest:
+    """等生成器确实交付首段正文后再模拟断连，避免依赖检索耗时的轮询次数。"""
+
+    def __init__(self, first_delta_delivered: asyncio.Event) -> None:
+        self._first_delta_delivered = first_delta_delivered
+
+    async def is_disconnected(self) -> bool:
+        return self._first_delta_delivered.is_set()
+
+
 class ScriptedProvider(Provider):
     """按脚本吐字的 provider 替身。"""
 
@@ -95,10 +106,13 @@ class HangingProvider(Provider):
 
     def __init__(self) -> None:
         self.calls = 0
+        self.first_delta_delivered = asyncio.Event()
 
     async def stream(self, messages, *, attempt: int = 1):  # type: ignore[no-untyped-def]
         self.calls += 1
         yield "开头一段"
+        # 异步生成器在下一次 anext 时才从 yield 后继续；此时消费者已拿到首段。
+        self.first_delta_delivered.set()
         await asyncio.Event().wait()  # 永久挂起
 
     def complete(self, messages, *, attempt: int = 1):  # type: ignore[no-untyped-def]
@@ -324,10 +338,10 @@ def test_completed_message_is_persisted_with_citations(session_factory, stack) -
         assert len(db.scalars(select(MessageCitation)).all()) == 1
 
 
-def test_no_hit_streams_refusal_without_calling_provider(session_factory, stack) -> None:
-    """无命中：流式也要给出明确拒答，且不调用模型。"""
+def test_no_hit_streams_labeled_general_reference(session_factory, stack) -> None:
+    """无命中时流式生成常识参考，完成帧保留来源类型。"""
     session_id = make_session(session_factory)
-    provider = ScriptedProvider(["不该出现"])
+    provider = ScriptedProvider(["Python 可使用 csv 模块读取文件。[C1]"])
 
     frames = collect_frames(
         session_factory,
@@ -339,11 +353,14 @@ def test_no_hit_streams_refusal_without_calling_provider(session_factory, stack)
     )
     events = [event for event, _ in frames]
     assert events[0] == "meta" and events[-2:] == ["citations", "done"]
-    assert provider.calls == 0
+    assert provider.calls == 1
     citations = next(data for event, data in frames if event == "citations")
     assert citations["citations"] == []
     done = next(data for event, data in frames if event == "done")
     assert done["matched_kp_id"] is None
+    assert done["answer_source"] == "general"
+    assert "## 通用知识参考" in done["answer"]
+    assert "[C1]" not in done["answer"]
 
 
 def test_builtin_mode_personal_file_reference_finishes_without_retrieval(
@@ -384,9 +401,13 @@ def test_retrieval_timeout_emits_error_and_marks_assistant_failed(
     """检索线程卡住时，SSE 必须在总时限后以错误帧结束。"""
     session_id = make_session(session_factory)
     monkeypatch.setattr(chat_service, "RETRIEVAL_TIMEOUT_SECONDS", 0.01)
+    worker_finished = Event()
 
-    def slow_prepare(**_kwargs) -> None:
-        time.sleep(0.08)
+    def slow_prepare(_factory, **_kwargs) -> None:
+        try:
+            time.sleep(0.08)
+        finally:
+            worker_finished.set()
 
     monkeypatch.setattr(chat_service, "_prepare_from_factory", slow_prepare)
     frames = collect_frames(
@@ -403,6 +424,15 @@ def test_retrieval_timeout_emits_error_and_marks_assistant_failed(
     assert error["retryable"] is True
     rows = assistant_rows(session_factory, session_id)
     assert rows and rows[-1].status == "failed"
+    # asyncio 包装任务超时后不能杀掉线程；等真实 worker 和 done callback 释放槽位，
+    # 否则下一条测试/请求正确地得到 retrieval_busy，造成与用例目的无关的串扰。
+    assert worker_finished.wait(timeout=1)
+    deadline = time.monotonic() + 1
+    while not chat_service._RETRIEVAL_SLOT.acquire(blocking=False):
+        if time.monotonic() >= deadline:
+            pytest.fail("retrieval worker slot was not released after worker exit")
+        time.sleep(0.001)
+    chat_service._RETRIEVAL_SLOT.release()
 
 
 # ---------------------------------------------------------------------------
@@ -421,18 +451,19 @@ def test_disconnect_marks_message_cancelled_and_keeps_partial_text(
     seed_material(session_factory, stack)
     session_id = make_session(session_factory)
 
+    provider = HangingProvider()
     frames = collect_frames(
         session_factory,
         session_id=session_id,
         question="洛必达法则用于处理什么类型的未定式？",
         stack=stack,
-        provider=HangingProvider(),
-        request=DisconnectAfterRequest(after=2),
+        provider=provider,
+        request=DisconnectAfterFirstDeltaRequest(provider.first_delta_delivered),
     )
     events = [event for event, _ in frames]
     # 取消时不发 done，也不应该是 error（用户自己停的不是错误）
     assert "done" not in events
-    assert "error" not in events
+    assert "error" not in events, frames
     assert "delta" in events, "取消前应已发出部分内容"
 
     rows = assistant_rows(session_factory, session_id)
@@ -540,6 +571,51 @@ def test_error_frame_carries_no_stack_trace(session_factory, stack) -> None:
     assert "simulated stream failure" not in blob, "detail 只应进日志"
     for leaked in ("D:\\", "C:\\", "postgresql://", "password"):
         assert leaked not in blob
+
+
+def test_unexpected_stream_error_persists_partial_text_and_citations(session_factory, stack) -> None:
+    """非业务异常也必须以 error 帧收尾，并保存已输出正文和可核验引用。"""
+    seed_material(session_factory, stack)
+    session_id = make_session(session_factory)
+
+    class BrokenProvider(Provider):
+        def __init__(self) -> None:
+            super().__init__(
+                api_key="test",
+                base_url="http://localhost/v1",
+                model="test",
+                timeout=1.0,
+                max_tokens=64,
+            )
+
+        async def stream(self, messages, *, attempt: int = 1):  # type: ignore[no-untyped-def]
+            yield "根据讲义 [C1]，"
+            raise RuntimeError("private internal failure")
+
+        def complete(self, messages, *, attempt: int = 1):  # type: ignore[no-untyped-def]
+            raise AssertionError("流式路径不应调用 complete")
+
+    frames = collect_frames(
+        session_factory,
+        session_id=session_id,
+        question="洛必达法则用于处理什么类型的未定式？",
+        stack=stack,
+        provider=BrokenProvider(),
+        request=AlwaysAliveRequest(),
+    )
+
+    assert frames[-1][0] == "error"
+    assert frames[-1][1]["code"] == "internal_error"
+    assert "private internal failure" not in json.dumps(frames[-1][1])
+    rows = assistant_rows(session_factory, session_id)
+    assert rows[-1].status == "failed"
+    assert rows[-1].content == "根据讲义 [C1]，"
+    assert rows[-1].metadata_["partial"] is True
+    with session_factory() as db:
+        citations = db.scalars(
+            select(MessageCitation).where(MessageCitation.message_id == rows[-1].id)
+        ).all()
+        assert [(citation.label, citation.ordinal) for citation in citations] == [("C1", 0)]
 
 
 # ---------------------------------------------------------------------------
@@ -655,6 +731,57 @@ class FailMidStreamProvider(Provider):
 
     def complete(self, messages, *, attempt: int = 1):  # type: ignore[no-untyped-def]
         raise AssertionError("流式路径不应调用 complete")
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_partial_output_limit_recovers_or_persists_failed_body(session_factory, stack, exhausted) -> None:
+    seed_material(session_factory, stack)
+    session_id = make_session(session_factory)
+
+    class LimitedProvider(Provider):
+        def __init__(self):
+            self.calls = 0
+
+        async def stream(self, messages, *, attempt=1):
+            self.calls += 1
+            yield "首轮残句" if attempt == 1 else "洛必达法则用于 0/0 型和无穷比无穷型未定式。[C1]"
+            if attempt == 1 or exhausted:
+                raise AppError("answer_truncated", retryable=True)
+
+    provider = LimitedProvider()
+    frames = collect_frames(session_factory, session_id=session_id,
+        question="洛必达法则用于处理什么类型的未定式？", stack=stack,
+        provider=provider, request=AlwaysAliveRequest())
+    assert provider.calls == 2
+    deltas = [data for event, data in frames if event == "delta"]
+    assert [d["seq"] for d in deltas] == list(range(1, len(deltas) + 1))
+    assert sum(d.get("replace") is True for d in deltas) == 1
+    row = assistant_rows(session_factory, session_id)[0]
+    assert "首轮残句" not in row.content
+    assert "洛必达法则" in row.content
+    assert row.status == ("failed" if exhausted else "completed")
+    assert frames[-1][0] == ("error" if exhausted else "done")
+    if exhausted:
+        assert row.metadata_["partial"] is True
+        assert row.metadata_["error_code"] == "answer_truncated"
+        assert not any(event == "citations" for event, _ in frames)
+
+
+def test_provider_citation_alias_is_canonical_and_unknown_never_creates_card(session_factory, stack) -> None:
+    seed_material(session_factory, stack)
+    session_id = make_session(session_factory)
+    frames = collect_frames(session_factory, session_id=session_id,
+        question="洛必达法则用于处理什么类型的未定式？", stack=stack,
+        provider=ScriptedProvider(["洛必达法则用于 0/0 型未定式。[citation:1] [citation:99]"]),
+        request=AlwaysAliveRequest())
+    done = frames[-1][1]
+    assert frames[-1][0] == "done"
+    assert "[C1]" in done["answer"]
+    assert "citation:" not in done["answer"]
+    assert [card["label"] for card in done["citations"]] == ["C1"]
+    row = assistant_rows(session_factory, session_id)[0]
+    assert row.metadata_["normalized_citation_labels"] == ["C1"]
+    assert row.metadata_["unknown_citation_labels"] == ["C99"]
 
 
 def test_encode_sse_format() -> None:

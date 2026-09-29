@@ -42,12 +42,12 @@ export interface PlanItemView {
   ordinal: number;
   kp_id: string;
   kp_name: string;
-  question_id: string;
+  question_id: string | null;
   question_type: string;
   /** 学习角色：basic / typical / variant / comprehensive。 */
-  question_role: string;
-  difficulty: string;
-  stem: string;
+  question_role: string | null;
+  difficulty: string | null;
+  stem: string | null;
   options: Record<string, string> | null;
   /** 考法标签，例如 ["适用条件","0/0 型"]。 */
   skill_tags: string[];
@@ -59,6 +59,8 @@ export interface PlanItemView {
   latest_self_grade: SelfGrade | null;
   /** 该题之前练过：题库耗尽时给的是复测题。 */
   is_review: boolean;
+  is_external_reference: boolean;
+  exam_reference: ExamQuestionReferenceView | null;
 }
 
 export interface TodaySummaryKp {
@@ -121,6 +123,8 @@ export interface KnowledgeNodeView {
   subject: string;
   ordinal: number;
   is_assessable: boolean;
+  /** 只用于追溯历年题号来源，不计入学习进度和今日练习。 */
+  is_reference_only: boolean;
   summary: string | null;
   learning_goal: string | null;
   state: MasteryState | null;
@@ -148,6 +152,17 @@ export interface KnowledgeTreeResponse {
   nodes: KnowledgeNodeView[];
 }
 
+export interface KnowledgeLessonResponse {
+  id: string;
+  code: string;
+  name: string;
+  subject: string;
+  is_assessable: boolean;
+  breadcrumbs: { code: string; name: string }[];
+  markdown: string;
+  question_count: number;
+}
+
 export interface NodeQuestionView {
   id: string;
   question_type: string;
@@ -157,9 +172,23 @@ export interface NodeQuestionView {
   kp_id: string;
 }
 
+export interface ExamQuestionReferenceView {
+  id: string;
+  subject: string;
+  year: number;
+  question_number: number;
+  topic_label: string;
+  source_topic_label: string;
+  question_source_url: string | null;
+  topic_source_url: string | null;
+  local_folder: string;
+  source_note: string;
+}
+
 export interface NodeAttemptView {
   id: string;
-  question_id: string;
+  question_id: string | null;
+  exam_reference_id?: string | null;
   question_stem: string;
   self_grade: SelfGrade;
   objective_result: string;
@@ -173,6 +202,8 @@ export interface KnowledgeNodeDetail {
   node: KnowledgeNodeView;
   questions: NodeQuestionView[];
   attempts: NodeAttemptView[];
+  exam_references: ExamQuestionReferenceView[];
+  lesson_available: boolean;
   materials_ready: boolean;
 }
 

@@ -167,6 +167,13 @@ def main() -> int:
         print(f"拒绝执行：目标库 {database_name} 不以 _test 结尾", file=sys.stderr)
         return 2
 
+    # 该脚本会 clear/rmtree 索引；仅隔离数据库不够，目录也必须明确属于测试。
+    for directory in (settings.upload_dir, settings.chroma_dir):
+        resolved = directory.resolve()
+        if resolved == ROOT or resolved in ROOT.parents or not any("test" in part.lower() for part in resolved.parts):
+            print("拒绝执行：上传与索引目录必须使用独立的 test 目录", file=sys.stderr)
+            return 2
+
     print(f"目标库：{database_name}")
     print(f"上传目录：{settings.upload_dir}")
     print(f"向量目录：{settings.chroma_dir}")

@@ -8,3 +8,7 @@ blob-report
 *.tsbuildinfo
 e2e
 playwright.config.ts
+.env
+.env.*
+*.pem
+*.key

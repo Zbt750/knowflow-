@@ -25,8 +25,9 @@ async function openChat(page: import("@playwright/test").Page): Promise<void> {
 
 async function selectScope(page: import("@playwright/test").Page, mode: "我的资料" | "内置资料"): Promise<void> {
   const switcher = page.getByTestId("scope-switch");
+  await expect(switcher).toBeEnabled({ timeout: 30_000 });
   if (!(await switcher.innerText()).includes(`当前：${mode}`)) await switcher.click();
-  await expect(switcher).toContainText(`当前：${mode}`);
+  await expect(switcher).toContainText(`当前：${mode}`, { timeout: 15_000 });
 }
 
 test.describe("问答页", () => {
@@ -250,6 +251,7 @@ test.describe("问答页", () => {
     await page.locator(".send-button").click();
     const answer = page.locator(".message-row--assistant .message-bubble").last();
     await expect(answer).toContainText(answerText);
+    await expect(page.locator(".messages")).toHaveAttribute("aria-busy", "false");
     await expect(page.getByTestId("selection-quote-action")).toHaveCount(0);
 
     await answer.evaluate((element) => {

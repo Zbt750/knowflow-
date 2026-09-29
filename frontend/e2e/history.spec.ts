@@ -38,6 +38,7 @@ test.describe("浏览器前进后退 · /materials", () => {
 
     // 进入页面时，自动代入的选中也必须写进 URL（否则用户看不出在看哪一份、也分享不了链接）。
     // 但这一步用 replace，所以历史长度不变 —— 实测 len 保持 2。
+    await expect.poll(idOf, { timeout: 20_000 }).not.toBeNull();
     const autoId = await idOf();
     expect(autoId, "进入资料页时应把自动选中的资料写进 URL").not.toBeNull();
     await expect(page.getByTestId("material-detail")).toHaveCount(0);

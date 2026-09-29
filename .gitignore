@@ -32,10 +32,16 @@ frontend/.vite/
 
 # 运行期数据
 storage/
+model-settings.bin
+model-settings.bin.*.tmp
 .pgdata/
 chroma/
 # 开发启动脚本写出的日志
 .devlogs/
+
+# 真实问答评测、浏览器快照及截图可能含私人资料，仅在本地保留。
+# 可公开复现的评测脚本、固定样例和文档仍正常入库。
+/eval/reports/
 
 # 编辑器与系统
 .vscode/

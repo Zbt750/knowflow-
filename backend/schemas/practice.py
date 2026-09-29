@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from backend.schemas.knowledge import ExamQuestionReferenceView
+
 
 class RecommendationItem(BaseModel):
     """准备页的一条推荐；reason 是稳定层级码，页面负责映射成中文。"""
@@ -21,31 +23,34 @@ class RecommendationItem(BaseModel):
 
 
 class PlanItemView(BaseModel):
-    """今日练习卷里的一道题。
+    """今日练习卷里的一道题或一个外部原卷任务。
 
-    这里**绝不返回 correct_answer / explanation**：答案必须通过专门的
-    GET /api/practice-items/{item_id}/answer 拉取，且该接口是纯读取。
+    普通题这里绝不返回 correct_answer / explanation；外部原卷任务不含题干，
+    只有普通题可以通过 GET /api/practice-items/{item_id}/answer 读取答案与解析。
     """
 
     id: UUID
     ordinal: int
     kp_id: UUID
     kp_name: str
-    question_id: UUID
+    question_id: UUID | None = None
     question_type: str
     # 学习角色（基础/典型/变式/综合）与考法标签；用于让用户看懂这道题在补什么。
-    question_role: str = "basic"
-    difficulty: str
-    stem: str
+    question_role: str | None = "basic"
+    difficulty: str | None = None
+    # 外部原卷任务只显示来源，不伪造或拼接题干。
+    stem: str | None = None
     options: dict[str, str] | None = None
     skill_tags: list[str] = []
-    is_variant: bool
+    is_variant: bool = False
     estimated_minutes: int = 5
     completed: bool
     completed_at: str | None = None
     latest_self_grade: str | None = None
     # 该题之前练过：题库耗尽时系统给的是复测题，页面要明确区分新题与复测。
     is_review: bool = False
+    is_external_reference: bool = False
+    exam_reference: ExamQuestionReferenceView | None = None
 
 
 class TodaySummaryKp(BaseModel):
@@ -90,6 +95,10 @@ class GeneratePlanRequest(BaseModel):
 
 class AppendQuestionsRequest(BaseModel):
     question_ids: list[UUID] = Field(min_length=1)
+
+
+class AppendExamReferencesRequest(BaseModel):
+    reference_ids: list[UUID] = Field(min_length=1)
 
 
 class SubmitSelfAssessmentRequest(BaseModel):

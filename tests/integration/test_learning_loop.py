@@ -13,12 +13,13 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from backend.api.deps import get_time_provider
 from backend.app import create_app
 from backend.models.learning import (
     DailyPlan,
+    ExamQuestionReference,
     KnowledgePoint,
     KpState,
     LearningEvent,
@@ -27,6 +28,7 @@ from backend.models.learning import (
     QuestionAttempt,
 )
 from scripts.seed import seed_all
+from backend.services.exam_reference_service import sync_exam_reference_index
 
 from tests.conftest import TEST_DATABASE_URL
 
@@ -36,6 +38,7 @@ DAY2 = datetime(2026, 1, 2, 2, tzinfo=timezone.utc)
 DAY3 = datetime(2026, 1, 3, 2, tzinfo=timezone.utc)
 
 BUSINESS_TABLES = (
+    "exam_question_references",
     "question_attempts",
     "learning_events",
     "practice_items",
@@ -96,6 +99,30 @@ def client(clock: FakeClock) -> Iterator[TestClient]:
 # --------------------------------------------------------------------------- #
 # 辅助
 # --------------------------------------------------------------------------- #
+
+
+def test_knowledge_lesson_reads_seed_file_and_breadcrumbs(client: TestClient) -> None:
+    response = client.get("/api/knowledge/lessons/math.calculus.limit.lhopital")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["code"] == "math.calculus.limit.lhopital"
+    assert payload["is_assessable"] is True
+    assert payload["question_count"] >= 1
+    assert "例题" in payload["markdown"]
+    assert [item["code"] for item in payload["breadcrumbs"]] == [
+        "math.calculus",
+        "math.calculus.limit",
+        "math.calculus.limit.lhopital",
+    ]
+
+    parent = client.get("/api/knowledge/lessons/math.calculus.limit")
+    assert parent.status_code == 200
+    assert parent.json()["is_assessable"] is False
+    assert parent.json()["question_count"] == 0
+
+    missing = client.get("/api/knowledge/lessons/no.such.node")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "knowledge_point_not_found"
 
 
 def leaf_codes(session_factory) -> dict[str, UUID]:
@@ -180,6 +207,246 @@ def test_knowledge_tree_marks_only_leaves_assessable_and_leaves_parent_state_emp
         else:
             assert node["state"] == "unseen"
             assert node["children"] == []
+
+
+def test_annual_exam_question_is_bound_to_assessable_source_reference_node(
+    client: TestClient, session_factory
+) -> None:
+    with session_factory() as db:
+        first = sync_exam_reference_index(db)
+        db.commit()
+        reference = db.scalar(
+            select(ExamQuestionReference).where(
+                ExamQuestionReference.subject == "408",
+                ExamQuestionReference.year == 2010,
+                ExamQuestionReference.question_number == 1,
+            )
+        )
+        assert reference is not None
+        kp_id = reference.knowledge_point_id
+        second = sync_exam_reference_index(db)
+        db.commit()
+
+    assert first["references_created"] >= 1400
+    assert second["references_created"] == 0
+    detail_response = client.get(f"/api/knowledge/{kp_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["node"]["is_reference_only"] is True
+    assert detail["node"]["is_assessable"] is True
+    assert detail["questions"] == []
+    assert detail["lesson_available"] is True
+    assert any(
+        row["year"] == 2010
+        and row["question_number"] == 1
+        and row["question_source_url"].endswith("/2010/01")
+        for row in detail["exam_references"]
+    )
+
+    tree_codes = {node["code"] for node in client.get("/api/knowledge/tree").json()["nodes"]}
+    assert "cs408" in tree_codes
+    today = client.get("/api/plans/today").json()
+    assert str(kp_id) not in {item["kp_id"] for item in today.get("recommendations", [])}
+
+
+def test_external_exam_reference_can_be_scheduled_self_assessed_and_graduate(
+    client: TestClient, session_factory
+) -> None:
+    with session_factory() as db:
+        sync_exam_reference_index(db)
+        db.commit()
+        single_reference_kps = (
+            select(ExamQuestionReference.knowledge_point_id)
+            .group_by(ExamQuestionReference.knowledge_point_id)
+            .having(func.count(ExamQuestionReference.id) == 1)
+        )
+        reference_id, kp_id = db.execute(
+            select(ExamQuestionReference.id, ExamQuestionReference.knowledge_point_id)
+            .where(ExamQuestionReference.knowledge_point_id.in_(single_reference_kps))
+            .order_by(ExamQuestionReference.year, ExamQuestionReference.question_number)
+        ).first()
+        before_question_count = db.scalar(select(func.count(Question.id)))
+
+    added = client.post(
+        "/api/plans/today/exam-references", json={"reference_ids": [str(reference_id)]}
+    )
+    assert added.status_code == 200, added.text
+    plan = added.json()
+    assert plan["status"] == "active"
+    assert plan["total_count"] == 1
+    item = plan["items"][0]
+    assert item["kp_id"] == str(kp_id)
+    assert item["question_id"] is None
+    assert item["question_type"] == "external_exam"
+    assert item["stem"] is None
+    assert item["exam_reference"]["id"] == str(reference_id)
+    assert item["is_external_reference"] is True
+
+    no_answer = client.get(f"/api/practice-items/{item['id']}/answer")
+    assert no_answer.status_code == 409
+    assert no_answer.json()["error"]["code"] == "external_exam_has_no_embedded_answer"
+
+    skipped = client.post(
+        f"/api/practice-items/{item['id']}/self-assessments",
+        json={"self_grade": "skip", "idempotency_key": "exam-skip-0001"},
+    )
+    assert skipped.status_code == 200, skipped.text
+    assert skipped.json()["reason_code"] == "skipped"
+
+    assessed = client.post(
+        f"/api/practice-items/{item['id']}/self-assessments",
+        json={"self_grade": "mastered", "idempotency_key": "exam-mastered-01"},
+    )
+    assert assessed.status_code == 200, assessed.text
+    assert assessed.json()["state"] == "mastered"
+    assert assessed.json()["reason_code"] == "graduated"
+    detail = client.get(f"/api/knowledge/{kp_id}").json()
+    assert detail["node"]["state"] == "mastered"
+    assert all(row["satisfied"] for row in detail["node"]["gap_items"])
+    assert len(detail["attempts"]) == 1
+    assert detail["attempts"][0]["question_id"] is None
+    assert detail["attempts"][0]["exam_reference_id"] == str(reference_id)
+    with session_factory() as db:
+        attempt = db.scalar(
+            select(QuestionAttempt).where(QuestionAttempt.practice_item_id == UUID(item["id"]))
+        )
+        assert attempt is not None
+        assert attempt.question_id is None
+        assert attempt.exam_reference_id == reference_id
+        assert db.scalar(select(func.count(Question.id))) == before_question_count
+
+
+def test_reference_only_node_can_generate_an_external_task_from_scope(
+    client: TestClient, session_factory
+) -> None:
+    with session_factory() as db:
+        sync_exam_reference_index(db)
+        db.commit()
+        reference = db.scalar(select(ExamQuestionReference).order_by(ExamQuestionReference.id))
+        assert reference is not None
+        kp_id = reference.knowledge_point_id
+
+    response = client.post(
+        "/api/plans/today/generate",
+        json={"selected_kp_ids": [str(kp_id)], "budget": "standard"},
+    )
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["total_count"] >= 1
+    assert all(item["is_external_reference"] for item in payload["items"])
+    assert all(item["question_id"] is None and item["stem"] is None for item in payload["items"])
+
+
+def test_three_distinct_external_exams_graduate_only_after_cross_day_confirmation(
+    client: TestClient, session_factory, clock: FakeClock
+) -> None:
+    with session_factory() as db:
+        sync_exam_reference_index(db)
+        db.commit()
+        kp_id, reference_ids = db.execute(
+            select(ExamQuestionReference.knowledge_point_id, func.array_agg(ExamQuestionReference.id))
+            .group_by(ExamQuestionReference.knowledge_point_id)
+            .having(func.count(ExamQuestionReference.id) >= 3)
+            .order_by(func.count(ExamQuestionReference.id).desc())
+            .limit(1)
+        ).one()
+        reference_ids = list(reference_ids[:3])
+
+    final_assessment = None
+    for index, (reference_id, now) in enumerate(zip(reference_ids, (DAY1, DAY2, DAY3)), start=1):
+        clock.now = now
+        added = client.post(
+            "/api/plans/today/exam-references", json={"reference_ids": [str(reference_id)]}
+        )
+        assert added.status_code == 200, added.text
+        item = added.json()["items"][0]
+        final_assessment = client.post(
+            f"/api/practice-items/{item['id']}/self-assessments",
+            json={"self_grade": "mastered", "idempotency_key": f"exam-cross-day-{index}"},
+        )
+        assert final_assessment.status_code == 200, final_assessment.text
+        if index < 3:
+            assert final_assessment.json()["state"] != "mastered"
+
+    assert final_assessment is not None
+    assert final_assessment.json()["state"] == "mastered"
+    assert final_assessment.json()["reason_code"] == "graduated"
+    detail = client.get(f"/api/knowledge/{kp_id}").json()
+    assert detail["node"]["day_span"] == 2
+    assert all(row["satisfied"] for row in detail["node"]["gap_items"])
+
+
+def test_bound_exam_reference_can_be_added_from_an_existing_assessable_node(
+    client: TestClient, session_factory
+) -> None:
+    with session_factory() as db:
+        sync_exam_reference_index(db)
+        db.commit()
+        reference = db.scalar(
+            select(ExamQuestionReference)
+            .join(KnowledgePoint, KnowledgePoint.id == ExamQuestionReference.knowledge_point_id)
+            .where(
+                KnowledgePoint.code == "math.calculus.limit.infinitesimal",
+                KnowledgePoint.is_reference_only.is_(False),
+            )
+            .order_by(ExamQuestionReference.year, ExamQuestionReference.question_number)
+        )
+        assert reference is not None
+        reference_id = reference.id
+        kp_id = reference.knowledge_point_id
+
+    added = client.post(
+        "/api/plans/today/exam-references", json={"reference_ids": [str(reference_id)]}
+    )
+    assert added.status_code == 200, added.text
+    item = added.json()["items"][0]
+    assert item["kp_id"] == str(kp_id)
+    assert item["exam_reference"]["id"] == str(reference_id)
+    assert item["is_external_reference"] is True
+
+
+def test_topic_family_aggregates_distinct_years_and_can_be_practiced(
+    client: TestClient, session_factory
+) -> None:
+    with session_factory() as db:
+        sync_exam_reference_index(db)
+        db.commit()
+        family = db.scalar(
+            select(KnowledgePoint).where(
+                KnowledgePoint.code == "math.family.calculus-multivariable"
+            )
+        )
+        assert family is not None
+        reference = db.scalar(
+            select(ExamQuestionReference).where(
+                ExamQuestionReference.knowledge_point_id == family.id,
+                ExamQuestionReference.year == 2026,
+                ExamQuestionReference.question_number == 17,
+            )
+        )
+        assert reference is not None
+        ref_count = db.scalar(
+            select(func.count(ExamQuestionReference.id)).where(
+                ExamQuestionReference.knowledge_point_id == family.id
+            )
+        )
+        assert ref_count == 65
+        family_id = family.id
+        reference_id = reference.id
+
+    detail = client.get(f"/api/knowledge/{family_id}").json()
+    assert detail["node"]["summary"] and "跨年份专题汇总" in detail["node"]["summary"]
+    assert detail["lesson_available"] is True
+    assert len(detail["exam_references"]) == 65
+    assert all("专题汇总映射" in row["source_note"] for row in detail["exam_references"])
+
+    added = client.post(
+        "/api/plans/today/exam-references", json={"reference_ids": [str(reference_id)]}
+    )
+    assert added.status_code == 200, added.text
+    item = added.json()["items"][0]
+    assert item["kp_id"] == str(family_id)
+    assert item["is_external_reference"] is True
 
 
 def test_parent_node_cannot_be_assessed(client: TestClient, session_factory) -> None:

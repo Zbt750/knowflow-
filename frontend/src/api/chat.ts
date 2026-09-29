@@ -49,6 +49,7 @@ export type ChatMessage = {
   content: string;
   status: "completed" | "generating" | "failed" | "cancelled";
   response_duration_ms?: number | null;
+  answer_source?: "knowledge_base" | "general" | "mixed" | "notice" | "unverified" | null;
   matched_kp_id: string | null;
   matched_kp?: MatchedKp | null;
   citations: Citation[];

@@ -24,6 +24,8 @@ class KnowledgeNodeView(BaseModel):
     subject: str
     ordinal: int
     is_assessable: bool
+    # 历年题号索引叶子：没有内置题干；原卷自评可计入该叶子的掌握度与毕业条件。
+    is_reference_only: bool = False
     summary: str | None = None
     learning_goal: str | None = None
     # 只有可考核叶子才有状态；父节点的汇总由页面数 children 得到，不存第二份统计真相。
@@ -51,6 +53,22 @@ class KnowledgeTreeResponse(BaseModel):
     nodes: list[KnowledgeNodeView]
 
 
+class LessonBreadcrumb(BaseModel):
+    code: str
+    name: str
+
+
+class KnowledgeLessonResponse(BaseModel):
+    id: UUID
+    code: str
+    name: str
+    subject: str
+    is_assessable: bool
+    breadcrumbs: list[LessonBreadcrumb]
+    markdown: str
+    question_count: int
+
+
 class NodeQuestionView(BaseModel):
     """知识节点题库里的一道题；这里绝不返回答案与解析。"""
 
@@ -62,11 +80,27 @@ class NodeQuestionView(BaseModel):
     kp_id: UUID
 
 
+class ExamQuestionReferenceView(BaseModel):
+    """历年试题的题号与来源指针，不包含题干、答案或解析。"""
+
+    id: UUID
+    subject: str
+    year: int
+    question_number: int
+    topic_label: str
+    source_topic_label: str
+    question_source_url: str | None = None
+    topic_source_url: str | None = None
+    local_folder: str
+    source_note: str
+
+
 class NodeAttemptView(BaseModel):
     """练习记录：永久保存的作答历史。"""
 
     id: UUID
-    question_id: UUID
+    question_id: UUID | None = None
+    exam_reference_id: UUID | None = None
     question_stem: str
     self_grade: str
     objective_result: str
@@ -80,6 +114,8 @@ class KnowledgeNodeDetail(BaseModel):
     node: KnowledgeNodeView
     questions: list[NodeQuestionView]
     attempts: list[NodeAttemptView]
+    exam_references: list[ExamQuestionReferenceView] = []
+    lesson_available: bool = False
     # 关联资料在阶段 C 接入检索后填充；现在明确返回空列表而不是伪造数据。
     materials_ready: bool = False
 

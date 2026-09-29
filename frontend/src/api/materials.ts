@@ -103,12 +103,13 @@ export function uploadMaterial(
   file: File,
   title: string,
   sourceType: MaterialSourceType,
+  signal?: AbortSignal,
 ): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
   // 标题与来源类型是 query 参数：后端接口契约如此，前端不做额外转换。
   const query = new URLSearchParams({ title, source_type: sourceType });
-  return api.upload<UploadResponse>(`/api/materials?${query.toString()}`, form);
+  return api.upload<UploadResponse>(`/api/materials?${query.toString()}`, form, signal);
 }
 
 export function deleteMaterial(id: string): Promise<void> {

@@ -86,7 +86,7 @@ def test_system_prompt_explicitly_forbids_dropping_citation_when_following_up() 
 def test_system_prompt_carries_the_three_teaching_rules() -> None:
     """三条教学约束都要在：含糊先澄清、一次一步、不懂就换讲法。"""
     assert "问清最关键的那一点" in SYSTEM_PROMPT
-    assert "一次只讲一步" in SYSTEM_PROMPT
+    assert "才一次讲一步" in SYSTEM_PROMPT
     assert "不要原样重讲一遍" in SYSTEM_PROMPT
 
 
@@ -100,17 +100,20 @@ def test_user_materials_prompt_answers_fully_without_proactive_followups() -> No
     """「我的资料」应直接解释完整，不套用内置模式的分步追问教学策略。"""
     messages, _ = _prompt("请解释这份资料的主要结论", [hit()], [], mode="user")
     prompt = system_text(messages)
-    assert prompt == USER_MATERIALS_SYSTEM_PROMPT
+    assert prompt.startswith(USER_MATERIALS_SYSTEM_PROMPT)
     assert "不要为了简短省略关键内容" in prompt
     assert "不要在结尾询问是否继续" in prompt
     assert "一次只讲一步" not in prompt
     assert "[C1]" in prompt
+    assert "【本次回答：正常详略】" in prompt
 
 
 def test_builtin_mode_keeps_its_interactive_teaching_prompt() -> None:
     messages, _ = _prompt("请解释", [hit()], [])
-    assert system_text(messages) == SYSTEM_PROMPT
-    assert "一次只讲一步" in system_text(messages)
+    prompt = system_text(messages)
+    assert prompt.startswith(SYSTEM_PROMPT)
+    assert "才一次讲一步" in prompt
+    assert "【本次回答：正常详略】" in prompt
 
 
 def test_prompt_puts_system_first_and_evidence_second() -> None:

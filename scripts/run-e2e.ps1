@@ -117,8 +117,7 @@ Set-Location (Join-Path $root "frontend")
 # 早先只靠控制台尾部输出判断失败，容易看漏/看错断言（对着「可见性」这类断言
 # 猜了好几轮才发现真正失败的断言其实是别的一条）。JSON 报告让「哪条断言失败」
 # 成为可检索的事实，而不是靠推断。
-$jsonReport = Join-Path $env:TEMP "kaoyan-e2e-report.json"
-if (Test-Path $jsonReport) { Remove-Item $jsonReport -Force -ErrorAction SilentlyContinue }
+$jsonReport = Join-Path $env:TEMP "kaoyan-e2e-report-$PID.json"
 $env:PLAYWRIGHT_JSON_OUTPUT_NAME = $jsonReport
 npx playwright test --output="$OutputDir" --reporter=list,json
 $exitCode = $LASTEXITCODE

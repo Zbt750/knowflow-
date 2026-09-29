@@ -7,6 +7,7 @@ import ErrorBoundary from "./components/ErrorBoundary.vue";
 import SystemStatus from "./components/SystemStatus.vue";
 
 const route = useRoute();
+const isLessonPage = computed(() => /^\/knowledge\/[^/]+\/lesson$/.test(route.path));
 
 const navItems = [
   { to: "/study", label: "今日学习", icon: "study" as const },
@@ -15,7 +16,9 @@ const navItems = [
   { to: "/chat", label: "问答", icon: "chat" as const },
 ];
 
-const currentPage = computed(() => route.path.startsWith("/settings")
+const currentPage = computed(() => isLessonPage.value
+  ? { label: "知识讲解" }
+  : route.path.startsWith("/settings")
   ? { label: "设置" }
   : navItems.find((item) => route.path.startsWith(item.to)) ?? navItems[0]);
 
@@ -186,7 +189,7 @@ onBeforeUnmount(stopSidebarResize);
       </header>
 
       <main class="workspace-main" :class="{ 'workspace-main--chat': route.path.startsWith('/chat') }">
-        <h1 class="sr-only">{{ currentPage.label }}</h1>
+        <h1 v-if="!isLessonPage" class="sr-only">{{ currentPage.label }}</h1>
         <RouterView v-slot="{ Component }">
           <ErrorBoundary>
             <KeepAlive :include="['ChatPage']">

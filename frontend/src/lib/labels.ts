@@ -25,6 +25,7 @@ const TYPE_LABELS: Record<string, string> = {
   calculation: "计算大题",
   proof: "证明题",
   subjective: "主观题",
+  external_exam: "历年真题",
 };
 
 /** 学习角色 → 中文。 */
@@ -39,8 +40,8 @@ export function typeLabel(value: string): string {
   return TYPE_LABELS[value] ?? value;
 }
 
-export function roleLabel(value: string): string {
-  return ROLE_LABELS[value] ?? value;
+export function roleLabel(value: string | null): string {
+  return value ? (ROLE_LABELS[value] ?? value) : "";
 }
 
 /** 时间预算三档的中文与分钟说明。 */
@@ -176,6 +177,8 @@ const MATERIAL_ERROR_LABELS: Record<string, string> = {
   document_decode_failed: "文件编码无法识别（请另存为 UTF-8）",
   scanned_pdf: "这个 PDF 没有文本层（扫描件需要 OCR，当前不支持）",
   document_parse_failed: "文件已损坏或格式不完整，无法解析（换个文件或另存后重试）",
+  document_content_too_large: "文档内容过多，请拆分后上传（最多 100 万字符、500 页 PDF、5000 个片段；DOCX 展开不超过 32 MiB）",
+  document_parse_timeout: "文档解析超时，请拆分或另存后重试",
   unsafe_storage_path: "存储路径不合法",
   material_file_not_found: "源文件在磁盘上找不到了",
   no_chunk_to_index: "这份资料没有可索引的正文",

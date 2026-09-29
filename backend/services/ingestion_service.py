@@ -121,8 +121,13 @@ def plan_material(material: Material, *, materials_root: Path) -> SourcePlan:
         raise IngestionError(str(error)) from error
 
     normalized = parsed.normalized_text
+    from backend.ingestion.document_parsers import MAX_DOCUMENT_CHARS
+    if len(normalized) > MAX_DOCUMENT_CHARS:
+        raise IngestionError("document_content_too_large")
     blocks = source_blocks_from_title_tree(normalized)
     drafts = build_chunk_drafts(normalized, blocks)
+    if len(drafts) > 5000:
+        raise IngestionError("document_content_too_large")
     return SourcePlan(
         normalized_text=normalized,
         content_hash=material_content_hash(normalized),

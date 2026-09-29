@@ -20,6 +20,7 @@ from backend.jobs import worker as worker_module
 from backend.jobs.worker import claim_job, run_job
 from backend.models.jobs import DocumentJob
 from backend.models.rag import Material
+from backend.services import material_service
 
 from tests.retrieval.conftest import create_material
 
@@ -277,3 +278,22 @@ def test_acceptance_script_does_not_delete_existing_materials(
 
     assert any(not title.startswith(TEST_TITLE_PREFIX) for title in titles)
     assert not any(title.startswith(TEST_TITLE_PREFIX) for title in titles)
+
+
+@pytest.mark.parametrize("operation", ["reindex_material", "retry_material"])
+def test_repeated_material_action_reuses_active_job(session_factory, operation: str) -> None:
+    """连续点击 reindex/retry 不应重复排队全量索引任务。"""
+    with session_factory() as db:
+        material = create_material(db, title=f"重复任务-{operation}", body="# 内容\n正文\n")
+        request_job = getattr(material_service, operation)
+        first = request_job(db, material_id=material.id)
+        second = request_job(db, material_id=material.id)
+
+        jobs = db.scalars(
+            select(DocumentJob).where(
+                DocumentJob.material_id == material.id,
+                DocumentJob.status.in_(("pending", "running", "retry")),
+            )
+        ).all()
+        assert first.id == second.id
+        assert len(jobs) == 1

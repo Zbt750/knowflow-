@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     # dev 是本机开发；test 会额外启用测试数据库保护；prod 留给最终部署。
     app_env: Literal["dev", "test", "prod"] = "dev"
+    allowed_web_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     # Pydantic 启动时校验连接串格式；开发/部署默认始终读这一项。
     database_url: PostgresDsn
     # 测试库只能在 APP_ENV=test 时启用；迁移、应用与 pytest 共用这一条选择规则。
@@ -35,6 +36,9 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    # Local-only model overrides; runtime storage is ignored by Git.
+    model_settings_path: Path = Path("storage/config/model-settings.bin")
+    local_model_settings_error: bool = False
     # 网络调用统一从此读取超时；provider 不得把 60 秒写死在多个文件。
     llm_timeout_seconds: float = 60.0
     # 单次回答的输出上限；provider 必须把它传给 max_tokens。
@@ -72,6 +76,18 @@ class Settings(BaseSettings):
         database_name = str(active_url).rstrip("/").rsplit("/", 1)[-1]
         if self.app_env == "test" and not database_name.endswith("_test"):
             raise ValueError("TEST_DATABASE_URL 必须指向 _test 数据库")
+        if self.app_env == "test":
+            self.allowed_web_origins = list(dict.fromkeys([*self.allowed_web_origins, "http://localhost:5174", "http://127.0.0.1:5174"]))
+            # .env 中的开发目录不能成为测试目录，即使已经换了数据库。
+            from dotenv import dotenv_values
+            development_paths = dotenv_values(".env")
+            for name, default in (("upload_dir", "storage/uploads"), ("chroma_dir", "storage/chroma")):
+                path = getattr(self, name).resolve()
+                development = development_paths.get(name.upper()) or default
+                if path in {Path(default).resolve(), Path(development).resolve()}:
+                    setattr(self, name, Path("storage/tests") / database_name / name)
+            if self.upload_dir.resolve() == self.chroma_dir.resolve():
+                raise ValueError("测试上传与索引目录不能相同")
         return self
 
     @property

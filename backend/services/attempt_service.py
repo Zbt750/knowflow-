@@ -20,8 +20,10 @@ from backend.mastery.storage import (
 from backend.mastery.transition import transition
 from backend.mastery.types import DomainLearningEvent, MasterySnapshot
 from backend.models.learning import (
+    ExamQuestionReference,
     KpMasteryPolicy,
     KpState,
+    KnowledgePoint,
     LearningEvent,
     PracticeItem,
     QuestionAttempt,
@@ -104,14 +106,19 @@ def assess_practice_item(
         snapshot = snapshot_from_storage(kp_state)
         return AssessmentResult(snapshot.state, "skipped", snapshot.next_review_at, _count(snapshot))
 
-    question = item.question  # ORM 关系取得题目的 id、是否变式与可选答案。
+    question = item.question  # 普通题的题干、答案与题型。
+    reference: ExamQuestionReference | None = item.exam_reference
+    if question is None and reference is None:
+        raise ValueError("practice_item_source_missing")
     # 客观结果只是复盘参考：只有选择题在用户选了选项时才有 right/wrong。
     objective_result = objective_result_for(
-        selected_option=selected_option, correct_answer=question.correct_answer
+        selected_option=selected_option,
+        correct_answer=question.correct_answer if question is not None else None,
     )
     attempt = QuestionAttempt(
         practice_item_id=item.id,
-        question_id=question.id,
+        question_id=question.id if question is not None else None,
+        exam_reference_id=reference.id if reference is not None else None,
         kp_id=item.kp_id,
         # 用户输入只供练习历史回看；空白统一存 None，且绝不参与掌握度与毕业计算。
         raw_answer=raw_answer.strip() if raw_answer and raw_answer.strip() else None,
@@ -128,14 +135,20 @@ def assess_practice_item(
 
     # 按这个叶子自己的策略判定毕业：不同知识点的题型要求与门槛都不同。
     policy = policy_from_storage(session.get(KpMasteryPolicy, item.kp_id))
+    kp = session.get(KnowledgePoint, item.kp_id)
     evidence = classify_evidence(
         self_grade=self_grade,
-        question_id=str(question.id),
-        is_variant=question.is_variant,
+        question_id=str(question.id if question is not None else reference.id),
+        is_variant=question.is_variant if question is not None else False,
         occurred_at=now,
         # 题型与考法必须进入证据，否则无法检查「题型覆盖」与「考法覆盖」。
-        question_type=question.question_type,
-        skill_tags=tuple(question.skill_tags or ()),
+        question_type=question.question_type if question is not None else "external_exam",
+        skill_tags=(
+            tuple(question.skill_tags or ())
+            if question is not None
+            else tuple(dict.fromkeys((reference.topic_label, kp.name if kp is not None else "")))
+        ),
+        source="practice_item" if question is not None else "external_exam",
     )
     event = DomainLearningEvent(
         event_type=EventType.QUESTION_SELF_ASSESSED, occurred_at=now, evidence=evidence

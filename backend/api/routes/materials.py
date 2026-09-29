@@ -110,7 +110,22 @@ async def upload_material(
         materials_root=materials_root,
         source_type=source_type,
     )
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        # COMMIT 的连接错误可能发生在服务端提交后；不能盲删已成功提交的源文件。
+        try:
+            from backend.models.rag import Material
+            with request.app.state.session_factory() as check:
+                committed = check.get(Material, created.material_id) is not None
+            if not committed:
+                material_service.delete_stored_file(materials_root, created.stored_path)
+        except Exception:
+            # 数据库仍不可达时保留文件，比破坏可能已提交的记录更安全。
+            import logging
+            logging.getLogger(__name__).warning("上传提交失败，无法确认补偿状态，源文件待核对")
+        raise
 
     material = material_service.get_material(db, created.material_id)
     # 唤醒后台线程：不依赖轮询周期，用户能立刻看到状态从 pending 变化。
@@ -170,6 +185,8 @@ def search_materials(
             keyword_index=stack.keyword_index,
             reranker=stack.reranker,
         )
+    except (EmbeddingUnavailableError, VectorStoreError) as error:
+        raise AppError("retrieval_unavailable", detail=str(error)) from error
     except ValueError as error:
         raise AppError(str(error)) from error
 

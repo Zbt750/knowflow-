@@ -103,14 +103,18 @@ async def create_material_record(
         session.rollback()
         raise AppError(_upload_error_code(str(error)), detail=str(error)) from error
 
-    material.stored_path = stored_path
-    material.file_size = file_size
-    material.raw_hash = raw_hash
-    session.flush()
-
-    job = enqueue_job(
-        session, material_id=material.id, job_type="ingest", max_attempts=max_attempts
-    )
+    try:
+        material.stored_path = stored_path
+        material.file_size = file_size
+        material.raw_hash = raw_hash
+        session.flush()
+        job = enqueue_job(
+            session, material_id=material.id, job_type="ingest", max_attempts=max_attempts
+        )
+    except Exception:
+        session.rollback()
+        delete_stored_file(materials_root, stored_path)
+        raise
     return MaterialCreated(
         material_id=material.id,
         title=material.title,
@@ -324,7 +328,9 @@ def reindex_material(
     """
     from backend.jobs.worker import enqueue_job
 
-    material = get_material(session, material_id)
+    material, active_job = _lock_material_for_job(session, material_id)
+    if active_job is not None:
+        return active_job
     material.status = "pending"
     material.last_error_code = None
     material.last_error_message = None
@@ -343,7 +349,9 @@ def retry_material(
     """重试失败资料：等价于再建一条 ingest 任务。"""
     from backend.jobs.worker import enqueue_job
 
-    material = get_material(session, material_id)
+    material, active_job = _lock_material_for_job(session, material_id)
+    if active_job is not None:
+        return active_job
     material.status = "pending"
     material.last_error_code = None
     material.last_error_message = None
@@ -351,6 +359,33 @@ def retry_material(
     return enqueue_job(
         session, material_id=material.id, job_type="ingest", max_attempts=max_attempts
     )
+
+
+def _lock_material_for_job(
+    session: Session, material_id: UUID
+) -> tuple[Material, DocumentJob | None]:
+    """Serialize reindex/retry requests per material and reuse a live job.
+
+    The material row lock closes the check-then-insert race between two requests;
+    it is held through the route transaction, so the next request sees the job
+    created by the first one instead of queuing another full index rebuild.
+    """
+    material = session.scalar(
+        select(Material).where(Material.id == material_id).with_for_update()
+    )
+    if material is None:
+        raise AppError("material_not_found")
+    active_job = session.scalars(
+        select(DocumentJob)
+        .where(
+            DocumentJob.material_id == material_id,
+            DocumentJob.status.in_(("pending", "running", "retry")),
+        )
+        .order_by(DocumentJob.created_at.desc(), DocumentJob.id.desc())
+        .limit(1)
+        .with_for_update()
+    ).first()
+    return material, active_job
 
 
 def material_stats(session: Session) -> dict[str, int]:

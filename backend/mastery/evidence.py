@@ -14,6 +14,7 @@ def classify_evidence(
     occurred_at: datetime,
     question_type: str = "fill_blank",
     skill_tags: tuple[str, ...] = (),
+    source: str = "practice_item",
 ) -> Evidence:
     """把一次用户自评映射成状态机证据；objective_result 不参与这里。
 
@@ -42,7 +43,7 @@ def classify_evidence(
         level=level,
         is_variant=is_variant,
         occurred_at=occurred_at,
-        source="practice_item",
+        source=source,
         question_type=question_type,
         skill_tags=tuple(skill_tags),
     )

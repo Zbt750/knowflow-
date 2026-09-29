@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -29,6 +30,11 @@ from backend.services.question_service import (  # noqa: E402
     DuplicateQuestionStemError,
     assert_not_duplicate_stem,
 )
+from backend.services.lesson_service import sync_builtin_lessons  # noqa: E402
+from backend.services.builtin_material_service import (  # noqa: E402
+    sync_builtin_reference_materials,
+)
+from backend.services.exam_reference_service import sync_exam_reference_index  # noqa: E402
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed"
 
@@ -61,6 +67,7 @@ def upsert_knowledge_points(
         kp.summary = node.get("summary")
         kp.learning_goal = node.get("learning_goal")
         kp.is_active = True
+        kp.is_reference_only = False
         db.flush()  # 先拿到 kp.id，子节点才能挂上 parent_id。
 
         child_created, child_updated = upsert_knowledge_points(
@@ -196,7 +203,7 @@ def upsert_policies(db: Session, syllabus: dict) -> tuple[int, int]:
     return created, updated
 
 
-def seed_all(db: Session) -> dict[str, int]:
+def seed_all(db: Session, *, include_exam_references: bool = False) -> dict[str, int]:
     """供脚本与测试共用的入口：整棵树、策略与题库放在一个事务里。"""
     syllabus = load_json("syllabus.json")
     questions = load_json("questions.json")
@@ -205,7 +212,7 @@ def seed_all(db: Session) -> dict[str, int]:
     # 策略必须在知识点存在之后写；它只描述题目要求，不触碰用户进度。
     policies_created, policies_updated = upsert_policies(db, syllabus)
     new_questions, skipped = upsert_questions(db, questions)
-    return {
+    result = {
         "kp_created": created,
         "kp_updated": updated,
         "states_created": states,
@@ -214,6 +221,10 @@ def seed_all(db: Session) -> dict[str, int]:
         "questions_created": new_questions,
         "questions_skipped": skipped,
     }
+    # 大型历年索引由发布/初始化脚本显式导入；普通学习闭环测试仍使用小型演示题库。
+    if include_exam_references:
+        result.update(sync_exam_reference_index(db))
+    return result
 
 
 def main() -> None:
@@ -223,11 +234,30 @@ def main() -> None:
     try:
         with session_factory() as db:
             # 中途失败不留半棵树。
-            result = seed_all(db)
+            result = seed_all(db, include_exam_references=True)
+            lessons = asyncio.run(
+                sync_builtin_lessons(db, materials_root=settings.upload_dir)
+            )
+            references = asyncio.run(
+                sync_builtin_reference_materials(db, materials_root=settings.upload_dir)
+            )
             db.commit()
             print(f"知识点：新建 {result['kp_created']}，更新 {result['kp_updated']}；KpState 补齐 {result['states_created']}")
             print(f"毕业策略：新建 {result['policies_created']}，更新 {result['policies_updated']}")
             print(f"题目：新建 {result['questions_created']}，已存在跳过 {result['questions_skipped']}")
+            print(
+                "历年真题索引："
+                f"节点新建 {result['nodes_created']} / 更新 {result['nodes_updated']}，"
+                f"题号关联新建 {result['references_created']} / 更新 {result['references_updated']}"
+            )
+            print(
+                f"系统讲解：新建 {lessons['created']}，更新 {lessons['updated']}，"
+                f"未变 {lessons['unchanged']}（索引由后台任务完成）"
+            )
+            print(
+                f"系统参考资料：新建 {references['created']}，更新 {references['updated']}，"
+                f"未变 {references['unchanged']}（索引由后台任务完成）"
+            )
     finally:
         engine.dispose()
 

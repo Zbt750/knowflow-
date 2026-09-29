@@ -1,5 +1,28 @@
 import { expect, expectSystemStatus, revealLeaf, test } from "./fixtures";
 
+async function selectOnlyKnowledgePoint(page: import("@playwright/test").Page, code: string): Promise<void> {
+  await page.getByTestId("tree-kp-picker-open").click();
+  const picker = page.getByTestId("tree-kp-picker");
+  // 搜索学科编码会展开匹配的祖先路径；节点数随知识库扩充而变化，不能写死数量。
+  await page.getByTestId("scope-picker-search").fill("math");
+  const target = picker.getByTestId("pick-node-" + code);
+  await expect(target).toBeVisible();
+
+  // 通过已选列表移除其它知识点（包括当前搜索结果之外的），只留下目标叶子。
+  // 反向遍历，删除行不会让尚未处理的索引发生偏移。
+  const selectedRows = picker.locator(".scope-selected-list li");
+  const targetId = (await target.getAttribute("id"))?.replace("scope-leaf-", "");
+  if (!targetId) throw new Error(`目标知识点没有稳定标识：${code}`);
+  for (let index = (await selectedRows.count()) - 1; index >= 0; index -= 1) {
+    const row = selectedRows.nth(index);
+    if ((await row.getAttribute("data-testid")) === `scope-selected-${targetId}`) continue;
+    await row.getByRole("button", { name: /从范围移出/ }).click();
+  }
+  if ((await target.getAttribute("aria-pressed")) !== "true") await target.click();
+  await expect(page.getByTestId("selected-kp-count")).toContainText("本次包含 1 个知识点");
+  await page.getByTestId("close-tree-kp-picker").click();
+}
+
 /**
  * 阶段 B 前端冒烟测试。
  *
@@ -134,10 +157,11 @@ test.describe("阶段 B：知识树页面", () => {
     // 未选中叶子时明确提示父节点不可考核。
     await expect(page.getByTestId("knowledge-empty")).toBeVisible();
 
-    // 点父节点「高等数学」：它只做汇总，不打开考核视图，
-    // 展开状态由旁边的 ▸ / ▾ 按钮控制。
+    // 父节点有章节导读，但不提供考核。
     await page.getByTestId("tree-node-math.calculus").click();
-    await expect(page.getByTestId("knowledge-empty")).toBeVisible();
+    await expect(page.getByTestId("knowledge-parent-summary")).toBeVisible();
+    await expect(page.getByTestId("node-assessment")).toHaveCount(0);
+    await expect(page.getByTestId("knowledge-lesson-link")).toContainText("章节导读");
     await expect(tree).toContainText("已毕业");
 
     await revealLeaf(page, [
@@ -172,9 +196,30 @@ test.describe("阶段 B：知识树页面", () => {
     await page.getByTestId("tab-attempts").click();
     await expect(page.getByTestId("attempt-history")).toBeVisible();
 
-    // 关联资料 Tab 明确说明尚未接入，而不是伪造数据。
+    // 关联资料不把未匹配内容伪装成关联资料。
     await page.getByTestId("tab-materials").click();
     await expect(page.getByTestId("panel-materials")).toBeVisible();
+    await expect(page.getByTestId("panel-materials")).toContainText("暂不自动匹配");
+  });
+
+  test("节点讲解可阅读公式，并能返回节点或进入今日练习", async ({ page }) => {
+    await page.goto("/knowledge");
+    await revealLeaf(page, [
+      "math.calculus",
+      "math.calculus.limit",
+      "math.calculus.limit.lhopital",
+    ]);
+    await page.getByTestId("knowledge-lesson-link").click();
+    await expect(page).toHaveURL(/\/knowledge\/math\.calculus\.limit\.lhopital\/lesson$/);
+    await expect(page.getByTestId("lesson-article")).toContainText("洛必达法则");
+    await expect(page.getByTestId("lesson-article").locator(".katex").first()).toBeVisible();
+    await page.getByRole("link", { name: /查看相关题目/ }).click();
+    await expect(page.getByTestId("question-bank")).toBeVisible();
+    await page.getByTestId("tab-overview").click();
+    await page.getByTestId("knowledge-lesson-link").click();
+    await page.getByRole("link", { name: "去今日学习选题" }).click();
+    await expect(page).toHaveURL(/\/study\?kp_id=/);
+    await expect(page.getByTestId("selected-kp-count")).toContainText("本次包含 1 个知识点");
   });
 
   test("叶子整体自评显示透明基础确认 +2，且不伪装成做过两题", async ({ page }) => {
@@ -217,8 +262,10 @@ test.describe("阶段 B：今日学习主流程", () => {
     // 准备页：没有用户确认就不创建计划。
     const setup = page.getByTestId("study-setup");
     await expect(setup).toBeVisible();
-    await expect(setup).toContainText("还没有今天的练习卷");
-    // 推荐项默认勾选。
+    await expect(setup).toContainText("今天的练习");
+    // 推荐范围默认已准备好，无须逐项勾选。
+    await expect(setup.locator('input[type="checkbox"]')).toHaveCount(0);
+    await expect(page.getByTestId("tree-kp-picker")).toHaveCount(0);
     const generate = page.getByTestId("generate-plan");
     await expect(generate).toBeEnabled();
     await generate.click();
@@ -351,12 +398,8 @@ test.describe("阶段 B：今日学习主流程", () => {
     await expectSystemStatus(page, "ready");
     await expect(page.getByTestId("study-setup")).toBeVisible();
 
-    // 只留一个知识点：3 道题。
-    const boxes = page.getByTestId("study-setup").locator('input[type="checkbox"]');
-    const total = await boxes.count();
-    for (let index = 1; index < total; index += 1) {
-      await boxes.nth(index).uncheck();
-    }
+    // 只留一个知识点，让卷内题数可控。
+    await selectOnlyKnowledgePoint(page, "math.calculus.limit.lhopital");
     await page.getByTestId("generate-plan").click();
     await expect(page.getByTestId("study-active")).toBeVisible({ timeout: 15_000 });
 
@@ -390,6 +433,7 @@ test.describe("阶段 B：今日学习主流程", () => {
     await page.getByTestId("append-questions").click();
     const picker = page.getByTestId("question-picker");
     await expect(picker).toBeVisible();
+    await picker.getByRole("searchbox", { name: "搜索知识点" }).fill("等比级数");
     await picker.getByRole("button", { name: "等比级数的敛散性与求和" }).click();
     const candidates = picker.locator('input[type="checkbox"]');
     await expect(candidates.first()).toBeVisible({ timeout: 15_000 });
@@ -408,13 +452,8 @@ test.describe("阶段 B：今日学习主流程", () => {
     await expectSystemStatus(page, "ready");
 
     // 只保留一个知识点入卷，这样其他叶子的题库才有可追加的题。
-    const setup = page.getByTestId("study-setup");
-    await expect(setup).toBeVisible();
-    const checkboxes = setup.locator('input[type="checkbox"]');
-    const count = await checkboxes.count();
-    for (let index = 1; index < count; index += 1) {
-      await checkboxes.nth(index).uncheck();
-    }
+    await expect(page.getByTestId("study-setup")).toBeVisible();
+    await selectOnlyKnowledgePoint(page, "math.calculus.limit.lhopital");
     await page.getByTestId("generate-plan").click();
     await expect(page.getByTestId("study-active")).toBeVisible({ timeout: 15_000 });
     // 题数由该叶子的毕业缺口决定，先读出来再判断追加结果。
@@ -427,10 +466,39 @@ test.describe("阶段 B：今日学习主流程", () => {
     const picker = page.getByTestId("question-picker");
     await expect(picker).toBeVisible();
 
+    // 先用搜索定位，再从树中展开知识点，避免题目多时面对平铺长列表。
+    const search = picker.getByRole("searchbox", { name: "搜索知识点" });
+    await search.fill("不存在的知识点");
+    await expect(picker.getByTestId("question-picker-empty")).toBeVisible();
+    await search.fill("等比级数");
+    await expect(picker.getByTestId("question-picker-tree")).toBeVisible();
+
+    // 搜索会自动展开匹配路径，但父级仍必须可以手动收起和重新展开。
+    const mathBranch = picker.getByRole("button", { name: "高等数学" });
+    await expect(mathBranch).toHaveAttribute("aria-expanded", "true");
+    await mathBranch.click();
+    await expect(mathBranch).toHaveAttribute("aria-expanded", "false");
+    await expect(picker.getByRole("button", { name: "等比级数的敛散性与求和" })).toHaveCount(0);
+    await mathBranch.click();
+    await expect(mathBranch).toHaveAttribute("aria-expanded", "true");
+
     // 选择另一个知识点，加载它的题库。
     const nodeToggle = picker.getByRole("button", { name: "等比级数的敛散性与求和" });
-    await nodeToggle.click();
     const candidates = picker.locator('input[type="checkbox"]');
+    await expect(nodeToggle).toBeVisible();
+
+    // 请求失败时给出提示；再次展开重试成功后，旧错误应消失。
+    await page.route("**/api/knowledge/*", (route) => route.abort());
+    await nodeToggle.click();
+    await expect(picker.locator(".form-error")).toContainText("无法连接后端服务");
+    await page.unroute("**/api/knowledge/*");
+    await nodeToggle.click();
+    await expect(nodeToggle).toHaveAttribute("aria-expanded", "false");
+    await nodeToggle.click();
+    await expect(candidates.first()).toBeVisible({ timeout: 15_000 });
+    await expect(picker.locator(".form-error")).toHaveCount(0);
+
+    // 重新建立 locator；候选区域尚未出现时不要用首元素直接断言。
     await expect(candidates.first()).toBeVisible({ timeout: 15_000 });
     await expect(nodeToggle).toHaveAttribute("aria-expanded", "true");
     await nodeToggle.click();
@@ -440,7 +508,10 @@ test.describe("阶段 B：今日学习主流程", () => {
     await expect(candidates.first()).toBeVisible();
     expect(await candidates.count()).toBeGreaterThan(0);
 
-    // 只追加一道，并且重复提交同一道以验证幂等（不会重复入卷）。
+    // 只追加一道，并且确认追加后的候选缓存已剔除它。
+    const candidatesBeforeAppend = await candidates.count();
+    // 标签同时包含题干和「变式题」标记；卷面题干本身不包含该标记。
+    const appendedQuestionText = await candidates.first().locator("xpath=..").locator("span").first().innerText();
     await candidates.first().check();
     const confirm = page.getByTestId("confirm-append");
     await expect(confirm).toBeEnabled();
@@ -450,13 +521,24 @@ test.describe("阶段 B：今日学习主流程", () => {
     // 题数增加一道：追加只加一道，且不重洗已有顺序。
     await expect(page.getByTestId("study-status")).toContainText(`/ ${baseCount + 1}`);
 
+    await page.getByTestId("append-questions").click();
+    const pickerAfterAppend = page.getByTestId("question-picker");
+    await pickerAfterAppend.getByRole("searchbox", { name: "搜索知识点" }).fill("等比级数");
+    await pickerAfterAppend.getByRole("button", { name: "等比级数的敛散性与求和" }).click();
+    const cachedCandidates = pickerAfterAppend.locator('input[type="checkbox"]');
+    await expect(cachedCandidates).toHaveCount(candidatesBeforeAppend - 1);
+    await expect(
+      pickerAfterAppend.locator("label.question-picker-tree__question").filter({ hasText: appendedQuestionText.trim() }),
+    ).toHaveCount(0);
+    await pickerAfterAppend.getByRole("button", { name: "取消" }).click();
+
     // 全卷模式：追加题参与题型排序，而不是强制显示在卷尾。
     await page.getByTestId("full-paper").click();
     const paper = page.getByTestId("paper-list");
     await expect(paper).toBeVisible();
     await expect(paper.locator("li.paper-item")).toHaveCount(baseCount + 1);
     // 追加的是另一个知识点的题，附加信息默认收起但仍可展开查看。
-    const appended = paper.locator("li.paper-item").filter({ hasText: "等比级数" });
+    const appended = paper.locator("li.paper-item").filter({ hasText: appendedQuestionText.trim() });
     await expect(appended).toHaveCount(1);
     await expect(appended.locator("details.question-meta")).not.toHaveAttribute("open");
     await appended.locator("summary").click();
@@ -477,22 +559,22 @@ test.describe("阶段 B：从知识树补充与选择题选项", () => {
     const picker = page.getByTestId("tree-kp-picker");
     await expect(picker).toBeVisible();
 
-    // 只列可考核叶子：父节点不出现在这里。
-    await expect(picker.getByRole("button", { name: "高等数学" })).toHaveCount(0);
-    const leaves = picker.locator('input[type="checkbox"]');
-    await expect(leaves).toHaveCount(5);
+    // 章节提供折叠导航，只有可考核叶子显示加入/移出按钮。
+    await page.getByTestId("scope-picker-search").fill("math");
+    await expect(picker.getByRole("button", { name: /^高等数学/ })).toBeVisible();
 
     const beforeText = await page.getByTestId("selected-kp-count").innerText();
 
-    // 推荐项默认全部勾选（5 个），先取消一个再补回来，验证计数真实变化。
+    // 推荐范围默认包含全部叶子；手动移出再加入，计数须真实变化。
     const series = page.getByTestId("pick-node-math.calculus.series.geometric");
-    await expect(series).toBeChecked();
-    await series.uncheck();
-    await expect(series).not.toBeChecked();
+    await expect(series).toBeVisible();
+    await expect(series).toHaveAttribute("aria-pressed", "true");
+    await series.click();
+    await expect(series).toHaveAttribute("aria-pressed", "false");
     expect(await page.getByTestId("selected-kp-count").innerText()).not.toBe(beforeText);
 
-    await series.check();
-    await expect(series).toBeChecked();
+    await series.click();
+    await expect(series).toHaveAttribute("aria-pressed", "true");
     expect(await page.getByTestId("selected-kp-count").innerText()).toBe(beforeText);
 
     await page.getByTestId("close-tree-kp-picker").click();
@@ -505,12 +587,7 @@ test.describe("阶段 B：从知识树补充与选择题选项", () => {
     await expect(page.getByTestId("study-setup")).toBeVisible();
 
     // 只留「洛必达法则」一个知识点。
-    const setup = page.getByTestId("study-setup");
-    const boxes = setup.locator('input[type="checkbox"]');
-    const count = await boxes.count();
-    for (let index = 1; index < count; index += 1) {
-      await boxes.nth(index).uncheck();
-    }
+    await selectOnlyKnowledgePoint(page, "math.calculus.limit.lhopital");
     await page.getByTestId("generate-plan").click();
     await expect(page.getByTestId("study-active")).toBeVisible({ timeout: 15_000 });
 
@@ -584,11 +661,7 @@ test.describe("阶段 B：从知识树补充与选择题选项", () => {
     await expectSystemStatus(page, "ready");
     await expect(page.getByTestId("study-setup")).toBeVisible();
 
-    const boxes = page.getByTestId("study-setup").locator('input[type="checkbox"]');
-    const total = await boxes.count();
-    for (let index = 1; index < total; index += 1) {
-      await boxes.nth(index).uncheck();
-    }
+    await selectOnlyKnowledgePoint(page, "math.calculus.limit.lhopital");
     await page.getByTestId("generate-plan").click();
     await expect(page.getByTestId("study-active")).toBeVisible({ timeout: 15_000 });
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Iterable, Sequence
 from uuid import UUID
 
@@ -57,20 +58,21 @@ class KeywordIndex:
     _order: list[str] = field(default_factory=list)
     _title_nodes: list[TitleNode] = field(default_factory=list)
     _title_bm25: object | None = None
+    _snapshot_lock: RLock = field(default_factory=RLock, init=False, repr=False, compare=False)
 
     def rebuild(self, records: Sequence[VectorRecord]) -> None:
         """全量重建。重复调用得到完全相同的结果（顺序由 chunk_id 排序决定）。"""
         from rank_bm25 import BM25Okapi
 
-        self._records = {str(record.chunk_id): record for record in records}
-        self._tokens = {
+        new_records = {str(record.chunk_id): record for record in records}
+        new_tokens = {
             str(record.chunk_id): tokenize(_searchable_text(record)) for record in records
         }
         # 固定顺序：rank_bm25 的返回下标必须能稳定映射回 chunk_id。
-        self._order = sorted(self._records)
-        corpus = [self._tokens[key] for key in self._order]
+        new_order = sorted(new_records)
+        corpus = [new_tokens[key] for key in new_order]
         # 空语料时 BM25Okapi 会抛错，用 None 表示「没有可检索内容」。
-        self._bm25 = (
+        new_bm25 = (
             BM25Okapi(corpus, k1=self.k1, b=self.b, epsilon=self.epsilon)
             if corpus
             else None
@@ -91,16 +93,24 @@ class KeywordIndex:
                         path=path,
                         text=title_text,
                     )
-        self._title_nodes = sorted(
+        new_title_nodes = sorted(
             nodes.values(),
             key=lambda node: (str(node.material_id), node.index_version, node.path),
         )
-        title_corpus = [tokenize(node.text) for node in self._title_nodes]
-        self._title_bm25 = (
+        title_corpus = [tokenize(node.text) for node in new_title_nodes]
+        new_title_bm25 = (
             BM25Okapi(title_corpus, k1=self.k1, b=self.b, epsilon=self.epsilon)
             if any(title_corpus)
             else None
         )
+        # Build off-lock, then publish one coherent snapshot. Readers keep their old
+        # references while this tuple is swapped; no BM25 score can be paired with
+        # a different record order during a background reindex.
+        with self._snapshot_lock:
+            self._records, self._tokens, self._order, self._bm25 = (
+                new_records, new_tokens, new_order, new_bm25
+            )
+            self._title_nodes, self._title_bm25 = new_title_nodes, new_title_bm25
 
     def search(
         self,
@@ -110,18 +120,22 @@ class KeywordIndex:
         index_filter: IndexFilter | None = None,
     ) -> list[tuple[UUID, float]]:
         """返回 (chunk_id, score)，按分数降序；分数为 0 的结果不返回。"""
-        if self._bm25 is None or top_k <= 0:
+        if top_k <= 0:
             return []
         query_tokens = tokenize(query)
         if not query_tokens:
             return []
-        scores = self._bm25.get_scores(query_tokens)
+        with self._snapshot_lock:
+            bm25, order, records = self._bm25, self._order, self._records
+        if bm25 is None:
+            return []
+        scores = bm25.get_scores(query_tokens)
         scored: list[tuple[float, str]] = []
-        for position, key in enumerate(self._order):
+        for position, key in enumerate(order):
             score = float(scores[position])
             if score <= 0:
                 continue
-            record = self._records[key]
+            record = records[key]
             if not _passes_filter(record, index_filter):
                 continue
             scored.append((score, key))
@@ -130,7 +144,8 @@ class KeywordIndex:
         return [(UUID(key), score) for score, key in scored[:top_k]]
 
     def record(self, chunk_id: UUID) -> VectorRecord | None:
-        return self._records.get(str(chunk_id))
+        with self._snapshot_lock:
+            return self._records.get(str(chunk_id))
 
     def search_title_tree(
         self,
@@ -144,15 +159,21 @@ class KeywordIndex:
         这是第三条独立召回路：它按资料名/章节名匹配，再把命中标题下的正文块
         展开。这样“某文件讲了什么”或“第三章的内容”不会只靠正文片段碰运气。
         """
-        if self._title_bm25 is None or top_k <= 0:
+        if top_k <= 0:
             return []
         query_tokens = tokenize(query)
         if not query_tokens:
             return []
-        scores = self._title_bm25.get_scores(query_tokens)
+        with self._snapshot_lock:
+            title_bm25, title_nodes, record_snapshot = (
+                self._title_bm25, self._title_nodes, self._records
+            )
+        if title_bm25 is None:
+            return []
+        scores = title_bm25.get_scores(query_tokens)
         nodes = [
             (float(scores[position]), node)
-            for position, node in enumerate(self._title_nodes)
+            for position, node in enumerate(title_nodes)
             if float(scores[position]) > 0 and _node_passes_filter(node, index_filter)
         ]
         nodes.sort(
@@ -164,7 +185,7 @@ class KeywordIndex:
         expanded: list[tuple[UUID, float]] = []
         seen: set[str] = set()
         records = sorted(
-            self._records.values(),
+            record_snapshot.values(),
             key=lambda record: (str(record.material_id), record.index_version, record.ordinal),
         )
         for score, node in nodes:
@@ -185,7 +206,8 @@ class KeywordIndex:
         return expanded
 
     def count(self) -> int:
-        return len(self._records)
+        with self._snapshot_lock:
+            return len(self._records)
 
 
 def _searchable_text(record: VectorRecord) -> str:

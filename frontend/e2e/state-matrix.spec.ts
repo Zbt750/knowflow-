@@ -128,7 +128,7 @@ test.describe("十态矩阵 · /study", () => {
 
     await openWith(page, STUDY);
     await expect(page.getByTestId("recommended-kp")).toBeVisible();
-    await expect(page.getByTestId("selected-kp-count")).toContainText("已选 1 个知识点");
+    await expect(page.getByTestId("selected-kp-count")).toContainText("本次包含 1 个知识点");
     await expect(page.getByTestId("generate-plan")).toBeEnabled();
   });
 
@@ -142,10 +142,10 @@ test.describe("十态矩阵 · /study", () => {
     });
 
     await openWith(page, STUDY);
-    // 取消唯一的勾选，再点生成 → 前端应拦住并提示，不打扰后端。
-    await page.getByTestId("recommended-kp").locator('input[type="checkbox"]').first().uncheck();
-    await page.getByTestId("generate-plan").click();
-    await expect(page.getByTestId("plan-generate-error")).toBeVisible();
+    // 范围调整是可选操作；移出唯一知识点后前端应拦住空范围请求。
+    await page.getByTestId("tree-kp-picker-open").click();
+    await page.getByTestId("tree-kp-picker").locator(".study-range-row__toggle").first().click();
+    await expect(page.getByTestId("generate-plan")).toBeDisabled();
     expect(generateCalls).toBe(0);
   });
 
@@ -219,7 +219,7 @@ test.describe("十态矩阵 · /study", () => {
     await page.getByTestId("generate-plan").click();
     // 提交期间：按钮禁用 + 文案变化。
     await expect(page.getByTestId("generate-plan")).toBeDisabled();
-    await expect(page.getByTestId("generate-plan")).toContainText(/生成中/);
+    await expect(page.getByTestId("generate-plan")).toContainText(/正在准备/);
     // 连点不会重复请求（禁用状态挡住了）。
     await page.getByTestId("generate-plan").click({ force: true }).catch(() => undefined);
     await expect(page.getByTestId("study-active")).toBeVisible({ timeout: 15_000 });

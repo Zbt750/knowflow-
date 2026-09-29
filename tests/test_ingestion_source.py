@@ -236,7 +236,7 @@ def test_parse_docx_reads_paragraphs_and_tables(tmp_path: Path) -> None:
     document.save(str(target))
 
     parsed = parse_source(target)
-    assert parsed.parser_version == "docx-v1"
+    assert parsed.parser_version == "docx-v2"
     assert "# 极限" in parsed.normalized_text
     assert "## 洛必达法则" in parsed.normalized_text
     assert "适用条件是 0/0 型。" in parsed.normalized_text

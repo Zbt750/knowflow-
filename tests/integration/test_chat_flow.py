@@ -170,6 +170,38 @@ def seed_builtin_material(session_factory, stack) -> None:
     stack.keyword_index.rebuild([record])
 
 
+@pytest.mark.parametrize("mode", ["builtin", "user"])
+def test_named_file_detail_excludes_other_files_from_real_retrieval(session_factory, stack, mode):
+    from uuid import UUID
+    from backend.retrieval.protocols import VectorRecord
+
+    records = []
+    with session_factory.begin() as db:
+        for title, body in (
+            ("阶段A验收笔记", "健康检查在数据库不可用时返回 503。"),
+            ("旧版验收笔记", "健康检查在数据库不可用时返回 200，这条旧规则已过期。"),
+        ):
+            document = create_material(db, title=title, body=body, source_type=mode)
+            chunk = create_chunk(db, document, content=body, ordinal=0)
+            records.append(VectorRecord(
+                chunk_id=chunk.id, material_id=document.id,
+                index_version=chunk.index_version, ordinal=0, content=body,
+                heading_path=(), source_type=mode,
+            ))
+    stack.vector_store.upsert(records, stack.embedder.encode([record.content for record in records]))
+    stack.keyword_index.rebuild(records)
+    session_id = make_session(session_factory, mode=mode)
+    with session_factory() as db:
+        prepared = prepare_answer(
+            db, session_id=UUID(session_id),
+            question="阶段A验收笔记里，健康检查在数据库不可用时返回多少？", stack=stack,
+        )
+
+    assert set(prepared.citation_map.values()) == {records[0].chunk_id}
+    assert "503" in prepared.prompt[1]["content"]
+    assert records[1].content not in prepared.prompt[1]["content"]
+
+
 def make_session(session_factory, *, mode: str = "builtin") -> str:
     with session_factory.begin() as db:
         row = ChatSession(title="新对话", mode=mode)
@@ -241,8 +273,8 @@ def messages_of(session_factory, session_id: str) -> list[ChatMessage]:
 # ---------------------------------------------------------------------------
 
 
-def test_no_hit_refuses_without_calling_provider(session_factory, stack) -> None:
-    """知识库里没有相关内容时：明确拒答，且**不调用 provider**。
+def test_no_hit_uses_labeled_general_reference(session_factory, stack) -> None:
+    """知识库没有相关内容时给出常识参考，来源与学习事件保持为空。
 
     这条曾经偶发失败（只在完整套件里，单独跑必过），而且报错只有一句
     `assert 1 == 0`，完全看不出命中了什么。既然它依赖「检索必须无命中」，
@@ -285,17 +317,34 @@ def test_no_hit_refuses_without_calling_provider(session_factory, stack) -> None
         provider=provider,
     )
 
-    assert provider.calls == 0, "无命中时不得调用模型（既省钱也避免编造）"
+    assert provider.calls == 1, "无命中时应调用模型给出明确标注的常识参考"
     assert citations == []
     assert message.status == "completed"
     assert "没有找到" in message.content or "资料" in message.content
+    assert "## 通用知识参考" in message.content
+    assert "[C1]" not in message.content
+    assert message.metadata_["answer_source"] == "general"
+    assert message.matched_kp_id is None
     # 拒答也不该产生学习事件
     with session_factory() as db:
         assert db.scalars(select(LearningEvent)).all() == []
 
 
+def test_topic_overview_without_documents_uses_general_reference(session_factory, stack) -> None:
+    from uuid import UUID
+    session_id = make_session(session_factory)
+    provider = FakeProvider("洛必达法则处理特定未定式，需要满足可导等条件。")
+    message, citations, mode = answer(
+        session_factory, session_id=UUID(session_id), question="介绍一下洛必达法则", stack=stack, provider=provider,
+    )
+    assert provider.calls == 1
+    assert mode == "general"
+    assert message.metadata_["answer_source"] == "general"
+    assert citations == []
+
+
 def test_no_hit_still_persists_user_and_assistant_rows(session_factory, stack) -> None:
-    """拒答也要留下完整的两条消息（用户问过什么必须可追溯）。"""
+    """常识参考也保存完整的两条消息。"""
     session_id = make_session(session_factory)
     answer(
         session_factory,
@@ -307,6 +356,26 @@ def test_no_hit_still_persists_user_and_assistant_rows(session_factory, stack) -
     rows = messages_of(session_factory, session_id)
     assert [row.role for row in rows] == ["user", "assistant"]
     assert all(row.status == "completed" for row in rows)
+
+
+@pytest.mark.parametrize("text, expected_source, expected_citation_count", [
+    ("## 通用知识参考\nTCP 使用三次握手 [C1]。", "general", 0),
+    ("资料介绍未定式 [C1]。\n## 通用知识参考\nTCP 使用三次握手 [C1][C99]。", "mixed", 1),
+])
+def test_general_reference_cannot_create_document_citations(session_factory, stack, text, expected_source, expected_citation_count):
+    from uuid import UUID
+    seed_builtin_material(session_factory, stack)
+    session_id = make_session(session_factory)
+    message, citations, _ = answer(
+        session_factory, session_id=UUID(session_id), question="洛必达法则与 TCP 有什么区别？",
+        stack=stack, provider=FakeProvider(text),
+    )
+    assert message.metadata_["answer_source"] == expected_source
+    assert len(citations) == expected_citation_count
+    assert "[C" not in message.content.split("## 通用知识参考", 1)[1]
+    if expected_source == "general":
+        assert message.matched_kp_id is None
+        assert message.matched_kp_basis == {}
 
 
 def test_named_file_overview_includes_all_chunks_and_heading_context(session_factory, stack) -> None:
@@ -340,12 +409,43 @@ def test_named_file_overview_includes_all_chunks_and_heading_context(session_fac
             stack=stack,
         )
 
-    evidence = prepared.prompt[1]["content"]
+    evidence = next(m["content"] for m in prepared.prompt if m["content"].startswith("【资料证据】"))
     assert set(prepared.citation_map.values()) == {first.id, second.id}
     assert "阶段验收资料" in evidence
     assert "阶段验收 › 阶段 D" in evidence
     assert "阶段 A 负责项目基础结构和运行环境。" in evidence
     assert "阶段 D 验收流式回答、引用帧和资料定位。" in evidence
+
+
+@pytest.mark.parametrize("question", [
+    "对比极限与导数讲义和积分专题讲义，两份各举一个文件内例子。",
+    "比较《积分专题讲义》和《极限与导数讲义》，主题有什么不同？",
+    "概述极限与导数讲义和积分专题讲义的核心内容。",
+])
+def test_two_named_documents_include_both_examples_not_longest_only(session_factory, stack, question):
+    from uuid import UUID
+    session_id = make_session(session_factory, mode="user")
+    chunk_ids = set()
+    with session_factory.begin() as db:
+        for title, contents in [
+            ("极限与导数讲义", ["导数概念与条件。", "例题：圆在点(3,4)切线斜率为-3/4。"]),
+            ("积分专题讲义", ["积分概念与方法。", "例题：不定积分2x的原函数族为x²+C。"]),
+        ]:
+            material = create_material(db, title=title, body="\n".join(contents), source_type="user")
+            for i, content in enumerate(contents):
+                chunk_ids.add(create_chunk(db, material, content=content, ordinal=i, heading_path=(title, "例题" if i else "概念")).id)
+        unrelated = create_material(db, title="无关讲义", body="不能混入的内容。", source_type="user")
+        create_chunk(db, unrelated, content="不能混入的内容。", ordinal=0)
+        private_mode = create_material(db, title="积分专题讲义", body="内置模式独有内容。", source_type="builtin")
+        create_chunk(db, private_mode, content="内置模式独有内容。", ordinal=0)
+    with session_factory() as db:
+        prepared = prepare_answer(db, session_id=UUID(session_id), question=question, stack=stack)
+    assert prepared.direct_response is None
+    assert set(prepared.citation_map.values()) == chunk_ids
+    evidence = next(m["content"] for m in prepared.prompt if m["content"].startswith("【资料证据】"))
+    assert "切线斜率为-3/4" in evidence and "x²+C" in evidence
+    assert "不能混入" not in evidence and "内置模式独有" not in evidence
+    assert prepared.preparation_duration_ms >= 0
 
 
 def test_single_file_overview_under_generic_reference_covers_all_chunks(session_factory, stack) -> None:
@@ -380,9 +480,22 @@ def test_single_file_overview_under_generic_reference_covers_all_chunks(session_
         )
 
     assert set(prepared.citation_map.values()) == {first.id, second.id}
-    evidence = prepared.prompt[1]["content"]
+    evidence = next(m["content"] for m in prepared.prompt if m["content"].startswith("【资料证据】"))
     assert "阶段 A 负责项目基础结构和运行环境。" in evidence
     assert "阶段 D 验收流式回答、引用帧和资料定位。" in evidence
+
+
+def test_multifile_ready_without_active_chunks_never_claims_full_read(session_factory, stack):
+    from uuid import UUID
+    session_id = make_session(session_factory, mode="user")
+    with session_factory.begin() as db:
+        a = create_material(db, title="积分专题讲义", body="原函数例题。", source_type="user")
+        create_chunk(db, a, content="原函数例题。", ordinal=0)
+        create_material(db, title="极限与导数讲义", body="尚无活动块。", source_type="user")
+    with session_factory() as db:
+        prepared = prepare_answer(db, session_id=UUID(session_id), question="比较积分专题讲义和极限与导数讲义", stack=stack)
+    assert prepared.prompt == [] and prepared.citation_map == {}
+    assert "极限与导数讲义" in prepared.direct_response and "活动索引正文" in prepared.direct_response
 
 
 def test_detailed_followup_uses_recently_named_file_and_includes_every_chunk(
@@ -460,7 +573,7 @@ def test_detailed_followup_uses_recently_named_file_and_includes_every_chunk(
 
     assert set(prepared.citation_map.values()) == {chunk.id for chunk in acceptance_chunks}
     assert unrelated_chunk.id not in prepared.citation_map.values()
-    evidence = prepared.prompt[1]["content"]
+    evidence = next(m["content"] for m in prepared.prompt if m["content"].startswith("【资料证据】"))
     assert all(chunk.content in evidence for chunk in acceptance_chunks)
     assert "【本次回答：详细完整】" in prepared.prompt[0]["content"]
     assert "不得只回答第一项后停下" in prepared.prompt[0]["content"]
@@ -496,6 +609,80 @@ def test_builtin_mode_does_not_search_for_personal_file(session_factory, stack) 
     assert citations == []
     assert provider.calls == 0
     assert stack.embedder.encode_calls == before
+
+
+def test_builtin_mode_catches_overview_of_personal_material_named_in_question(
+    session_factory, stack
+) -> None:
+    """即使没有“这份文件”字样，点名个人资料的概述也应在检索前提示切换。"""
+    from uuid import UUID
+
+    session_id = make_session(session_factory, mode="builtin")
+    with session_factory.begin() as db:
+        material = create_material(
+            db,
+            title="阶段A验收笔记",
+            body="阶段 A 验收前端和后端基础连接。",
+            source_type="user",
+            index_version="v1-user",
+        )
+        material.original_filename = "阶段A验收笔记.md"
+        create_chunk(db, material, content="阶段 A 验收前端和后端基础连接。", ordinal=0)
+
+    provider = FakeProvider()
+    before = list(stack.embedder.encode_calls)
+    message, citations, _ = answer(
+        session_factory,
+        session_id=UUID(session_id),
+        question="请概述《阶段A验收笔记》的主要内容。",
+        stack=stack,
+        provider=provider,
+    )
+
+    assert "内置资料" in message.content and "我的资料" in message.content
+    assert citations == []
+    assert provider.calls == 0
+    assert stack.embedder.encode_calls == before
+
+
+def test_builtin_mode_allows_overview_of_explicitly_named_builtin_material(
+    session_factory, stack
+) -> None:
+    """跨模式保护不能挡住当前模式下明确点名的内置资料。"""
+    from uuid import UUID
+
+    session_id = make_session(session_factory, mode="builtin")
+    with session_factory.begin() as db:
+        builtin = create_material(
+            db,
+            title="阶段A验收笔记",
+            body="阶段 A 验收了基础结构和运行环境。",
+            source_type="builtin",
+            index_version="v1-builtin",
+        )
+        builtin_chunk = create_chunk(
+            db, builtin, content="阶段 A 验收了基础结构和运行环境。", ordinal=0,
+            index_version="v1-builtin",
+        )
+        personal = create_material(
+            db,
+            title="私人笔记",
+            body="这是用户自己的补充资料。",
+            source_type="user",
+            index_version="v1-user",
+        )
+        create_chunk(db, personal, content="这是用户自己的补充资料。", ordinal=0)
+
+    with session_factory() as db:
+        prepared = prepare_answer(
+            db,
+            session_id=UUID(session_id),
+            question="请概述《阶段A验收笔记》的主要内容。",
+            stack=stack,
+        )
+
+    assert prepared.prompt
+    assert set(prepared.citation_map.values()) == {builtin_chunk.id}
 
 
 def test_standalone_greeting_does_not_retrieve_random_document_evidence(session_factory, stack) -> None:
@@ -618,7 +805,7 @@ def test_user_mode_does_not_search_builtin_material(session_factory, stack) -> N
     )
 
     assert citations == [], "user 模式不得引用内置资料"
-    assert provider.calls == 0
+    assert provider.calls == 1, "没有用户资料时可以给常识参考，但不得读取内置资料"
 
 
 def test_provider_failure_marks_message_failed(session_factory, stack) -> None:
@@ -772,7 +959,7 @@ def test_retry_budget_never_shrinks() -> None:
         max_tokens=4000,
         retry_max_tokens=100,
     )
-    assert provider._token_budget(2) == 4000, "重试预算不得小于基础预算"
+    assert provider._token_budget(2) == 8000, "恢复预算至少翻倍，不能比首次更紧张"
 
 
 class ClarifyingProvider(Provider):

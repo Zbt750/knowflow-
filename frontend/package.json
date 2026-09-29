@@ -7,23 +7,27 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc --build && vite build",
     "typecheck": "vue-tsc --noEmit",
+    "test:unit": "vitest run",
     "generate:types": "openapi-typescript openapi.json -o src/api/types.ts",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium"
   },
   "dependencies": {
     "dompurify": "^3.4.16",
+    "katex": "^0.18.9",
     "marked": "^18.0.14",
     "vue": "^3.5.13",
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
+    "@types/katex": "^0.16.8",
     "@types/node": "^22.13.0",
     "@vitejs/plugin-vue": "^5.2.1",
     "openapi-typescript": "^7.13.0",
     "typescript": "^5.7.3",
     "vite": "^6.1.0",
+    "vitest": "^5.0.2",
     "vue-tsc": "^2.2.0"
   }
 }

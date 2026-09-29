@@ -54,6 +54,8 @@ class QuestionType(StrEnum):
     CALCULATION = "calculation"
     PROOF = "proof"
     SUBJECTIVE = "subjective"
+    # 用户打开原卷练习的题号引用；不含题干或答案，由用户对照原卷自评。
+    EXTERNAL_EXAM = "external_exam"
 
 
 class QuestionRole(StrEnum):
@@ -81,6 +83,7 @@ DEFAULT_MINUTES_BY_TYPE: dict[str, int] = {
     QuestionType.CALCULATION.value: 12,
     QuestionType.PROOF.value: 20,
     QuestionType.SUBJECTIVE.value: 20,
+    QuestionType.EXTERNAL_EXAM.value: 15,
 }
 
 # 三档时间预算的总分钟数。

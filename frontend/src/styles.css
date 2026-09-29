@@ -321,17 +321,17 @@ input:focus, textarea:focus, select:focus { border-color: #7b9bc9; box-shadow: 0
 @media (max-width: 980px) { #chat-sidebar-slot { display: none; } }
 @media (max-width: 620px) { .primary-nav { grid-template-columns: repeat(5, 1fr); } }
 
-/* 浅蓝色导航外壳，页面内容保持白色。 */
+/* 白色导航外壳，页面内容保持白色；交互状态使用中性灰区分。 */
 :root {
-  --chrome: #edf5ff;
-  --sidebar: #edf5ff;
-  --hover: #e1edfc;
-  --selected: #d7e8fc;
-  --border: #dce7f5;
-  --border-strong: #c8d9ee;
+  --chrome: #ffffff;
+  --sidebar: #ffffff;
+  --hover: #f4f4f4;
+  --selected: #e9e9e9;
+  --border: #e2e3e5;
+  --border-strong: #cfd1d4;
 }
 body, .app-frame, .app-main { background: var(--chrome); }
-.app-sidebar { border-right-color: #d1e1f5; background: var(--chrome); }
+.app-sidebar { border-right-color: var(--border); background: var(--chrome); }
 .app-header { border-bottom: 0; background: var(--chrome); }
 .workspace-main {
   min-height: calc(100dvh - var(--topbar-height) - 10px);

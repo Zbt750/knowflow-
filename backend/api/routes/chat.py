@@ -3,7 +3,7 @@ from typing import Literal
 from uuid import UUID
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import delete, exists, select
 from backend.chat.service import answer, basis_payload, provider_from_settings, require_active_session, stream_answer
 from backend.errors import AppError
@@ -14,15 +14,18 @@ from backend.models.rag import DocumentChunk, Material
 router = APIRouter(tags=["chat"])
 
 class CreateSessionRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
     title: str = Field(default="新对话", min_length=1, max_length=200)
     mode: Literal["builtin", "user"] = "builtin"
 class AskRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
     question: str = Field(min_length=1, max_length=4000)
 
 class FollowupCandidatesRequest(BaseModel):
     message_id: UUID | None = None
 
 class RenameSessionRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
     title: str = Field(min_length=1, max_length=200)
 def _cards(db, messages: list[ChatMessage]) -> dict[UUID, list[dict[str, object]]]:
     """消息恢复与 SSE 使用同一套可定位引用字段。"""
@@ -166,6 +169,7 @@ def list_messages(request: Request, session_id: UUID):
                 "content": row.content,
                 "status": row.status,
                 "response_duration_ms": row.metadata_.get("response_duration_ms"),
+                "answer_source": row.metadata_.get("answer_source"),
                 "matched_kp_id": str(row.matched_kp_id) if row.matched_kp_id else None,
                 # 归因依据：前端据此告诉用户「凭什么归到这个知识点，
                 # 依据是正文里的哪一个来源编号」。
@@ -189,7 +193,7 @@ def ask(request: Request, session_id: UUID, body: AskRequest):
         with request.app.state.session_factory() as db:
             kp = db.get(KnowledgePoint, message.matched_kp_id)
             kp_name = kp.name if kp is not None else None
-    return {"message_id": str(message.id), "answer": message.content, "status": message.status, "response_duration_ms": message.metadata_.get("response_duration_ms"), "matched_kp_id": str(message.matched_kp_id) if message.matched_kp_id else None, "matched_kp": basis_payload(dict(message.matched_kp_basis or {}), label_by_chunk, kp_name=kp_name, kp_id=message.matched_kp_id), "citations": [{"label": label, "chunk_id": str(chunk_id)} for label, chunk_id in citations], "retrieval_mode": mode}
+    return {"message_id": str(message.id), "answer": message.content, "status": message.status, "response_duration_ms": message.metadata_.get("response_duration_ms"), "matched_kp_id": str(message.matched_kp_id) if message.matched_kp_id else None, "matched_kp": basis_payload(dict(message.matched_kp_basis or {}), label_by_chunk, kp_name=kp_name, kp_id=message.matched_kp_id), "citations": [{"label": label, "chunk_id": str(chunk_id)} for label, chunk_id in citations], "retrieval_mode": mode, "answer_source": message.metadata_.get("answer_source")}
 
 @router.post("/chat/sessions/{session_id}/answers:stream")
 async def ask_stream(request: Request, session_id: UUID, body: AskRequest):

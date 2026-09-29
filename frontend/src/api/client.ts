@@ -4,7 +4,7 @@
 // - 错误一律按 { error: { code, message } } 解析，页面按 code 分支，不解析自然语言。
 // - 不在这里计算任何业务状态（掌握度、毕业、引用），那些只由后端决定。
 
-export type ApiErrorBody = { code: string; message: string };
+export type ApiErrorBody = { code: string; message: string; details?: { field: string; code: string; message: string }[] };
 
 export class ApiError extends Error {
   public readonly status: number | null;
@@ -22,7 +22,8 @@ function isApiErrorEnvelope(value: unknown): value is { error: ApiErrorBody } {
   if (!value || typeof value !== "object" || !("error" in value)) return false;
   const error = (value as { error: unknown }).error;
   return Boolean(
-    error && typeof error === "object" && "code" in error && "message" in error,
+    error && typeof error === "object" && "code" in error && "message" in error
+      && typeof error.code === "string" && typeof error.message === "string",
   );
 }
 
@@ -33,9 +34,9 @@ function isValidationError(value: unknown): boolean {
 
 async function request<T>(
   path: string,
-  init?: RequestInit & { json?: unknown; form?: FormData },
+  init?: Omit<RequestInit, "headers"> & { json?: unknown; form?: FormData; headers?: Record<string, string> },
 ): Promise<T> {
-  const headers: Record<string, string> = { Accept: "application/json" };
+  const headers: Record<string, string> = { Accept: "application/json", ...init?.headers };
   let body: string | FormData | undefined;
   if (init?.form !== undefined) {
     // FormData 必须让浏览器自己带 boundary，手写 Content-Type 会导致后端解析失败。
@@ -67,6 +68,11 @@ async function request<T>(
 
   if (!response.ok) {
     if (isApiErrorEnvelope(payload)) {
+      if (payload.error.code === "validation_failed") {
+        const details = Array.isArray(payload.error.details) ? payload.error.details.filter((item) => typeof item?.field === "string" && typeof item?.message === "string") : [];
+        const message = details.length ? details.slice(0, 5).map((item) => `${item.field.replace(/^(query|path|body)\./, "")}：${item.message}`).join("；") : "请求参数不符合要求";
+        throw new ApiError(message, response.status, payload.error.code);
+      }
       throw new ApiError(payload.error.message, response.status, payload.error.code);
     }
     if (isValidationError(payload)) {
@@ -82,12 +88,12 @@ export const api = {
   get: <T>(path: string, signal?: AbortSignal): Promise<T> => request<T>(path, { signal }),
   post: <T>(path: string, json?: unknown): Promise<T> =>
     request<T>(path, { method: "POST", json }),
-  put: <T>(path: string, json?: unknown): Promise<T> =>
-    request<T>(path, { method: "PUT", json }),
+  put: <T>(path: string, json?: unknown, headers?: Record<string, string>): Promise<T> =>
+    request<T>(path, { method: "PUT", json, headers }),
   patch: <T>(path: string, json?: unknown): Promise<T> =>
     request<T>(path, { method: "PATCH", json }),
   delete: <T>(path: string): Promise<T> => request<T>(path, { method: "DELETE" }),
   /** 上传文件：走 multipart，不设置 Content-Type。 */
-  upload: <T>(path: string, form: FormData): Promise<T> =>
-    request<T>(path, { method: "POST", form }),
+  upload: <T>(path: string, form: FormData, signal?: AbortSignal): Promise<T> =>
+    request<T>(path, { method: "POST", form, signal }),
 };

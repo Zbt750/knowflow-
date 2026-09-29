@@ -19,6 +19,7 @@ from backend.mastery.storage import policy_from_storage, snapshot_from_storage
 from backend.mastery.types import MasterySnapshot
 from backend.models.learning import (
     DailyPlan,
+    ExamQuestionReference,
     KnowledgePoint,
     KpMasteryPolicy,
     KpState,
@@ -37,6 +38,7 @@ QUESTION_TYPE_ORDER = {
     QuestionType.CALCULATION.value: 2,
     QuestionType.PROOF.value: 3,
     QuestionType.SUBJECTIVE.value: 4,
+    QuestionType.EXTERNAL_EXAM.value: 5,
 }
 
 
@@ -89,7 +91,7 @@ def create_initial_plan(
     session.add(plan)
     session.flush()  # 取得 plan.id，才能让下面的 PracticeItem 外键指向它。
 
-    picked_items: list[tuple[UUID, SelectionItem, str]] = []
+    picked_items: list[tuple[UUID, SelectionItem, str, UUID | None, UUID | None]] = []
     for kp_id in unique_kp_ids:
         # 这个叶子自己的毕业策略与当前进度：缺口选题的两个输入。
         policy = policy_from_storage(session.get(KpMasteryPolicy, kp_id))
@@ -97,6 +99,43 @@ def create_initial_plan(
         snapshot = (
             snapshot_from_storage(state) if state is not None else _empty_snapshot()
         )
+        if session.get(KnowledgePoint, kp_id).is_reference_only:
+            references = list(
+                session.scalars(
+                    select(ExamQuestionReference)
+                    .where(ExamQuestionReference.knowledge_point_id == kp_id)
+                    .order_by(ExamQuestionReference.year, ExamQuestionReference.question_number)
+                ).all()
+            )
+            pool = {QuestionType.EXTERNAL_EXAM.value: len(references)}
+            if not pool_capacity_check(policy, pool):
+                raise ValueError("question_pool_incomplete")
+            selection = select_questions(
+                policy,
+                snapshot.evidence_window,
+                _exam_candidates_for(session, kp_id, references),
+                manual_credit_count=snapshot.manual_credit_count,
+                manual_confirmed_at=snapshot.manual_confirmed_at,
+                budget=budget,
+                limit=per_kp_limit,
+                reference_time=now,
+            )
+            picked = list(selection.items)
+            if not picked:
+                picked = _fallback_exam_picks(references, policy, limit=1)
+            refs_by_id = {str(row.id): row for row in references}
+            for selected in picked:
+                picked_items.append(
+                    (
+                        kp_id,
+                        selected,
+                        QuestionType.EXTERNAL_EXAM.value,
+                        None,
+                        refs_by_id[selected.question_id].id,
+                    )
+                )
+            continue
+
         rows = list(
             session.scalars(
                 select(Question)
@@ -132,15 +171,16 @@ def create_initial_plan(
 
         question_types = {str(row.id): row.question_type for row in rows}
         for item in picked:
-            picked_items.append((kp_id, item, question_types[item.question_id]))
+            picked_items.append((kp_id, item, question_types[item.question_id], UUID(item.question_id), None))
 
     # 只在初次组卷时排一次序。已有卷和后续追加仍按原 ordinal 保持稳定。
     picked_items.sort(key=lambda entry: QUESTION_TYPE_ORDER.get(entry[2], len(QUESTION_TYPE_ORDER)))
-    for ordinal, (kp_id, item, _) in enumerate(picked_items, start=1):
+    for ordinal, (kp_id, item, _, question_id, exam_reference_id) in enumerate(picked_items, start=1):
         session.add(
             PracticeItem(
                 plan_id=plan.id,
-                question_id=UUID(item.question_id),
+                question_id=question_id,
+                exam_reference_id=exam_reference_id,
                 kp_id=kp_id,
                 ordinal=ordinal,
             )
@@ -198,6 +238,56 @@ def _candidates_for(
     return candidates
 
 
+def _exam_candidates_for(
+    session: Session, kp_id: UUID, rows: list[ExamQuestionReference]
+) -> list[QuestionCandidate]:
+    """把来源索引行作为可自评的外部原卷任务，不生成虚构题干。"""
+    ids = [row.id for row in rows]
+    history = session.execute(
+        select(QuestionAttempt.exam_reference_id, func.max(QuestionAttempt.submitted_at))
+        .where(
+            QuestionAttempt.kp_id == kp_id,
+            QuestionAttempt.exam_reference_id.in_(ids or []),
+        )
+        .group_by(QuestionAttempt.exam_reference_id)
+    ).all()
+    last_practiced = {row[0]: row[1] for row in history}
+    latest_grade: dict[UUID, str | None] = {}
+    for item in session.scalars(
+        select(PracticeItem)
+        .where(
+            PracticeItem.kp_id == kp_id,
+            PracticeItem.exam_reference_id.in_(ids or []),
+            PracticeItem.latest_self_grade.is_not(None),
+        )
+        .order_by(PracticeItem.ordinal)
+    ).all():
+        if item.exam_reference_id is not None:
+            latest_grade[item.exam_reference_id] = item.latest_self_grade
+
+    state = session.get(KpState, kp_id)
+    confirmed_ids: set[str] = set()
+    if state is not None:
+        confirmed_ids = {
+            str(entry.get("question_id"))
+            for entry in (state.evidence_window or [])
+            if entry.get("question_id")
+        }
+    return [
+        QuestionCandidate(
+            question_id=str(row.id),
+            question_type=QuestionType.EXTERNAL_EXAM.value,
+            skill_tags=(row.topic_label,),
+            is_variant=False,
+            estimated_minutes=15,
+            last_self_grade=latest_grade.get(row.id),
+            last_practiced_at=last_practiced.get(row.id),
+            confirmed=str(row.id) in confirmed_ids,
+        )
+        for row in rows
+    ]
+
+
 def _fallback_picks(
     rows: list[Question], policy: MasteryPolicy, *, limit: int
 ) -> list[SelectionItem]:
@@ -217,6 +307,25 @@ def _fallback_picks(
             estimated_minutes=row.estimated_minutes,
             priority=Priority.DUE_REVIEW,
             reason="复习巩固",
+            is_review=True,
+        )
+        for row in usable[:limit]
+    ]
+
+
+def _fallback_exam_picks(
+    rows: list[ExamQuestionReference], policy: MasteryPolicy, *, limit: int
+) -> list[SelectionItem]:
+    usable = [row for row in rows if QuestionType.EXTERNAL_EXAM.value not in policy.excluded_question_types]
+    usable.sort(key=lambda row: (row.year, row.question_number))
+    return [
+        SelectionItem(
+            question_id=str(row.id),
+            question_type=QuestionType.EXTERNAL_EXAM.value,
+            is_variant=False,
+            estimated_minutes=15,
+            priority=Priority.DUE_REVIEW,
+            reason="复习历年真题",
             is_review=True,
         )
         for row in usable[:limit]
@@ -269,3 +378,77 @@ def append_questions_to_plan(
         # 卷里又出现了未完成的题，计划自然重新回到进行中。
         plan.status = "active"
     return added
+
+
+def append_exam_references_to_today(
+    session: Session,
+    *,
+    study_date: date,
+    reference_ids: list[UUID],
+) -> DailyPlan:
+    """把原卷题号任务直接加入今天的卷；没有当天计划时自动建卷。"""
+    date_key = study_date.isoformat()
+    plan = session.scalar(
+        select(DailyPlan).where(DailyPlan.study_date == date_key).with_for_update()
+    )
+    if plan is None:
+        plan = DailyPlan(study_date=date_key, status="active")
+        session.add(plan)
+        session.flush()
+    if plan.status not in {"active", "completed"}:
+        raise ValueError("plan_not_active")
+
+    refs = list(
+        session.scalars(
+            select(ExamQuestionReference).where(
+                ExamQuestionReference.id.in_(list(dict.fromkeys(reference_ids)))
+            )
+        ).all()
+    )
+    if len(refs) != len(set(reference_ids)):
+        raise ValueError("exam_reference_not_found")
+    points = {
+        point.id: point
+        for point in session.scalars(
+            select(KnowledgePoint).where(
+                KnowledgePoint.id.in_({row.knowledge_point_id for row in refs})
+            )
+        ).all()
+    }
+    if any(
+        (point := points.get(row.knowledge_point_id)) is None
+        or not point.is_assessable
+        for row in refs
+    ):
+        raise ValueError("node_not_assessable")
+
+    existing_ids = set(
+        session.scalars(
+            select(PracticeItem.exam_reference_id).where(
+                PracticeItem.plan_id == plan.id,
+                PracticeItem.exam_reference_id.is_not(None),
+            )
+        ).all()
+    )
+    next_ordinal = (
+        session.scalar(select(func.max(PracticeItem.ordinal)).where(PracticeItem.plan_id == plan.id))
+        or 0
+    ) + 1
+    added = 0
+    for ref in sorted(refs, key=lambda row: (row.year, row.question_number, str(row.id))):
+        if ref.id in existing_ids:
+            continue
+        session.add(
+            PracticeItem(
+                plan_id=plan.id,
+                question_id=None,
+                exam_reference_id=ref.id,
+                kp_id=ref.knowledge_point_id,
+                ordinal=next_ordinal,
+            )
+        )
+        next_ordinal += 1
+        added += 1
+    if added and plan.status == "completed":
+        plan.status = "active"
+    return plan

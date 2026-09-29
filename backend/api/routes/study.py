@@ -30,6 +30,7 @@ from backend.mastery.rules import (
 from backend.mastery.storage import policy_from_storage, snapshot_from_storage
 from backend.models.learning import (
     DailyPlan,
+    ExamQuestionReference,
     KnowledgePoint,
     KpMasteryPolicy,
     KpState,
@@ -39,16 +40,20 @@ from backend.models.learning import (
     QuestionAttempt,
 )
 from backend.schemas.knowledge import (
+    ExamQuestionReferenceView,
     GapItemView,
+    KnowledgeLessonResponse,
     KnowledgeNodeDetail,
     KnowledgeNodeView,
     KnowledgeTreeResponse,
+    LessonBreadcrumb,
     NodeAttemptView,
     NodeQuestionView,
     NodeSelfAssessmentRequest,
     NodeSelfAssessmentResponse,
 )
 from backend.schemas.practice import (
+    AppendExamReferencesRequest,
     AppendQuestionsRequest,
     AssessmentResponse,
     GeneratePlanRequest,
@@ -64,9 +69,11 @@ from backend.services.attempt_service import assess_practice_item
 from backend.services.node_assessment_service import assess_knowledge_node
 from backend.services.planning_service import GoalCandidate, select_daily_goals
 from backend.services.practice_service import (
+    append_exam_references_to_today,
     append_questions_to_plan,
     create_initial_plan,
 )
+from backend.services.lesson_service import read_lesson
 
 router = APIRouter(tags=["study"])
 
@@ -83,6 +90,7 @@ _ERROR_STATUS: dict[str, int] = {
     "question_pool_incomplete": 409,
     "no_assessable_leaf_selected": 422,
     "question_not_found": 404,
+    "exam_reference_not_found": 404,
 }
 
 
@@ -119,7 +127,11 @@ def _recommendations(db: Session, now: datetime) -> list[RecommendationItem]:
         .join(KpState, KpState.kp_id == KnowledgePoint.id)
         .outerjoin(QuestionAttempt, QuestionAttempt.kp_id == KnowledgePoint.id)
         .outerjoin(PracticeItem, PracticeItem.kp_id == KnowledgePoint.id)
-        .where(KnowledgePoint.is_assessable.is_(True), KnowledgePoint.is_active.is_(True))
+        .where(
+            KnowledgePoint.is_assessable.is_(True),
+            KnowledgePoint.is_active.is_(True),
+            KnowledgePoint.is_reference_only.is_(False),
+        )
         .group_by(KnowledgePoint.id, KpState.kp_id)
     ).all()
 
@@ -196,16 +208,26 @@ def _build_today_active(db: Session, plan: DailyPlan) -> TodayActive:
     )
     # 之前练过的题目集合：用于标记「复测题」。
     # 一次查完，不在循环里逐题查（否则是 N+1）。
+    normal_question_ids = [row.question_id for row in rows if row.question_id is not None]
     attempted_ids = set(
         db.scalars(
             select(QuestionAttempt.question_id).where(
-                QuestionAttempt.question_id.in_([row.question_id for row in rows] or [])
+                QuestionAttempt.question_id.in_(normal_question_ids or [])
+            )
+        ).all()
+    )
+    reference_ids = [row.exam_reference_id for row in rows if row.exam_reference_id is not None]
+    attempted_reference_ids = set(
+        db.scalars(
+            select(QuestionAttempt.exam_reference_id).where(
+                QuestionAttempt.exam_reference_id.in_(reference_ids or [])
             )
         ).all()
     )
     items: list[PlanItemView] = []
     for item in rows:
         question = item.question
+        reference = item.exam_reference
         items.append(
             PlanItemView(
                 id=item.id,
@@ -213,18 +235,39 @@ def _build_today_active(db: Session, plan: DailyPlan) -> TodayActive:
                 kp_id=item.kp_id,
                 kp_name=kp_names.get(item.kp_id, ""),
                 question_id=item.question_id,
-                question_type=question.question_type,
-                question_role=question.question_role,
-                difficulty=question.difficulty,
-                stem=question.stem,
-                options=_options_of(question),
-                skill_tags=list(question.skill_tags or []),
-                is_variant=question.is_variant,
-                estimated_minutes=question.estimated_minutes,
+                question_type=question.question_type if question is not None else "external_exam",
+                question_role=question.question_role if question is not None else None,
+                difficulty=question.difficulty if question is not None else None,
+                stem=question.stem if question is not None else None,
+                options=_options_of(question) if question is not None else None,
+                skill_tags=list(question.skill_tags or []) if question is not None else [],
+                is_variant=question.is_variant if question is not None else False,
+                estimated_minutes=question.estimated_minutes if question is not None else 15,
                 completed=item.completed_at is not None,
                 completed_at=_iso(item.completed_at),
                 latest_self_grade=item.latest_self_grade,
-                is_review=item.question_id in attempted_ids,
+                is_review=(
+                    item.question_id in attempted_ids
+                    if item.question_id is not None
+                    else item.exam_reference_id in attempted_reference_ids
+                ),
+                is_external_reference=reference is not None,
+                exam_reference=(
+                    ExamQuestionReferenceView(
+                        id=reference.id,
+                        subject=reference.subject,
+                        year=reference.year,
+                        question_number=reference.question_number,
+                        topic_label=reference.topic_label,
+                        source_topic_label=reference.source_topic_label,
+                        question_source_url=reference.question_source_url,
+                        topic_source_url=reference.topic_source_url,
+                        local_folder=reference.local_folder,
+                        source_note=reference.source_note,
+                    )
+                    if reference is not None
+                    else None
+                ),
             )
         )
 
@@ -340,6 +383,30 @@ def append_plan_questions(
     return _build_today_active(db, plan)
 
 
+@router.post("/plans/today/exam-references", response_model=TodayActive)
+def append_today_exam_references(
+    body: AppendExamReferencesRequest,
+    db: Session = Depends(get_db),
+    time_provider: Callable[[], datetime] = Depends(get_time_provider),
+) -> TodayActive:
+    """把知识树选中的原卷题号加入今天，并允许自评计入该节点毕业进度。"""
+    try:
+        plan = append_exam_references_to_today(
+            db,
+            study_date=_today(time_provider()),
+            reference_ids=list(body.reference_ids),
+        )
+        plan_id = plan.id
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise _http_error(exc) from exc
+    plan = db.get(DailyPlan, plan_id)
+    if plan is None:  # pragma: no cover - 服务刚才已创建或读到这张卷
+        raise AppError("plan_not_found")
+    return _build_today_active(db, plan)
+
+
 # --------------------------------------------------------------------------- #
 # 答案（纯读取）
 # --------------------------------------------------------------------------- #
@@ -358,6 +425,8 @@ def read_practice_item_answer(
     if item is None:
         raise AppError("practice_item_not_found")
     question = item.question
+    if question is None:
+        raise AppError("external_exam_has_no_embedded_answer")
     return PracticeItemAnswer(
         practice_item_id=item.id,
         question_id=question.id,
@@ -456,6 +525,48 @@ def read_knowledge_tree(db: Session = Depends(get_db)) -> KnowledgeTreeResponse:
     return KnowledgeTreeResponse(nodes=roots)
 
 
+@router.get("/knowledge/lessons/{code}", response_model=KnowledgeLessonResponse)
+def read_knowledge_lesson(code: str, db: Session = Depends(get_db)) -> KnowledgeLessonResponse:
+    node = db.scalar(
+        select(KnowledgePoint).where(
+            KnowledgePoint.code == code,
+            KnowledgePoint.is_active.is_(True),
+        )
+    )
+    if node is None:
+        raise AppError("knowledge_point_not_found")
+    markdown = read_lesson(node.code)
+    if markdown is None:
+        raise AppError("knowledge_lesson_not_found")
+
+    path: list[LessonBreadcrumb] = []
+    current: KnowledgePoint | None = node
+    seen: set[UUID] = set()
+    while current is not None and current.id not in seen:
+        seen.add(current.id)
+        path.append(LessonBreadcrumb(code=current.code, name=current.name))
+        current = db.get(KnowledgePoint, current.parent_id) if current.parent_id else None
+    path.reverse()
+    question_count = (
+        db.scalar(
+            select(func.count(Question.id)).where(
+                Question.kp_id == node.id,
+                Question.is_active.is_(True),
+            )
+        ) or 0
+    ) if node.is_assessable else 0
+    return KnowledgeLessonResponse(
+        id=node.id,
+        code=node.code,
+        name=node.name,
+        subject=node.subject,
+        is_assessable=node.is_assessable,
+        breadcrumbs=path,
+        markdown=markdown,
+        question_count=question_count,
+    )
+
+
 @router.get("/knowledge/{kp_id}", response_model=KnowledgeNodeDetail)
 def read_knowledge_node(kp_id: UUID, db: Session = Depends(get_db)) -> KnowledgeNodeDetail:
     node = db.get(KnowledgePoint, kp_id)
@@ -484,8 +595,20 @@ def read_knowledge_node(kp_id: UUID, db: Session = Depends(get_db)) -> Knowledge
     ]
 
     attempts = db.execute(
-        select(QuestionAttempt, Question.stem)
-        .join(Question, Question.id == QuestionAttempt.question_id)
+        select(
+            QuestionAttempt,
+            Question.stem,
+            ExamQuestionReference.id,
+            ExamQuestionReference.subject,
+            ExamQuestionReference.year,
+            ExamQuestionReference.question_number,
+            ExamQuestionReference.topic_label,
+        )
+        .outerjoin(Question, Question.id == QuestionAttempt.question_id)
+        .outerjoin(
+            ExamQuestionReference,
+            ExamQuestionReference.id == QuestionAttempt.exam_reference_id,
+        )
         .where(QuestionAttempt.kp_id == kp_id)
         .order_by(QuestionAttempt.submitted_at.desc())
         .limit(50)
@@ -494,7 +617,12 @@ def read_knowledge_node(kp_id: UUID, db: Session = Depends(get_db)) -> Knowledge
         NodeAttemptView(
             id=attempt.id,
             question_id=attempt.question_id,
-            question_stem=stem,
+            exam_reference_id=reference_id,
+            question_stem=(
+                stem
+                if stem is not None
+                else f"{year} 年 {subject} 第 {question_number} 题 · {topic_label}"
+            ),
             self_grade=attempt.self_grade,
             objective_result=attempt.objective_result,
             result_state=attempt.result_state,
@@ -502,10 +630,38 @@ def read_knowledge_node(kp_id: UUID, db: Session = Depends(get_db)) -> Knowledge
             submitted_at=attempt.submitted_at.isoformat(),
             raw_answer=attempt.raw_answer,
         )
-        for attempt, stem in attempts
+        for attempt, stem, reference_id, subject, year, question_number, topic_label in attempts
     ]
 
-    return KnowledgeNodeDetail(node=view, questions=q_views, attempts=a_views, materials_ready=False)
+    exam_references = db.scalars(
+        select(ExamQuestionReference)
+        .where(ExamQuestionReference.knowledge_point_id == kp_id)
+        .order_by(ExamQuestionReference.year.desc(), ExamQuestionReference.question_number)
+    ).all()
+    exam_reference_views = [
+        ExamQuestionReferenceView(
+            id=row.id,
+            subject=row.subject,
+            year=row.year,
+            question_number=row.question_number,
+            topic_label=row.topic_label,
+            source_topic_label=row.source_topic_label,
+            question_source_url=row.question_source_url,
+            topic_source_url=row.topic_source_url,
+            local_folder=row.local_folder,
+            source_note=row.source_note,
+        )
+        for row in exam_references
+    ]
+
+    return KnowledgeNodeDetail(
+        node=view,
+        questions=q_views,
+        attempts=a_views,
+        exam_references=exam_reference_views,
+        lesson_available=read_lesson(node.code) is not None,
+        materials_ready=False,
+    )
 
 
 @router.post(
@@ -556,6 +712,7 @@ def _node_view(
             subject=node.subject,
             ordinal=node.ordinal,
             is_assessable=node.is_assessable,
+            is_reference_only=node.is_reference_only,
             summary=node.summary if node.is_assessable else None,
             learning_goal=node.learning_goal if node.is_assessable else None,
         )
@@ -582,6 +739,7 @@ def _node_view(
         subject=node.subject,
         ordinal=node.ordinal,
         is_assessable=True,
+        is_reference_only=node.is_reference_only,
         summary=node.summary,
         learning_goal=node.learning_goal,
         state=snapshot.state.value,

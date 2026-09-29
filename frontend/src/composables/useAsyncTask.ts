@@ -68,6 +68,12 @@ export function useAsyncTask<T>(
   const errorCode = ref<string | null>(null);
   const errorMessage = ref<string | null>(null);
   const submitting = ref(false);
+  let generation = 0;
+  let submitGeneration = 0;
+
+  function cancelled(error: unknown): boolean {
+    return error instanceof StaleResponse || (error instanceof Error && error.name === "AbortError");
+  }
 
   function applyError(error: unknown): void {
     state.value = "error";
@@ -82,6 +88,7 @@ export function useAsyncTask<T>(
   }
 
   async function run(loader: () => Promise<T>, runOptions: RunOptions = {}): Promise<T | null> {
+    const token = ++generation;
     // 关键：是否切 loading 取决于「现在有没有可展示的数据」，
     // 而不是无脑切换。这样页面不会在后台刷新时闪一下空态。
     const keepData = runOptions.keepPreviousData === true && data.value !== null;
@@ -90,12 +97,15 @@ export function useAsyncTask<T>(
     errorMessage.value = null;
     try {
       const result = await loader();
+      if (token !== generation) return null;
       data.value = result;
       state.value = "success";
       return result;
     } catch (error) {
-      if (error instanceof StaleResponse) {
+      if (token !== generation) return null;
+      if (cancelled(error)) {
         // 页面主动丢弃这次结果（响应过期）：状态与数据都维持原样。
+        if (state.value === "loading") state.value = data.value === null ? "idle" : "success";
         return data.value;
       }
       applyError(error);
@@ -104,24 +114,31 @@ export function useAsyncTask<T>(
   }
 
   async function submit(action: () => Promise<T>): Promise<T | null> {
+    if (submitting.value) return null;
+    const token = ++generation;
+    const submitToken = ++submitGeneration;
     // 提交期间禁用按钮，防止用户重复点击造成重复历史。
     submitting.value = true;
     errorCode.value = null;
     errorMessage.value = null;
     try {
       const result = await action();
+      if (token !== generation) return null;
       data.value = result;
       state.value = "success";
       return result;
     } catch (error) {
+      if (token !== generation || cancelled(error)) return null;
       applyError(error);
       return null;
     } finally {
-      submitting.value = false;
+      if (submitToken === submitGeneration) submitting.value = false;
     }
   }
 
   function reset(): void {
+    generation += 1;
+    submitGeneration += 1;
     data.value = initial;
     state.value = "idle";
     errorCode.value = null;

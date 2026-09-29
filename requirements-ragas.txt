@@ -1,0 +1,10 @@
+# Optional, isolated evaluation dependencies; deliberately not part of requirements.txt.
+# Ragas 0.3.9 provides the collections-based metric API used by the evaluator script.
+ragas==0.3.9
+openai>=1.0,<3.0
+pydantic-settings>=2.3
+# Ragas 0.3.9 imports the legacy VertexAI shim from langchain-community;
+# it was removed from langchain-community 0.4.x.
+langchain-community>=0.3.31,<0.4.0
+# Answer Relevancy uses the project's cached real Chinese embedding model locally.
+sentence-transformers>=3.0

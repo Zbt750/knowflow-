@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -31,11 +32,13 @@ class KnowledgePoint(Base, TimestampMixin):
     code: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     subject: Mapped[str] = mapped_column(String(80), nullable=False)
-    # 自引用父节点；根节点为 NULL。父节点不绑定题目。
+    # 自引用父节点；根节点为 NULL。父节点不绑定练习题。
     parent_id: Mapped[UUID | None] = mapped_column(ForeignKey("knowledge_points.id"))
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 只有 True 的叶子才能绑定题目、记录练习、自评和毕业。
     is_assessable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 历年考点索引叶子只持有原卷来源引用，不含题干；完成原卷后可自评并计入该节点毕业。
+    is_reference_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     summary: Mapped[str | None] = mapped_column(Text)
     learning_goal: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -58,7 +61,7 @@ class KpState(Base, TimestampMixin):
         ForeignKey("knowledge_points.id", ondelete="CASCADE"), primary_key=True
     )
     state: Mapped[str] = mapped_column(String(30), nullable=False, default="unseen")
-    # evidence_window 只存真实题目的 mastered 确认（question_id + 上海日期）。
+    # evidence_window 只存去重后的真实题目/历年原卷引用的 mastered 确认 + 上海日期。
     evidence_window: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
     review_stage: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_review_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -100,6 +103,38 @@ class Question(Base, TimestampMixin):
     kp: Mapped[KnowledgePoint] = relationship()
     variant_group: Mapped[str | None] = mapped_column(String(120))
     difficulty: Mapped[str] = mapped_column(String(30), nullable=False, default="basic")
+
+
+class ExamQuestionReference(Base, TimestampMixin):
+    """历年试题的题号引用；不包含题干，不是可作答的 Question。"""
+
+    __tablename__ = "exam_question_references"
+    __table_args__ = (
+        UniqueConstraint(
+            "subject",
+            "year",
+            "question_number",
+            "knowledge_point_id",
+            name="exam_ref_question_kp",
+        ),
+        Index("ix_exam_ref_kp_year_q", "knowledge_point_id", "year", "question_number"),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    subject: Mapped[str] = mapped_column(String(80), nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    question_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    knowledge_point_id: Mapped[UUID] = mapped_column(
+        ForeignKey("knowledge_points.id", ondelete="CASCADE"), nullable=False
+    )
+    # topic_label 是拆分后绑定到节点的标签；source_topic_label 保留索引原始整行标签。
+    topic_label: Mapped[str] = mapped_column(Text, nullable=False)
+    source_topic_label: Mapped[str] = mapped_column(Text, nullable=False)
+    question_source_url: Mapped[str | None] = mapped_column(Text)
+    topic_source_url: Mapped[str | None] = mapped_column(Text)
+    # 项目不打包原卷；该字段指向用户桌面年度文件夹中的相对目录。
+    local_folder: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_note: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class KpMasteryPolicy(Base, TimestampMixin):
@@ -165,20 +200,29 @@ class DailyPlan(Base, TimestampMixin):
 
 
 class PracticeItem(Base, TimestampMixin):
-    """今日练习卷里的一道题及顺序；追加只写 max(ordinal)+1，做完不删除。"""
+    """今日卷中的一道题或一道原卷任务；两种来源恰有一种。"""
 
     __tablename__ = "practice_items"
     __table_args__ = (
         UniqueConstraint("plan_id", "question_id", name="practice_item_plan_question"),
+        UniqueConstraint("plan_id", "exam_reference_id", name="practice_item_plan_exam_reference"),
         UniqueConstraint("plan_id", "ordinal", name="practice_item_plan_ordinal"),
+        CheckConstraint(
+            "(question_id IS NOT NULL AND exam_reference_id IS NULL) OR "
+            "(question_id IS NULL AND exam_reference_id IS NOT NULL)",
+            name="practice_item_exactly_one_source",
+        ),
     )
 
     id: Mapped[UUID] = uuid_pk()
     plan_id: Mapped[UUID] = mapped_column(
         ForeignKey("daily_plans.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    question_id: Mapped[UUID] = mapped_column(
-        ForeignKey("questions.id"), nullable=False
+    question_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("questions.id"), nullable=True
+    )
+    exam_reference_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("exam_question_references.id"), nullable=True
     )
     kp_id: Mapped[UUID] = mapped_column(
         ForeignKey("knowledge_points.id"), nullable=False, index=True
@@ -187,7 +231,8 @@ class PracticeItem(Base, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     latest_self_grade: Mapped[str | None] = mapped_column(String(30))
 
-    question: Mapped[Question] = relationship()
+    question: Mapped[Question | None] = relationship()
+    exam_reference: Mapped[ExamQuestionReference | None] = relationship()
     plan: Mapped[DailyPlan] = relationship(back_populates="items")
 
 
@@ -200,8 +245,20 @@ class QuestionAttempt(Base):
     practice_item_id: Mapped[UUID] = mapped_column(
         ForeignKey("practice_items.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    question_id: Mapped[UUID] = mapped_column(
-        ForeignKey("questions.id"), nullable=False, index=True
+    __table_args__ = (
+        CheckConstraint(
+            "(question_id IS NOT NULL AND exam_reference_id IS NULL) OR "
+            "(question_id IS NULL AND exam_reference_id IS NOT NULL)",
+            name="question_attempt_exactly_one_source",
+        ),
+        Index("ix_question_attempts_exam_reference_id", "exam_reference_id"),
+    )
+
+    question_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("questions.id"), nullable=True, index=True
+    )
+    exam_reference_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("exam_question_references.id"), nullable=True
     )
     kp_id: Mapped[UUID] = mapped_column(
         ForeignKey("knowledge_points.id"), nullable=False, index=True

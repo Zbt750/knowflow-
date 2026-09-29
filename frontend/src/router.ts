@@ -1,10 +1,11 @@
 import { createRouter, createWebHistory } from "vue-router";
 
-import ChatPage from "./pages/ChatPage.vue";
-import KnowledgePage from "./pages/KnowledgePage.vue";
-import MaterialsPage from "./pages/MaterialsPage.vue";
-import StudyPage from "./pages/StudyPage.vue";
-import SettingsPage from "./pages/SettingsPage.vue";
+const ChatPage = () => import("./pages/ChatPage.vue");
+const KnowledgePage = () => import("./pages/KnowledgePage.vue");
+const KnowledgeLessonPage = () => import("./pages/KnowledgeLessonPage.vue");
+const MaterialsPage = () => import("./pages/MaterialsPage.vue");
+const StudyPage = () => import("./pages/StudyPage.vue");
+const SettingsPage = () => import("./pages/SettingsPage.vue");
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -12,6 +13,7 @@ export const router = createRouter({
     { path: "/", redirect: "/study" },
     { path: "/study", component: StudyPage },
     { path: "/knowledge", component: KnowledgePage },
+    { path: "/knowledge/:code/lesson", component: KnowledgeLessonPage },
     { path: "/materials", component: MaterialsPage },
     { path: "/chat", component: ChatPage },
     { path: "/settings", component: SettingsPage },

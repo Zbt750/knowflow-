@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
 import { ApiError } from "../api/client";
 import {
@@ -15,9 +16,7 @@ import {
   BUDGET_OPTIONS,
   newIdempotencyKey,
   formatTime,
-  reasonLabel,
   roleLabel,
-  stateLabel,
   typeLabel,
 } from "../lib/labels";
 import type {
@@ -30,6 +29,9 @@ import type {
   TodaySetup,
 } from "../types/practice";
 import StudyFocus from "../components/StudyFocus.vue";
+import KnowledgeQuestionPickerTree from "../components/KnowledgeQuestionPickerTree.vue";
+import KnowledgeScopeTree from "../components/KnowledgeScopeTree.vue";
+import { knowledgeSelection } from "../lib/knowledgeSelection";
 import { StaleResponse, useAsyncTask } from "../composables/useAsyncTask";
 
 // 统一状态（阶段 E）：今日学习、生成练习卷、查看答案三个异步动作都用
@@ -47,9 +49,9 @@ const { data: today, state, errorCode, errorMessage, run: runToday } = todayTask
 
 const generateTask = useAsyncTask<TodayResponse>(null, {
   errorMessages: {
-    no_assessable_leaf_selected: "请先勾选至少一个可考核的叶子知识点。",
+    no_assessable_leaf_selected: "请先从知识树加入至少一个知识点。",
     question_pool_incomplete:
-      "选中的知识点题库不足（真实题量/题型/考法/变式题未满足其策略）。取消勾选它，或先补充题库。",
+      "本次范围内有知识点的题库不足（题量、题型、考法或变式题未满足要求）。可调整范围移出该知识点，或先补充题库。",
     kp_state_not_found: "缺少掌握度投影行，请先运行 python scripts\\seed.py 再试。",
   },
   fallbackMessage: "生成失败",
@@ -65,6 +67,7 @@ const appendTask = useAsyncTask<TodayResponse>(null, {
 
 // 今日学习数据的请求令牌，用于丢弃过期响应（见 load()）。
 let loadToken = 0;
+const route = useRoute();
 
 // 准备页
 const selectedKpIds = ref<string[]>([]);
@@ -72,11 +75,21 @@ const generating = ref(false);
 const generateError = ref<string | null>(null);
 // 时间预算：决定卷子总时长上限（轻量 45 / 标准 90 / 深度 120 分钟）。
 const budget = ref<string>("standard");
-// 准备页的「从知识树补充」：只列可考核叶子，用户自己决定今天学什么。
+// 章节只负责导航，只有可考核叶子能加入范围；默认采用后端推荐范围。
 const showNodePicker = ref(false);
-const nodeLeaves = ref<KnowledgeNodeView[]>([]);
+const scopeTree = ref<KnowledgeNodeView[]>([]);
+const scopeSearch = ref("");
+const scopeExpandedIds = ref(new Set<string>());
+const scopeCollapsedIds = ref(new Set<string>());
+const nodeLeaves = computed(() => flattenLeaves(scopeTree.value));
+const scopeSelection = computed(() => knowledgeSelection(scopeTree.value, selectedKpIds.value));
+const filteredScopeTree = computed(() => filterPickerTree(scopeTree.value, scopeSearch.value.trim()));
 const nodePickerLoading = ref(false);
 const nodePickerError = ref<string | null>(null);
+
+watch(() => scopeSearch.value.trim(), () => {
+  scopeCollapsedIds.value = new Set();
+});
 
 // 答题
 const mode = ref<"focus" | "paper">("focus");
@@ -97,16 +110,41 @@ const focusItemId = ref<string | null>(null);
 // 追加练习题
 const showPicker = ref(false);
 const pickerTree = ref<KnowledgeNodeView[]>([]);
+const pickerSearch = ref("");
 const pickerLoading = ref(false);
 const pickerError = ref<string | null>(null);
 const pickerQuestions = ref<Record<string, { id: string; stem: string; is_variant: boolean }[]>>({});
+const pickerQuestionLoadingIds = ref(new Set<string>());
 const pickerSelected = ref<string[]>([]);
 const pickerExpandedIds = ref(new Set<string>());
+const pickerCollapsedIds = ref(new Set<string>());
 const appending = ref(false);
+const filteredPickerTree = computed(() => filterPickerTree(pickerTree.value, pickerSearch.value.trim()));
+
+watch(() => pickerSearch.value.trim(), (query, previous) => {
+  if (query !== previous) pickerCollapsedIds.value = new Set();
+});
 
 const setup = computed<TodaySetup | null>(() =>
   today.value && today.value.status === "setup" ? today.value : null,
 );
+const selectedKpEntries = computed(() => selectedKpIds.value.map((id) => {
+  const recommended = setup.value?.recommendations.find((item) => item.kp_id === id);
+  const fromTree = nodeLeaves.value.find((node) => node.id === id);
+  const path = scopeSelection.value.paths.get(id);
+  return { id, name: recommended?.name ?? fromTree?.name ?? "知识点", path: path?.names.slice(0, -1).join(" › ") ?? "" };
+}));
+
+async function locateSelectedKp(id: string): Promise<void> {
+  scopeSearch.value = "";
+  const ancestors = scopeSelection.value.paths.get(id)?.ancestorIds ?? [];
+  scopeExpandedIds.value = new Set([...scopeExpandedIds.value, ...ancestors]);
+  scopeCollapsedIds.value = new Set([...scopeCollapsedIds.value].filter(item => !ancestors.includes(item)));
+  await nextTick();
+  const button = document.getElementById(`scope-leaf-${id}`);
+  button?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  button?.focus({ preventScroll: true });
+}
 const active = computed<TodayActive | null>(() =>
   today.value && today.value.status !== "setup" ? (today.value as TodayActive) : null,
 );
@@ -118,6 +156,7 @@ const questionTypeRank: Record<string, number> = {
   calculation: 2,
   proof: 2,
   subjective: 2,
+  external_exam: 3,
 };
 const orderedItems = computed(() => [...(active.value?.items ?? [])].sort((a, b) =>
   (questionTypeRank[a.question_type] ?? 3) - (questionTypeRank[b.question_type] ?? 3)
@@ -154,7 +193,7 @@ async function load(): Promise<void> {
   const data = today.value;
   if (data && state.value === "success") {
     if (data.status === "setup") {
-      // 默认勾选推荐项，但用户可以取消或增加树上的其他叶子。
+      // 默认采用推荐范围；用户需要时再打开调整面板增减叶子。
       selectedKpIds.value = data.recommendations.map((item) => item.kp_id);
     }
   }
@@ -196,7 +235,7 @@ async function generate(): Promise<void> {
       generateError.value = generateTask.errorMessage.value ?? "生成失败";
       break;
     default:
-      // 兜底：保留用户已勾选的知识点与预算，只显示后端文案 + 普通重试。
+      // 兜底：保留用户调整过的知识点与预算，只显示后端文案 + 普通重试。
       generateError.value = generateTask.errorMessage.value ?? "生成失败";
   }
   generating.value = false;
@@ -214,7 +253,9 @@ function setAnswerOpen(itemId: string, open: boolean): void {
 }
 
 async function toggleAnswer(item: TodayActive["items"][number]): Promise<void> {
-  if (answerLoadingId.value === item.id) return;
+  // answerTask 是单实例的异步任务；并发读取两道题会让较早请求变成 stale。
+  // 同一时刻只允许一个答案请求，避免共享 loading 标记与结果互相覆盖。
+  if (answerLoadingId.value !== null) return;
   if (isAnswerOpen(item.id)) {
     setAnswerOpen(item.id, false);
     return;
@@ -254,7 +295,9 @@ async function grade(item: PlanItemView, selfGrade: SelfGrade): Promise<void> {
         focusItemId.value = next?.id ?? null;
       }
     } else {
-      gradeNotice.value[item.id] = "已记录，可在知识树查看掌握情况。";
+      gradeNotice.value[item.id] = item.is_external_reference
+        ? "已记录。标记“已掌握”的不同真题会计入该知识点毕业进度。"
+        : "已记录，可在知识树查看掌握情况。";
       // 只有在**专注模式**下才自动跳到下一道未完成题。
       //
       // 为什么不能无条件切 focus：用户可以在全卷模式下逐题自评，
@@ -299,8 +342,11 @@ async function grade(item: PlanItemView, selfGrade: SelfGrade): Promise<void> {
 
 function openPicker(): void {
   showPicker.value = true;
+  pickerSearch.value = "";
+  pickerError.value = null;
   pickerSelected.value = [];
   pickerExpandedIds.value = new Set();
+  pickerCollapsedIds.value = new Set();
   void loadPickerTree();
 }
 
@@ -309,11 +355,38 @@ function flattenLeaves(nodes: KnowledgeNodeView[]): KnowledgeNodeView[] {
   const walk = (items: KnowledgeNodeView[]) => {
     for (const node of items) {
       if (node.is_assessable) result.push(node);
-      walk(node.children);
+      walk(Array.isArray(node.children) ? node.children : []);
     }
   };
   walk(nodes);
   return result;
+}
+
+function filterPickerTree(nodes: KnowledgeNodeView[], query: string): KnowledgeNodeView[] {
+  const normalized = query.toLocaleLowerCase();
+  if (!normalized) return nodes;
+  const filtered: KnowledgeNodeView[] = [];
+  for (const node of nodes) {
+    const matches = `${node.name} ${node.code}`.toLocaleLowerCase().includes(normalized);
+    const children = filterPickerTree(Array.isArray(node.children) ? node.children : [], query);
+    if (matches) filtered.push(node);
+    else if (children.length > 0) filtered.push({ ...node, children });
+  }
+  return filtered;
+}
+
+function findNodePath(
+  nodes: KnowledgeNodeView[],
+  targetId: string,
+  ancestors: KnowledgeNodeView[] = [],
+): KnowledgeNodeView[] | null {
+  for (const node of nodes) {
+    const path = [...ancestors, node];
+    if (node.id === targetId) return path;
+    const found = findNodePath(Array.isArray(node.children) ? node.children : [], targetId, path);
+    if (found) return found;
+  }
+  return null;
 }
 
 async function loadPickerTree(): Promise<void> {
@@ -322,7 +395,7 @@ async function loadPickerTree(): Promise<void> {
   pickerError.value = null;
   try {
     const data = await fetchKnowledgeTree();
-    pickerTree.value = flattenLeaves(data.nodes);
+    pickerTree.value = Array.isArray(data.nodes) ? data.nodes : [];
   } catch (error) {
     pickerError.value = error instanceof ApiError ? error.message : "加载知识树失败";
   } finally {
@@ -330,21 +403,41 @@ async function loadPickerTree(): Promise<void> {
   }
 }
 
-/** 准备页：打开「从知识树补充」并加载全部可考核叶子。 */
-async function openNodePicker(): Promise<void> {
-  showNodePicker.value = true;
-  if (nodeLeaves.value.length > 0) return;
+/** 准备页保留章节层级；深链接预选时不自动打开调整面板。 */
+async function loadNodeLeaves(): Promise<void> {
+  if (scopeTree.value.length > 0 || nodePickerLoading.value) return;
   nodePickerLoading.value = true;
   nodePickerError.value = null;
   try {
     const data = await fetchKnowledgeTree();
-    // 只列可考核叶子：父节点不能答题，也不该出现在今天学什么的选择里。
-    nodeLeaves.value = flattenLeaves(data.nodes);
+    scopeTree.value = Array.isArray(data.nodes) ? data.nodes : [];
+    // 默认露出学科下的章节，不把整棵树一次铺开。
+    scopeExpandedIds.value = new Set(scopeTree.value.map((node) => node.id));
   } catch (error) {
     nodePickerError.value = error instanceof ApiError ? error.message : "加载知识树失败";
   } finally {
     nodePickerLoading.value = false;
   }
+}
+
+async function openNodePicker(): Promise<void> {
+  showNodePicker.value = !showNodePicker.value;
+  if (showNodePicker.value) await loadNodeLeaves();
+}
+
+function toggleScopeBranch(node: KnowledgeNodeView): void {
+  const expanded = new Set(scopeExpandedIds.value);
+  const collapsed = new Set(scopeCollapsedIds.value);
+  const isOpen = !collapsed.has(node.id) && (expanded.has(node.id) || scopeSearch.value.trim().length > 0);
+  if (isOpen) {
+    expanded.delete(node.id);
+    collapsed.add(node.id);
+  } else {
+    expanded.add(node.id);
+    collapsed.delete(node.id);
+  }
+  scopeExpandedIds.value = expanded;
+  scopeCollapsedIds.value = collapsed;
 }
 
 /** 把某个叶子加入 / 移出今天的选点。 */
@@ -353,7 +446,11 @@ function toggleNodeSelection(kpId: string): void {
 }
 
 async function loadPickerQuestions(kpId: string): Promise<void> {
-  if (pickerQuestions.value[kpId]) return;
+  if (pickerQuestions.value[kpId] || pickerQuestionLoadingIds.value.has(kpId)) return;
+  pickerError.value = null;
+  const loading = new Set(pickerQuestionLoadingIds.value);
+  loading.add(kpId);
+  pickerQuestionLoadingIds.value = loading;
   try {
     const detail = await fetchKnowledgeNode(kpId);
     const inPaper = new Set(active.value?.items.map((item) => item.question_id) ?? []);
@@ -362,17 +459,32 @@ async function loadPickerQuestions(kpId: string): Promise<void> {
       .map((question) => ({ id: question.id, stem: question.stem, is_variant: question.is_variant }));
   } catch (error) {
     pickerError.value = error instanceof ApiError ? error.message : "加载题库失败";
+  } finally {
+    const next = new Set(pickerQuestionLoadingIds.value);
+    next.delete(kpId);
+    pickerQuestionLoadingIds.value = next;
   }
 }
 
-function togglePickerNode(kpId: string): void {
+function togglePickerNode(node: KnowledgeNodeView): void {
   const next = new Set(pickerExpandedIds.value);
-  if (next.has(kpId)) next.delete(kpId);
-  else {
-    next.add(kpId);
-    void loadPickerQuestions(kpId);
+  const collapsed = new Set(pickerCollapsedIds.value);
+  const hasChildren = Array.isArray(node.children) && node.children.length > 0;
+  const autoExpanded = hasChildren && pickerSearch.value.trim().length > 0 && !collapsed.has(node.id);
+  const expanded = !collapsed.has(node.id) && (next.has(node.id) || autoExpanded);
+  if (expanded) {
+    next.delete(node.id);
+    collapsed.add(node.id);
+  } else {
+    next.add(node.id);
+    collapsed.delete(node.id);
+    pickerError.value = null;
+    if (node.is_assessable && (!Array.isArray(node.children) || node.children.length === 0)) {
+      void loadPickerQuestions(node.id);
+    }
   }
   pickerExpandedIds.value = next;
+  pickerCollapsedIds.value = collapsed;
 }
 
 function togglePickerQuestion(questionId: string): void {
@@ -386,8 +498,12 @@ async function confirmAppend(): Promise<void> {
   appending.value = true;
   pickerError.value = null;
   const result = await appendTask.run(() => appendQuestions(active.value!.plan_id, pickerSelected.value));
-  if (result) {
+  if (result && result.status !== "setup") {
     today.value = result;
+    const inPlan = new Set(result.items.map((item) => item.question_id));
+    for (const [kpId, questions] of Object.entries(pickerQuestions.value)) {
+      pickerQuestions.value[kpId] = questions.filter((question) => !inPlan.has(question.id));
+    }
     showPicker.value = false;
     pickerSelected.value = [];
     appending.value = false;
@@ -415,73 +531,110 @@ async function confirmAppend(): Promise<void> {
   appending.value = false;
 }
 
-onMounted(() => void load());
+onMounted(async () => {
+  await load();
+  const kpId = typeof route.query.kp_id === "string" ? route.query.kp_id : null;
+  if (!kpId || state.value !== "success") return;
+  if (setup.value) {
+    await loadNodeLeaves();
+    if (nodeLeaves.value.some((node) => node.id === kpId)) {
+      selectedKpIds.value = [kpId];
+    }
+  } else if (active.value) {
+    openPicker();
+    await loadPickerTree();
+    const path = findNodePath(pickerTree.value, kpId);
+    if (path) {
+      pickerExpandedIds.value = new Set(path.map((node) => node.id));
+      if (path.at(-1)?.is_assessable) await loadPickerQuestions(kpId);
+    }
+  }
+});
 </script>
 
 <template>
   <section class="page">
-    <p v-if="!active" class="page-intro">选择知识点并生成今天的练习卷。</p>
+    <p v-if="state === 'loading' && !today" class="state state--loading" data-testid="study-loading">正在加载今日学习…</p>
 
-    <p v-if="state === 'loading'" class="state state--loading" data-testid="study-loading">正在加载今日学习…</p>
-
-    <div v-else-if="state === 'error'" class="state state--error" data-testid="study-error">
+    <div v-if="state === 'error' && !today" class="state state--error" data-testid="study-error">
       <p>{{ errorMessage }}</p>
       <p v-if="errorCode" class="state__code">错误码：{{ errorCode }}</p>
       <button type="button" @click="load">重试</button>
     </div>
+    <p v-if="state === 'error' && today" class="state state--error" role="alert" data-testid="study-refresh-error">
+      刷新失败，当前练习内容仍保留：{{ errorMessage }} <button type="button" @click="load">重试</button>
+    </p>
 
     <!-- 准备页：没有用户确认就不创建计划 -->
-    <div v-else-if="setup" class="study-setup" data-testid="study-setup">
+    <div v-if="setup" class="study-setup" data-testid="study-setup">
       <div class="study-setup-intro">
-        <span>学习日 {{ setup.study_date }}</span>
-        <h2>准备今日练习</h2>
-        <p>还没有今天的练习卷。选好知识点和练习时长，再生成。</p>
+        <span>{{ setup.study_date }} · 今日练习</span>
+        <h2>今天的练习</h2>
       </div>
       <div class="study-setup-layout">
         <section class="study-select-panel">
           <header class="study-panel-heading">
-            <div><h2>知识点</h2><p>勾选今天要练的内容。</p></div>
-            <button type="button" data-testid="tree-kp-picker-open" @click="openNodePicker">从知识树补充</button>
+            <div><h2>练习范围</h2></div>
+            <button type="button" data-testid="tree-kp-picker-open" :aria-expanded="showNodePicker" aria-controls="study-scope-picker" @click="openNodePicker">{{ showNodePicker ? "收起范围" : "调整范围" }}</button>
           </header>
-          <ul class="recommend-list" data-testid="recommended-kp">
-            <li
-              v-for="item in setup.recommendations"
-              :key="item.kp_id"
-              :data-testid="'recommend-' + item.kp_id"
-            >
-              <label class="recommend-row">
-                <input
-                  type="checkbox"
-                  :checked="selectedKpIds.includes(item.kp_id)"
-                  @change="toggleKp(item.kp_id)"
-                />
-                <span class="recommend-body">
-                  <span class="recommend-head">
-                    <span class="recommend-name">{{ item.name }}</span>
-                    <span class="recommend-state">{{ stateLabel(item.state) }}</span>
-                  </span>
-                  <span v-if="item.next_step" class="recommend-why">{{ item.next_step }}</span>
-                </span>
-              </label>
-              <details class="recommend-detail">
-                <summary>推荐依据</summary>
-                <p>{{ reasonLabel(item.reason) }}</p>
-                <p
-                  v-if="item.missing_types.length > 0"
-                  :data-testid="'expect-' + item.kp_id"
-                >预计加入：{{ item.missing_types.map(typeLabel).join("、") }}</p>
-              </details>
+          <!-- 调整只在主动打开时出现，紧贴入口以免落到首屏之外。 -->
+          <div v-if="showNodePicker" id="study-scope-picker" class="picker" data-testid="tree-kp-picker">
+            <label class="picker-search">
+              <span class="sr-only">搜索练习范围</span>
+              <input v-model="scopeSearch" type="search" aria-label="搜索练习范围" placeholder="搜索章节或知识点" data-testid="scope-picker-search" />
+            </label>
+            <p class="picker-hint">展开章节，加入或移出要练习的知识点。</p>
+            <ul v-if="!nodePickerLoading && selectedKpEntries.length" class="scope-selected-list" aria-label="已选知识点及所属路径">
+              <li v-for="item in selectedKpEntries" :key="item.id" :data-testid="`scope-selected-${item.id}`">
+                <span><strong>{{ item.name }}</strong><small>{{ item.path || '所属路径暂不可用' }}</small></span>
+                <button v-if="item.path" type="button" :aria-label="'定位' + item.name" @click="locateSelectedKp(item.id)">定位</button>
+                <button type="button" :aria-label="'从范围移出' + item.name" @click="toggleNodeSelection(item.id)">移出</button>
+              </li>
+            </ul>
+            <p v-if="nodePickerLoading" class="state state--loading">正在加载知识树…</p>
+            <div v-else-if="nodePickerError" class="form-error" role="alert">
+              <p>{{ nodePickerError }}</p>
+              <button type="button" @click="loadNodeLeaves">重新加载</button>
+            </div>
+            <div v-else-if="filteredScopeTree.length" class="scope-tree-window" data-testid="scope-tree-window" tabindex="0" aria-label="练习范围知识树，可滚动">
+              <KnowledgeScopeTree
+                :nodes="filteredScopeTree"
+                :selected-ids="selectedKpIds"
+                :selected-counts="scopeSelection.counts"
+                :expanded-ids="scopeExpandedIds"
+                :collapsed-ids="scopeCollapsedIds"
+                :auto-expand="scopeSearch.trim().length > 0"
+                :level="1"
+                @toggle-branch="toggleScopeBranch"
+                @toggle-selection="toggleNodeSelection"
+              />
+            </div>
+            <p v-else-if="!nodePickerLoading && scopeSearch.trim()" class="state state--empty" data-testid="scope-picker-empty">
+              没有找到匹配的章节或知识点。
+            </p>
+            <p v-else-if="!nodePickerLoading && !nodePickerError" class="state state--empty">
+              知识树里还没有可考核的叶子节点。
+            </p>
+            <div class="scope-picker-footer">
+              <span aria-live="polite">已选 {{ selectedKpIds.length }} 个知识点</span>
+              <button type="button" data-testid="close-tree-kp-picker" @click="showNodePicker = false">完成</button>
+            </div>
+          </div>
+          <ul v-if="selectedKpEntries.length && !showNodePicker" class="recommend-list" data-testid="recommended-kp">
+            <li v-for="(item, index) in selectedKpEntries" :key="item.id" class="selected-kp-row" :data-testid="'recommend-' + item.id">
+              <span class="selected-kp-row__number">{{ String(index + 1).padStart(2, "0") }}</span>
+              <span class="recommend-name">{{ item.name }}<small v-if="item.path" class="selected-kp-path">{{ item.path }}</small></span>
             </li>
           </ul>
-          <p v-if="setup.recommendations.length === 0" class="state state--empty">
-            暂时没有推荐的知识点，请从知识树补充。
+          <p v-if="!selectedKpEntries.length" class="state state--empty">
+            暂无知识点，点击“调整范围”从知识树选择。
           </p>
         </section>
         <aside class="study-config-panel">
-          <header class="study-panel-heading"><div><h2>练习时长</h2><p>设定今天可以投入的时间。</p></div></header>
+          <header class="study-panel-heading"><div><h2>练习时长</h2></div></header>
           <fieldset class="budget" data-testid="budget-picker">
             <legend class="sr-only">时间预算</legend>
-            <label v-for="option in BUDGET_OPTIONS" :key="option.value" class="budget-option">
+            <label v-for="option in BUDGET_OPTIONS" :key="option.value" class="budget-option" :class="{ 'budget-option--selected': budget === option.value }">
               <input
                 type="radio"
                 name="budget"
@@ -490,50 +643,22 @@ onMounted(() => void load());
                 :data-testid="'budget-' + option.value"
                 @change="budget = option.value"
               />
-              <span>{{ option.label }}</span>
-              <span class="hint">{{ option.hint }}</span>
+              <span class="budget-option__name">{{ option.hint }}</span>
             </label>
           </fieldset>
-          <p class="hint" data-testid="selected-kp-count">已选 {{ selectedKpIds.length }} 个知识点</p>
+          <div class="study-setup-action">
+            <p class="hint" data-testid="selected-kp-count">本次包含 {{ selectedKpIds.length }} 个知识点</p>
+            <button type="button" class="setup-generate" :disabled="generating || selectedKpIds.length === 0" data-testid="generate-plan" @click="generate">
+              {{ generating ? "正在准备…" : "开始今日练习" }}
+            </button>
+          </div>
           <p v-if="generateError" class="form-error" data-testid="plan-generate-error">{{ generateError }}</p>
-          <button type="button" class="setup-generate" :disabled="generating" data-testid="generate-plan" @click="generate">
-            {{ generating ? "生成中…" : "生成今日练习卷" }}
-          </button>
-          <p class="setup-footnote">生成前不会创建计划。</p>
         </aside>
-      </div>
-      <!-- 从知识树补充：只列可考核叶子，勾选即加入今天的选点 -->
-      <div v-if="showNodePicker" class="picker" data-testid="tree-kp-picker">
-        <h2>从知识树补充今天想学的叶子</h2>
-        <p v-if="nodePickerLoading" class="state state--loading">正在加载知识树…</p>
-        <p v-if="nodePickerError" class="form-error">{{ nodePickerError }}</p>
-        <ul class="recommend-list">
-          <li v-for="leaf in nodeLeaves" :key="leaf.id">
-            <label>
-              <input
-                type="checkbox"
-                :checked="selectedKpIds.includes(leaf.id)"
-                :data-testid="`pick-node-${leaf.code}`"
-                @change="toggleNodeSelection(leaf.id)"
-              />
-              <span class="recommend-name">{{ leaf.name }}</span>
-              <span class="tag tag--muted">{{ stateLabel(leaf.state) }}</span>
-            </label>
-          </li>
-        </ul>
-        <p v-if="!nodePickerLoading && nodeLeaves.length === 0" class="state state--empty">
-          知识树里还没有可考核的叶子节点。
-        </p>
-        <div class="actions">
-          <button type="button" data-testid="close-tree-kp-picker" @click="showNodePicker = false">
-            完成
-          </button>
-        </div>
       </div>
     </div>
 
     <!-- 答题页 -->
-    <div v-else-if="active" class="study-active" data-testid="study-active">
+    <div v-if="active" class="study-active" data-testid="study-active">
       <div class="study-plan-overview">
         <div class="study-progress">
       <p class="state" data-testid="study-status">
@@ -591,12 +716,35 @@ onMounted(() => void load());
       <div class="study-active-layout">
         <div class="study-active-main">
       <!-- 专注模式：一次一道未完成题 -->
+      <section
+        v-if="mode === 'focus' && currentItem && currentItem.is_external_reference"
+        class="external-exam-task"
+        data-testid="focus-external-exam-task"
+      >
+        <p class="eyebrow">历年真题 · {{ currentItem.exam_reference?.subject }}</p>
+        <h2>{{ currentItem.exam_reference?.year }} 年第 {{ currentItem.exam_reference?.question_number }} 题</h2>
+        <p class="external-exam-task__topic">{{ currentItem.exam_reference?.topic_label || currentItem.kp_name }}</p>
+        <p class="hint">请打开原卷完成这道题，再按实际掌握情况自评。自评为“已掌握”时，这道不同真题会作为 {{ currentItem.kp_name }} 的毕业证据。</p>
+        <div class="external-exam-task__sources">
+          <a v-if="currentItem.exam_reference?.question_source_url" :href="currentItem.exam_reference.question_source_url" target="_blank" rel="noopener noreferrer">打开题目来源 ↗</a>
+          <span>本地原卷：桌面 / 考研知识点 / {{ currentItem.exam_reference?.local_folder }}</span>
+        </div>
+        <div class="actions actions--grades">
+          <button type="button" :disabled="submittingId === currentItem.id" @click="grade(currentItem, 'mastered')">已掌握</button>
+          <button type="button" :disabled="submittingId === currentItem.id" @click="grade(currentItem, 'partial')">部分掌握</button>
+          <button type="button" :disabled="submittingId === currentItem.id" @click="grade(currentItem, 'not_mastered')">未掌握</button>
+          <button type="button" :disabled="submittingId === currentItem.id" @click="grade(currentItem, 'skip')">跳过</button>
+        </div>
+        <p v-if="gradeNotice[currentItem.id]" class="notice" data-testid="external-exam-focus-notice">{{ gradeNotice[currentItem.id] }}</p>
+        <p v-if="gradeError[currentItem.id]" class="form-error">{{ gradeError[currentItem.id] }}</p>
+      </section>
+
       <StudyFocus
-        v-if="mode === 'focus'"
+        v-else-if="mode === 'focus'"
         :item="currentItem"
         :answer="currentItem ? answers[currentItem.id] : undefined"
         :answer-open="currentItem ? isAnswerOpen(currentItem.id) : false"
-        :answer-loading="answerLoadingId === currentItem?.id"
+        :answer-loading="answerLoadingId !== null"
         :answer-error="answerError"
         :submitting="submittingId === currentItem?.id"
         :notice="currentItem ? gradeNotice[currentItem.id] : undefined"
@@ -621,6 +769,30 @@ onMounted(() => void load());
           </header>
           <div class="paper-question-layout">
             <div class="paper-question-main">
+          <template v-if="item.is_external_reference && item.exam_reference">
+            <section class="external-exam-task external-exam-task--paper" :data-testid="`external-exam-${item.id}`">
+              <p class="eyebrow">{{ item.exam_reference.subject }} · {{ item.exam_reference.year }} 年</p>
+              <h2>第 {{ item.exam_reference.question_number }} 题</h2>
+              <p class="external-exam-task__topic">{{ item.exam_reference.topic_label || item.kp_name }}</p>
+              <div class="external-exam-task__sources">
+                <a v-if="item.exam_reference.question_source_url" :href="item.exam_reference.question_source_url" target="_blank" rel="noopener noreferrer">打开题目来源 ↗</a>
+                <a v-if="item.exam_reference.topic_source_url" :href="item.exam_reference.topic_source_url" target="_blank" rel="noopener noreferrer">查看考点来源 ↗</a>
+                <span>本地原卷：桌面 / 考研知识点 / {{ item.exam_reference.local_folder }}</span>
+              </div>
+              <p class="hint">原卷题干不在系统内。完成后按实际表现自评；标记“已掌握”的不同真题会计入该知识点毕业条件。</p>
+              <div class="actions">
+                <template v-if="!item.completed">
+                  <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'mastered')">已掌握</button>
+                  <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'partial')">部分掌握</button>
+                  <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'not_mastered')">未掌握</button>
+                  <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'skip')">跳过</button>
+                </template>
+              </div>
+              <p v-if="gradeNotice[item.id]" class="notice">{{ gradeNotice[item.id] }}</p>
+              <p v-if="gradeError[item.id]" class="form-error">{{ gradeError[item.id] }}</p>
+            </section>
+          </template>
+          <template v-else>
           <details class="question-meta">
             <summary>题目信息</summary>
             <div>{{ item.kp_name }} · {{ roleLabel(item.question_role) }} · 预计 {{ item.estimated_minutes }} 分钟</div>
@@ -655,9 +827,10 @@ onMounted(() => void load());
           </div>
           <p v-if="gradeNotice[item.id]" class="notice" data-testid="paper-notice">{{ gradeNotice[item.id] }}</p>
           <p v-if="gradeError[item.id]" class="form-error">{{ gradeError[item.id] }}</p>
+          </template>
             </div>
-            <aside class="paper-answer-pane" aria-label="答案详解">
-              <button type="button" :disabled="answerLoadingId === item.id" :aria-expanded="isAnswerOpen(item.id)" :aria-controls="`paper-answer-${item.id}`" @click="toggleAnswer(item)">{{ answerLoadingId === item.id ? "加载中…" : isAnswerOpen(item.id) ? "收起答案详解" : "查看答案详解" }}</button>
+            <aside v-if="!item.is_external_reference" class="paper-answer-pane" aria-label="答案详解">
+              <button type="button" :disabled="answerLoadingId !== null" :aria-expanded="isAnswerOpen(item.id)" :aria-controls="`paper-answer-${item.id}`" @click="toggleAnswer(item)">{{ answerLoadingId === item.id ? "加载中…" : isAnswerOpen(item.id) ? "收起答案详解" : "查看答案详解" }}</button>
               <div v-if="isAnswerOpen(item.id) && answers[item.id]" :id="`paper-answer-${item.id}`" class="answer-box" :data-testid="`answer-${item.id}`">
                 <p><strong>参考答案：</strong>{{ answers[item.id].correct_answer ?? "（无标准答案，请自行对照解析）" }}</p>
                 <p><strong>解析：</strong>{{ answers[item.id].explanation }}</p>
@@ -687,29 +860,35 @@ onMounted(() => void load());
       <!-- 追加：只从已有题库选题，加到卷尾，不重洗不生成 -->
       <div v-if="showPicker" class="picker" data-testid="question-picker">
         <h2>从题库追加到卷尾</h2>
+        <label class="picker-search">
+          <span class="sr-only">搜索知识点</span>
+          <input
+            v-model="pickerSearch"
+            type="search"
+            aria-label="搜索知识点"
+            placeholder="搜索知识点名称"
+            data-testid="question-picker-search"
+          />
+        </label>
+        <p class="picker-hint">按知识树展开章节，选择知识点后查看可追加题目。</p>
         <p v-if="pickerLoading" class="state state--loading">正在加载知识树…</p>
         <p v-if="pickerError" class="form-error">{{ pickerError }}</p>
-        <div v-for="leaf in pickerTree" :key="leaf.id" class="picker-leaf">
-          <button type="button" class="picker-leaf__toggle" :aria-expanded="pickerExpandedIds.has(leaf.id)" @click="togglePickerNode(leaf.id)">
-            {{ leaf.name }}
-          </button>
-          <ul v-if="pickerExpandedIds.has(leaf.id) && pickerQuestions[leaf.id]">
-            <li v-for="question in pickerQuestions[leaf.id]" :key="question.id">
-              <label>
-                <input
-                  type="checkbox"
-                  :checked="pickerSelected.includes(question.id)"
-                  @change="togglePickerQuestion(question.id)"
-                />
-                <span>{{ question.stem }}</span>
-                <span v-if="question.is_variant" class="tag">变式题</span>
-              </label>
-            </li>
-            <li v-if="pickerQuestions[leaf.id].length === 0" class="state state--empty">
-              该知识点暂无可追加练习题
-            </li>
-          </ul>
-        </div>
+        <p v-if="!pickerLoading && filteredPickerTree.length === 0" class="state state--empty" data-testid="question-picker-empty">
+          没有找到匹配的知识点。
+        </p>
+        <KnowledgeQuestionPickerTree
+          v-if="filteredPickerTree.length > 0"
+          :nodes="filteredPickerTree"
+          :expanded-ids="pickerExpandedIds"
+          :collapsed-ids="pickerCollapsedIds"
+          :questions="pickerQuestions"
+          :question-loading-ids="pickerQuestionLoadingIds"
+          :selected-question-ids="pickerSelected"
+          :auto-expand-branches="pickerSearch.trim().length > 0"
+          :level="1"
+          @toggle-node="togglePickerNode"
+          @toggle-question="togglePickerQuestion"
+        />
         <div class="actions">
           <button
             type="button"
@@ -847,7 +1026,32 @@ onMounted(() => void load());
 .study-active-aside [data-testid="append-questions"] { width: 100%; }
 .study-active-main .focus-card { padding: 20px; }
 .study-active-main .paper-list { margin-top: 0; }
+.external-exam-task { max-width: 760px; padding: 18px 0; }
+.external-exam-task .eyebrow { margin: 0 0 7px; color: var(--text-tertiary); font-size: 12px; }
+.external-exam-task h2 { margin: 0; font-size: 21px; font-weight: 600; }
+.external-exam-task__topic { margin: 10px 0; color: var(--text-secondary); }
+.external-exam-task__sources { display: flex; flex-wrap: wrap; gap: 7px 16px; margin: 16px 0; color: var(--text-secondary); font-size: 12px; }
+.external-exam-task__sources a { color: #416d96; text-decoration: none; }
+.external-exam-task__sources a:hover { text-decoration: underline; }
+.external-exam-task .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.external-exam-task--paper { padding: 0; }
+.external-exam-task--paper h2 { font-size: 18px; }
 .study-active > .picker { margin-top: 18px; }
+.study-active > .picker h2 { margin-top: 0; font-size: 15px; }
+.picker-search { display: block; margin: 10px 0 4px; }
+.picker-search input { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; background: #fff; }
+.picker-hint { margin: 5px 0 10px; color: var(--text-tertiary); font-size: 12px; }
+.scope-selected-list { max-height: 180px; overflow: auto; margin: 8px 0 12px; padding: 0; list-style: none; }
+.scope-selected-list li { display: flex; align-items: center; gap: 6px; padding: 8px 2px; border-bottom: 1px solid #edf0f4; }
+.scope-selected-list li > span { flex: 1; min-width: 0; }
+.scope-selected-list strong { display: block; font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.scope-selected-list small, .selected-kp-path { display: block; margin-top: 3px; color: var(--text-tertiary); font-size: 11px; font-weight: 400; overflow-wrap: anywhere; }
+.scope-selected-list button { flex: 0 0 auto; min-height: 32px; padding: 4px 7px; border: 0; background: transparent; color: #527aa1; font-size: 12px; }
+.scope-tree-window { max-height: min(390px, 52vh); min-height: 80px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.scope-tree-window:focus-visible { outline: 2px solid #9bb9dc; outline-offset: 2px; border-radius: 8px; }
+.scope-picker-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.scope-picker-footer > span { color: var(--text-tertiary); font-size: 12px; }
+.scope-picker-footer button { min-height: 32px; padding: 5px 14px; border-radius: 8px; }
 @media (max-width: 960px) {
   .study-setup-layout,
   .study-active-layout,
@@ -909,40 +1113,55 @@ onMounted(() => void load());
 .study-select-panel .recommend-list li { padding-inline: 0; }
 @media (max-width: 960px) { .study-config-panel { padding: 18px 0 0; border-left: 0; border-top: 1px solid var(--border); } }
 
-/* 建卷开始页：内容选择是主角，设置是简洁的右侧操作区。 */
-.study-setup { max-width: 1060px; margin: 0 auto; }
-.study-setup-intro { margin: 20px 0 25px; }
+/* 建卷页按一份清晰的任务单排布：先选内容，再定时间，最后生成。 */
+.study-setup { width: min(880px, 100%); margin: 0 auto; }
+.study-setup-intro { margin: 18px 0 30px; }
 .study-setup-intro > span { color: var(--text-tertiary); font-size: 12px; }
-.study-setup-intro h2 { margin: 5px 0 3px; font-size: 23px; font-weight: 620; letter-spacing: -.02em; }
-.study-setup-intro p { margin: 0; color: var(--text-secondary); font-size: 13px; }
-.study-setup-layout { grid-template-columns: minmax(0, 1fr) 290px; gap: 40px; margin-top: 0; }
-.study-select-panel, .study-config-panel { min-width: 0; border: 0; border-radius: 0; background: transparent; }
-.study-select-panel { padding: 0; }
-.study-config-panel { top: calc(var(--topbar-height) + 24px); padding: 0 0 0 28px; border-left: 1px solid var(--border); }
-.study-panel-heading { align-items: center; justify-content: space-between; gap: 14px; padding: 0 0 12px; }
-.study-panel-heading h2 { font-size: 15px; }
-.study-panel-heading p { margin-top: 2px; }
-.study-panel-heading button { flex: 0 0 auto; min-height: 30px; padding: 4px 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); background: #fff; font-size: 12px; }
+.study-setup-intro h2 { margin: 9px 0 0; font-size: clamp(20px, 2.3vw, 25px); font-weight: 610; letter-spacing: -.02em; line-height: 1.35; }
+.study-setup-layout { display: block; margin: 0; }
+.study-select-panel, .study-config-panel { min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.study-config-panel { position: static; margin-top: 27px; padding-top: 23px; border-top: 1px solid var(--border); }
+.study-panel-heading { align-items: center; justify-content: space-between; gap: 14px; padding: 0 0 12px; border-bottom: 1px solid var(--border); }
+.study-config-panel .study-panel-heading { border-bottom: 0; }
+.study-panel-heading h2 { font-size: 15px; font-weight: 620; }
+.study-panel-heading p { margin-top: 3px; color: var(--text-tertiary); font-size: 12px; }
+.study-panel-heading button { flex: 0 0 auto; min-height: 32px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); background: #fff; font-size: 12px; }
+.study-panel-heading button:hover:not(:disabled) { border-color: var(--border-strong); background: #f8fafc; }
 .study-select-panel .recommend-list { margin: 0; border: 0; border-radius: 0; }
-.study-select-panel .recommend-list li { padding: 11px 2px; border-bottom: 1px solid var(--border); background: transparent; }
+.study-select-panel .recommend-list li { padding: 13px 2px; border-bottom: 1px solid #edf0f4; background: transparent; }
 .study-select-panel .recommend-list li:hover { background: transparent; }
-.study-select-panel .recommend-row { gap: 11px; }
-.study-select-panel .recommend-row input { flex: 0 0 auto; margin-top: 4px; accent-color: #365e88; }
+.study-select-panel .selected-kp-row { display: flex; align-items: center; gap: 18px; min-height: 55px; }
+.selected-kp-row__number { flex: 0 0 22px; color: #95a0ac; font-size: 11px; font-variant-numeric: tabular-nums; }
+.study-select-panel .recommend-row { align-items: center; gap: 12px; min-height: 26px; }
+.study-select-panel .recommend-row input { flex: 0 0 auto; margin: 0; accent-color: #365e88; }
 .study-select-panel .recommend-name { font-size: 14px; font-weight: 560; }
 .study-select-panel .recommend-state { margin-left: auto; color: var(--text-tertiary); font-size: 11px; white-space: nowrap; }
-.study-select-panel .recommend-why { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
-.recommend-detail { margin: 3px 0 0 25px; color: var(--text-tertiary); font-size: 11px; }
+.recommend-detail { margin: 2px 0 0 27px; color: var(--text-tertiary); font-size: 11px; }
 .recommend-detail summary { width: fit-content; cursor: pointer; }
-.recommend-detail p { margin: 5px 0 0; }
-.study-config-panel .budget { margin: 8px 0 12px; padding: 0; border: 0; background: transparent; }
-.study-config-panel .budget legend.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-.study-config-panel .budget-option { min-height: 47px; cursor: pointer; }
-.study-config-panel .budget-option input { accent-color: #365e88; }
-.study-config-panel [data-testid="selected-kp-count"] { margin: 13px 0 8px; color: var(--text-secondary); font-size: 12px; }
-.study-config-panel .setup-generate { width: 100%; min-height: 39px; margin: 0; border-radius: 10px; }
-.study-config-panel .setup-footnote { margin: 7px 0 0; color: var(--text-tertiary); font-size: 11px; }
-@media (max-width: 960px) {
-  .study-setup-layout { grid-template-columns: minmax(0, 1fr); gap: 22px; }
-  .study-config-panel { position: static; padding: 19px 0 0; border-top: 1px solid var(--border); border-left: 0; }
+.recommend-detail p { max-width: 650px; margin: 5px 0 0; line-height: 1.6; }
+.study-config-panel .budget { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 2px 0 18px; padding: 0; border: 0; background: transparent; }
+.study-config-panel .budget-option { display: flex; align-items: center; justify-content: center; min-height: 52px; margin: 0; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: #fff; cursor: pointer; }
+.study-config-panel .budget-option:last-child { border-bottom: 1px solid var(--border); }
+.study-config-panel .budget-option:hover { border-color: #b4c9e2; }
+.study-config-panel .budget-option--selected { border-color: #9bb9dc; background: #f7faff; }
+.study-config-panel .budget-option:focus-within { outline: 2px solid #9bb9dc; outline-offset: 2px; }
+.study-config-panel .budget-option input { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+.budget-option__name { color: var(--text); font-size: 13px; font-weight: 560; }
+.study-setup-action { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 15px; border-top: 1px solid var(--border); }
+.study-config-panel [data-testid="selected-kp-count"] { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.study-config-panel .setup-generate { width: auto; min-width: 176px; min-height: 40px; margin: 0; border-radius: 9px; }
+.study-select-panel > .picker { margin: 0 0 20px; padding: 16px 0 17px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.study-select-panel > .picker h2 { margin: 0; font-size: 15px; font-weight: 610; }
+.study-select-panel > .picker > .hint { margin: 5px 0 13px; color: var(--text-tertiary); font-size: 12px; }
+.study-select-panel > .picker .recommend-list { margin: 0; border: 0; border-radius: 0; }
+.study-select-panel > .picker .recommend-list li { padding: 10px 2px; border-bottom: 1px solid #edf0f4; background: transparent; }
+@media (max-width: 600px) {
+  .study-setup-intro { margin: 8px 0 24px; }
+  .study-panel-heading { align-items: flex-start; }
+  .study-panel-heading p { max-width: 210px; }
+  .study-config-panel .budget { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  .study-config-panel .budget-option { min-height: 56px; }
+  .study-setup-action { align-items: stretch; flex-direction: column; gap: 10px; }
+  .study-config-panel .setup-generate { width: 100%; }
 }
 </style>

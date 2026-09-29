@@ -107,7 +107,7 @@ test.describe("错误码与页面行为（规格 2.5）", () => {
     // 不在前端猜「缺哪一道题」：不许出现具体题型/题量的推断式文案。
     await expect(generateError).not.toContainText(/缺少第 \d/);
     // 用户已勾选的知识点必须保留（兜底原则：不丢用户输入）。
-    await expect(page.getByTestId("selected-kp-count")).toContainText("已选 1 个知识点");
+    await expect(page.getByTestId("selected-kp-count")).toContainText("本次包含 1 个知识点");
   });
 
   test("kp_state_not_found：提示先跑 seed.py，且不自动重试", async ({ page }) => {
@@ -153,8 +153,9 @@ test.describe("错误码与页面行为（规格 2.5）", () => {
 
   test("plan_not_active：追加题目失败时提示已结束并刷新，绝不在本地插题", async ({ page }) => {
     await page.route("**/api/plans/today", (route) => route.fulfill({ json: ACTIVE_PLAN }));
-    await page.route("**/api/knowledge/tree", (route) => route.fulfill({ json: TREE_EMPTY }));
     await page.route("**/api/knowledge/**", (route) => route.fulfill({ json: { node: null, questions: [] } }));
+    // tree 响应必须保留 KnowledgeTreeResponse 结构，不能被上面的详情 mock 覆盖。
+    await page.route("**/api/knowledge/tree", (route) => route.fulfill({ json: TREE_EMPTY }));
     await page.route("**/api/plans/plan-1/questions", (route) =>
       route.fulfill({ status: 409, json: errorBody("plan_not_active") }),
     );

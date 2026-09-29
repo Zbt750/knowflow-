@@ -1,12 +1,33 @@
 from __future__ import annotations
 
 import logging
+import math
+import re
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+class ValidationDetail(BaseModel):
+    field: str
+    code: str
+    message: str
+
+
+class ErrorBody(BaseModel):
+    code: str
+    message: str
+    details: list[ValidationDetail] | None = None
+
+
+class ErrorResponse(BaseModel):
+    error: ErrorBody
 
 # 唯一错误响应契约：{"error": {"code": ..., "message": ...}}
 # 前端按 code 分支，不解析 message 的自然语言文案。
@@ -23,9 +44,11 @@ SAFE_MESSAGES: dict[str, str] = {
     "internal_error": "internal error",
     # 学习闭环（阶段 B）
     "knowledge_point_not_found": "knowledge point not found",
+    "knowledge_lesson_not_found": "knowledge lesson not found",
     "plan_not_found": "daily plan not found",
     "practice_item_not_found": "practice item not found",
     "question_not_found": "question not found",
+    "external_exam_has_no_embedded_answer": "external exam references do not contain embedded stems or answers",
     "plan_already_generated": "daily plan already generated for this study date",
     "plan_not_active": "daily plan is not active",
     "node_not_assessable": "only a leaf node with is_assessable can be assessed",
@@ -42,6 +65,8 @@ SAFE_MESSAGES: dict[str, str] = {
     "document_decode_failed": "document encoding is not supported",
     "scanned_pdf": "pdf has no text layer; OCR is not supported",
     "document_parse_failed": "document could not be parsed",
+    "document_content_too_large": "文档展开后的内容超过处理上限，请拆分后上传",
+    "document_parse_timeout": "文档解析超时，请拆分或另存后重试",
     "unsafe_storage_path": "stored path is outside the materials root",
     "material_file_not_found": "material file is missing on disk",
     "no_chunk_to_index": "material produced no chunk",
@@ -55,7 +80,17 @@ SAFE_MESSAGES: dict[str, str] = {
     "matched_kp_not_found": "no attributable answer exists in this chat session",
     "retrieval_failed": "retrieval failed",
     "retrieval_timeout": "retrieval timed out",
+    "retrieval_busy": "retrieval is busy; retry shortly",
+    "instance_lock_lost": "backend lost its database ownership lock and is unavailable",
     "generation_failed": "answer generation failed",
+    "answer_truncated": "answer stopped at the model output limit",
+    "forbidden": "access forbidden",
+    "unauthorized": "authentication required",
+    "method_not_allowed": "method not allowed",
+    "http_error": "request failed",
+    "settings_local_only": "model settings are only available on this computer in development mode",
+    "settings_token_invalid": "settings authorization expired; refresh and retry",
+    "settings_storage_failed": "model settings could not be stored",
 }
 
 # 错误码对应的默认 HTTP 状态码。
@@ -72,9 +107,11 @@ STATUS_BY_CODE: dict[str, int] = {
     "internal_error": 500,
     # 学习闭环（阶段 B）
     "knowledge_point_not_found": 404,
+    "knowledge_lesson_not_found": 404,
     "plan_not_found": 404,
     "practice_item_not_found": 404,
     "question_not_found": 404,
+    "external_exam_has_no_embedded_answer": 409,
     "plan_already_generated": 409,
     "plan_not_active": 409,
     "node_not_assessable": 409,
@@ -91,6 +128,8 @@ STATUS_BY_CODE: dict[str, int] = {
     "document_decode_failed": 422,
     "scanned_pdf": 422,
     "document_parse_failed": 422,
+    "document_content_too_large": 413,
+    "document_parse_timeout": 422,
     "unsafe_storage_path": 500,
     "material_file_not_found": 500,
     "no_chunk_to_index": 422,
@@ -105,7 +144,17 @@ STATUS_BY_CODE: dict[str, int] = {
     "matched_kp_not_found": 409,
     "retrieval_failed": 503,
     "retrieval_timeout": 504,
+    "retrieval_busy": 503,
+    "instance_lock_lost": 503,
     "generation_failed": 503,
+    "answer_truncated": 503,
+    "forbidden": 403,
+    "unauthorized": 401,
+    "method_not_allowed": 405,
+    "http_error": 400,
+    "settings_local_only": 403,
+    "settings_token_invalid": 403,
+    "settings_storage_failed": 503,
 }
 
 
@@ -158,3 +207,56 @@ async def app_error_handler(_: Request, exc: AppError) -> JSONResponse:
 
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, app_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(HTTPException, http_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(Exception, unexpected_error_handler)
+
+
+def validation_details(exc: RequestValidationError) -> list[dict[str, str]]:
+    """Only return field/rule metadata; never echo input, raw msg or exception ctx."""
+    messages = {
+        "missing": "不能为空", "uuid_parsing": "应为有效的 UUID",
+        "int_parsing": "应为整数", "int_type": "应为整数",
+        "float_parsing": "应为数字", "bool_parsing": "应为布尔值",
+        "string_type": "应为文本", "json_invalid": "JSON 格式不正确",
+        "value_error": "格式或取值不符合要求", "extra_forbidden": "不支持此参数",
+    }
+    bounds = {
+        "greater_than_equal": ("ge", "应大于或等于 {}"),
+        "less_than_equal": ("le", "应小于或等于 {}"),
+        "greater_than": ("gt", "应大于 {}"), "less_than": ("lt", "应小于 {}"),
+        "string_too_long": ("max_length", "最多 {} 个字符"),
+        "string_too_short": ("min_length", "至少 {} 个字符"),
+    }
+    details = []
+    for error in exc.errors()[:20]:
+        location = []
+        for part in error.get("loc", ())[:8]:
+            token = str(part)
+            location.append(token if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,63}|\d{1,6}", token) else "field")
+        kind = error.get("type", "validation_failed")
+        message = messages.get(kind, "不符合要求")
+        if kind in bounds:
+            key, template = bounds[kind]
+            bound = error.get("ctx", {}).get(key)
+            if type(bound) in (int, float) and math.isfinite(bound) and abs(bound) < 1e12:
+                message = template.format(bound)
+        details.append({"field": ".".join(location), "code": kind if kind in messages or kind in bounds else "validation_failed", "message": message})
+    return details
+
+
+async def validation_error_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    payload = AppError("validation_failed").to_payload()
+    payload["error"]["details"] = validation_details(exc)
+    return JSONResponse(status_code=422, content=payload)
+
+
+async def http_error_handler(_: Request, exc: HTTPException) -> JSONResponse:
+    code = {400: "invalid_request", 401: "unauthorized", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 422: "validation_failed"}.get(exc.status_code, "internal_error" if exc.status_code >= 500 else "http_error")
+    headers = {key: value for key, value in (exc.headers or {}).items() if key.lower() in {"allow", "retry-after", "www-authenticate"}}
+    return JSONResponse(status_code=exc.status_code, content=AppError(code).to_payload(), headers=headers)
+
+
+async def unexpected_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    logger.error("unexpected API error: %s", type(exc).__name__)
+    return JSONResponse(status_code=500, content=AppError("internal_error").to_payload())

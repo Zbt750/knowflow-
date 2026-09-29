@@ -1,8 +1,17 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import { ApiError } from "../api/client";
-import { fetchKnowledgeNode, fetchKnowledgeTree, submitNodeSelfAssessment } from "../api/study";
+import AppIcon from "../components/AppIcon.vue";
+import {
+  appendExamReferencesToday,
+  fetchKnowledgeNode,
+  fetchKnowledgeTree,
+  fetchToday,
+  submitNodeSelfAssessment,
+} from "../api/study";
+import { isTodayActive } from "../types/practice";
 import {
   formatTime,
   gradeLabel,
@@ -15,12 +24,13 @@ import type {
   KnowledgeNodeDetail,
   KnowledgeNodeView,
   KnowledgeTreeResponse,
+  ExamQuestionReferenceView,
   MasteryState,
   NodeSelfAssessmentResponse,
 } from "../types/practice";
 import { useAsyncTask } from "../composables/useAsyncTask";
 
-type Tab = "overview" | "questions" | "attempts" | "materials";
+type Tab = "overview" | "questions" | "attempts" | "materials" | "exam";
 
 // 统一状态（阶段 E）：知识树加载与节点详情都走 `useAsyncTask`。
 // 页面侧把 state/error 派生出来，模板绑定与 testid 契约保持原样 ——
@@ -33,6 +43,8 @@ const detailTask = useAsyncTask<KnowledgeNodeDetail>(null, {
 });
 const { run: runTree } = treeTask;
 const { run: runDetail, reset: resetDetail } = detailTask;
+const route = useRoute();
+const router = useRouter();
 
 const state = computed(() => treeTask.state.value);
 const errorCode = computed(() => treeTask.errorCode.value);
@@ -41,6 +53,46 @@ const roots = ref<KnowledgeNodeView[]>([]);
 
 const expanded = ref<Set<string>>(new Set());
 const selectedId = ref<string | null>(null);
+const treeSearch = ref("");
+const rootScope = ref("");
+const searchCollapsed = ref(new Set<string>());
+const branchLimits = ref<Record<string, number>>({});
+const BRANCH_BATCH = 20;
+let treeInitialized = false;
+watch(treeSearch, () => { searchCollapsed.value = new Set(); branchLimits.value = {}; });
+
+function filterTree(nodes: KnowledgeNodeView[], query: string): KnowledgeNodeView[] {
+  if (!query) return nodes;
+  return nodes.flatMap((node) => {
+    const matches = (node.name + " " + node.code).toLocaleLowerCase().includes(query);
+    const children = matches ? node.children : filterTree(node.children, query);
+    return matches || children.length ? [{ ...node, children }] : [];
+  });
+}
+const visibleRoots = computed(() => filterTree(
+  rootScope.value ? roots.value.filter((node) => node.id === rootScope.value) : roots.value,
+  treeSearch.value.trim().toLocaleLowerCase(),
+));
+function branchIsOpen(node: KnowledgeNodeView): boolean {
+  return treeSearch.value.trim() ? !searchCollapsed.value.has(node.id) : expanded.value.has(node.id);
+}
+function findPath(nodes: KnowledgeNodeView[], id: string): KnowledgeNodeView[] {
+  for (const node of nodes) {
+    if (node.id === id) return [node];
+    const rest = findPath(node.children, id);
+    if (rest.length) return [node, ...rest];
+  }
+  return [];
+}
+const selectedPath = computed(() => selectedId.value ? findPath(roots.value, selectedId.value) : []);
+function collapseTree(): void {
+  if (treeSearch.value.trim()) searchCollapsed.value = new Set(treeGraph.value.nodes.filter((row) => !row.moreFor).map((row) => row.node.id));
+  else expanded.value = new Set(visibleRoots.value.map((node) => node.id));
+  branchLimits.value = {};
+}
+function showMore(id: string): void {
+  branchLimits.value = { ...branchLimits.value, [id]: (branchLimits.value[id] ?? BRANCH_BATCH) + BRANCH_BATCH };
+}
 // 详情相关状态统一由 detailTask 派生：模板仍然读 `detail` / `detailLoading` /
 // `detailError` 三个名字，但它们的真相只有一个来源。
 const detail = computed(() => detailTask.data.value);
@@ -54,6 +106,43 @@ const detailPanel = ref<HTMLElement | null>(null);
 const nodeSubmitting = ref(false);
 const nodeNotice = ref<string | null>(null);
 const nodeError = ref<string | null>(null);
+const queuedExamReferenceIds = ref<Set<string>>(new Set());
+const addingExamReferenceId = ref<string | null>(null);
+const examReferenceNotice = ref<string | null>(null);
+const examReferenceError = ref<string | null>(null);
+
+async function refreshQueuedExamReferences(): Promise<void> {
+  try {
+    const today = await fetchToday();
+    queuedExamReferenceIds.value = new Set(
+      isTodayActive(today)
+        ? today.items.flatMap((item) => item.exam_reference?.id ? [item.exam_reference.id] : [])
+        : [],
+    );
+  } catch {
+    // 详情仍可正常浏览；用户点击加入时会看到具体操作错误。
+    queuedExamReferenceIds.value = new Set();
+  }
+}
+
+async function addExamReference(reference: ExamQuestionReferenceView): Promise<void> {
+  if (queuedExamReferenceIds.value.has(reference.id)) return;
+  addingExamReferenceId.value = reference.id;
+  examReferenceNotice.value = null;
+  examReferenceError.value = null;
+  try {
+    const today = await appendExamReferencesToday([reference.id]);
+    if (!isTodayActive(today)) throw new Error("今日练习卷没有成功创建");
+    queuedExamReferenceIds.value = new Set(
+      today.items.flatMap((item) => item.exam_reference?.id ? [item.exam_reference.id] : []),
+    );
+    examReferenceNotice.value = "已加入今日学习。完成原卷后按实际表现自评；标记“已掌握”会计入本知识点毕业证据。";
+  } catch (error) {
+    examReferenceError.value = error instanceof ApiError ? error.message : "加入今日学习失败，请重试。";
+  } finally {
+    addingExamReferenceId.value = null;
+  }
+}
 
 function flattenLeaves(nodes: KnowledgeNodeView[]): KnowledgeNodeView[] {
   const result: KnowledgeNodeView[] = [];
@@ -71,26 +160,51 @@ function flattenLeaves(nodes: KnowledgeNodeView[]): KnowledgeNodeView[] {
 const allLeaves = computed(() => flattenLeaves(roots.value));
 
 /** 父节点只汇总：由子叶子数量推导，前端不伪造掌握度。 */
-function summarize(node: KnowledgeNodeView): { total: number; done: number } {
-  const leaves = flattenLeaves(node.children);
-  return { total: leaves.length, done: leaves.filter((leaf) => leaf.state === "mastered").length };
-}
+const nodeSummaries = computed(() => {
+  const summaries = new Map<string, { total: number; done: number; references: number }>();
+  const visit = (node: KnowledgeNodeView): { total: number; done: number; references: number } => {
+    const result = { total: Number(node.is_assessable), done: Number(node.state === "mastered"), references: Number(node.is_reference_only) };
+    for (const child of node.children) {
+      const childResult = visit(child);
+      result.total += childResult.total;
+      result.done += childResult.done;
+      result.references += childResult.references;
+    }
+    summaries.set(node.id, result);
+    return result;
+  };
+  roots.value.forEach(visit);
+  return summaries;
+});
 
-type GraphNode = { node: KnowledgeNodeView; depth: number; x: number; y: number; parentId: string | null };
+function summarize(node: KnowledgeNodeView): { total: number; done: number; references: number } {
+  return nodeSummaries.value.get(node.id) ?? { total: 0, done: 0, references: 0 };
+}
+const referenceOnlyCount = computed(() =>
+  roots.value.reduce((total, root) => total + summarize(root).references, 0),
+);
+
+type GraphNode = { key: string; node: KnowledgeNodeView; depth: number; x: number; y: number; parentId: string | null; moreFor?: string; remaining?: number };
 const treeGraph = computed(() => {
   const nodes: GraphNode[] = [];
   let leafIndex = 0;
   let maxDepth = 0;
   const visit = (node: KnowledgeNodeView, depth: number, parentId: string | null): number => {
     maxDepth = Math.max(maxDepth, depth);
-    const children = expanded.value.has(node.id) ? node.children : [];
+    const limit = branchLimits.value[node.id] ?? BRANCH_BATCH;
+    const children = branchIsOpen(node) ? node.children.slice(0, limit) : [];
     const childYs = children.map((child) => visit(child, depth + 1, node.id));
+    if (branchIsOpen(node) && node.children.length > limit) {
+      const moreY = 70 + leafIndex++ * 86;
+      nodes.push({ key: `more-${node.id}`, node, depth: depth + 1, x: 34 + (depth + 1) * 244, y: moreY, parentId: node.id, moreFor: node.id, remaining: node.children.length - limit });
+      childYs.push(moreY);
+    }
     const y = childYs.length ? (childYs[0] + childYs[childYs.length - 1]) / 2 : 70 + leafIndex++ * 86;
-    nodes.push({ node, depth, x: 34 + depth * 244, y, parentId });
+    nodes.push({ key: node.id, node, depth, x: 34 + depth * 244, y, parentId });
     return y;
   };
-  roots.value.forEach((root) => visit(root, 0, null));
-  const byId = new Map(nodes.map((entry) => [entry.node.id, entry]));
+  visibleRoots.value.forEach((root) => visit(root, 0, null));
+  const byId = new Map(nodes.filter((entry) => !entry.moreFor).map((entry) => [entry.node.id, entry]));
   const paths = nodes.flatMap((entry) => {
     const parent = entry.parentId ? byId.get(entry.parentId) : null;
     if (!parent) return [];
@@ -114,6 +228,27 @@ function findLeaf(kpId: string): KnowledgeNodeView | undefined {
   return allLeaves.value.find((leaf) => leaf.id === kpId);
 }
 
+function findNodeByCode(nodes: KnowledgeNodeView[], code: string): KnowledgeNodeView | undefined {
+  for (const node of nodes) {
+    if (node.code === code) return node;
+    const found = findNodeByCode(node.children, code);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+const examReferenceGroups = computed(() => {
+  const groups = new Map<number, ExamQuestionReferenceView[]>();
+  for (const reference of detail.value?.exam_references ?? []) {
+    const group = groups.get(reference.year) ?? [];
+    group.push(reference);
+    groups.set(reference.year, group);
+  }
+  return [...groups.entries()]
+    .sort(([yearA], [yearB]) => yearB - yearA)
+    .map(([year, references]) => ({ year, references }));
+});
+
 async function load(): Promise<void> {
   const data = await runTree(async () => {
     const response = await fetchKnowledgeTree();
@@ -121,16 +256,8 @@ async function load(): Promise<void> {
   });
   if (!data) return;
   roots.value = data.nodes;
-  // 首屏展示完整分叉结构，画布可滚动；父节点仍可逐层收起。
-  const next = new Set<string>();
-  const expandBranches = (nodes: KnowledgeNodeView[]): void => {
-    for (const node of nodes) {
-      if (hasChildren(node)) next.add(node.id);
-      expandBranches(node.children);
-    }
-  };
-  expandBranches(data.nodes);
-  expanded.value = next;
+  if (!treeInitialized) expanded.value = new Set(data.nodes.map((node) => node.id));
+  treeInitialized = true;
 }
 
 /**
@@ -150,6 +277,8 @@ function normalizeDetail(raw: KnowledgeNodeDetail): KnowledgeNodeDetail {
   const node = raw?.node ?? ({} as KnowledgeNodeDetail["node"]);
   return {
     ...raw,
+    lesson_available: raw?.lesson_available ?? true,
+    exam_references: Array.isArray(raw?.exam_references) ? raw.exam_references : [],
     node: {
       ...node,
       gap_items: Array.isArray(node.gap_items) ? node.gap_items : [],
@@ -165,18 +294,21 @@ function normalizeDetail(raw: KnowledgeNodeDetail): KnowledgeNodeDetail {
 }
 
 function toggleExpand(node: KnowledgeNodeView): void {
+  if (treeSearch.value.trim()) {
+    const next = new Set(searchCollapsed.value);
+    if (next.has(node.id)) next.delete(node.id); else next.add(node.id);
+    searchCollapsed.value = next;
+    return;
+  }
   const next = new Set(expanded.value);
   if (next.has(node.id)) next.delete(node.id);
   else next.add(node.id);
   expanded.value = next;
 }
 
-async function selectNode(node: KnowledgeNodeView): Promise<void> {
-  if (!node.is_assessable) {
-    // 父节点只能汇总，不能打开考核视图。
-    toggleExpand(node);
-    return;
-  }
+async function selectNode(node: KnowledgeNodeView, syncUrl = true): Promise<void> {
+  // 展开/收起由箭头控制；点击名称始终打开节点，父节点也有章节导读。
+  if (syncUrl) void router.replace({ path: "/knowledge", query: { node: node.code } });
   const kpId = node.id;
   selectedId.value = kpId;
   await nextTick();
@@ -250,12 +382,21 @@ async function nodeAssess(grade: "mastered" | "partial" | "not_mastered"): Promi
 
 const stateTone = (value: MasteryState | null | string): string => `tone tone--${value ?? "aggregate"}`;
 
-onMounted(() => void load());
+onMounted(async () => {
+  await Promise.all([load(), refreshQueuedExamReferences()]);
+  const code = typeof route.query.node === "string" ? route.query.node : null;
+  if (!code) return;
+  const node = findNodeByCode(roots.value, code);
+  if (!node) return;
+  treeSearch.value = node.code;
+  await selectNode(node, false);
+  if (node.is_assessable && !node.is_reference_only && route.query.tab === "questions") tab.value = "questions";
+});
 </script>
 
 <template>
   <section class="page page--knowledge">
-    <p class="page-intro">按章节展开知识点，选择叶子查看学习方向。</p>
+    <p class="page-intro">按章节阅读知识讲解，再到题库检验理解。</p>
 
     <p v-if="state === 'loading'" class="state state--loading" data-testid="knowledge-loading">
       正在加载知识树…
@@ -268,20 +409,32 @@ onMounted(() => void load());
 
     <div v-else class="knowledge-layout">
       <section class="tree" data-testid="knowledge-tree" aria-label="知识树">
-        <div class="tree-heading"><strong>知识结构</strong><span>{{ allLeaves.length }} 个知识点 · 点击节点查看</span></div>
-        <div class="tree-viewport">
+        <div class="tree-heading"><div><strong>知识结构</strong><span>{{ allLeaves.length }} 个学习知识点 · {{ referenceOnlyCount }} 个历年考点</span></div><button type="button" class="tree-collapse" @click="collapseTree">收起分支</button></div>
+        <div class="tree-toolbar">
+          <input v-model="treeSearch" type="search" aria-label="搜索知识点名称或编号" placeholder="搜索知识点或章节" data-testid="knowledge-search" />
+          <select v-if="roots.length > 1" v-model="rootScope" aria-label="知识树学科范围"><option value="">全部学科</option><option v-for="root in roots" :key="root.id" :value="root.id">{{ root.name }}</option></select>
+          <button v-if="treeSearch" type="button" @click="treeSearch = ''">清除搜索</button>
+        </div>
+        <p v-if="!visibleRoots.length" class="state state--empty" data-testid="knowledge-search-empty">没有找到匹配的知识点，试试其他名称或编号。</p>
+        <div v-else class="tree-viewport" tabindex="0" aria-label="知识树画布，可横向和纵向滚动">
           <div class="tree-graph" role="tree" :style="{ width: `${treeGraph.width}px`, height: `${treeGraph.height}px` }">
             <svg class="tree-edges" :viewBox="`0 0 ${treeGraph.width} ${treeGraph.height}`" aria-hidden="true">
               <path v-for="(path, index) in treeGraph.paths" :key="index" :d="path" />
             </svg>
-            <div v-for="row in treeGraph.nodes" :key="row.node.id" class="tree-entry" :class="{ 'tree-entry--root': row.depth === 0 }" :style="{ left: `${row.x}px`, top: `${row.y}px` }" role="treeitem" :aria-level="row.depth + 1" :aria-expanded="hasChildren(row.node) ? expanded.has(row.node.id) : undefined">
-              <div class="tree-row">
-                <button v-if="hasChildren(row.node)" type="button" class="tree-toggle" :aria-label="expanded.has(row.node.id) ? `收起${row.node.name}` : `展开${row.node.name}`" @click="toggleExpand(row.node)">{{ expanded.has(row.node.id) ? "▾" : "▸" }}</button>
+            <div v-for="row in treeGraph.nodes" :key="row.key" class="tree-entry" :class="{ 'tree-entry--root': row.depth === 0, 'tree-entry--more': row.moreFor }" :style="{ left: `${row.x}px`, top: `${row.y}px` }" role="treeitem" :aria-level="row.depth + 1" :aria-expanded="!row.moreFor && hasChildren(row.node) ? branchIsOpen(row.node) : undefined">
+              <button v-if="row.moreFor" type="button" class="tree-more" :aria-label="`显示更多${row.node.name}下的节点`" @click="showMore(row.moreFor)">显示更多 <small>还剩 {{ row.remaining }} 项</small></button>
+              <div v-else class="tree-row">
+                <button v-if="hasChildren(row.node)" type="button" class="tree-toggle" :aria-label="branchIsOpen(row.node) ? `收起${row.node.name}` : `展开${row.node.name}`" @click="toggleExpand(row.node)">{{ branchIsOpen(row.node) ? "▾" : "▸" }}</button>
                 <span v-else class="tree-toggle tree-toggle--empty" aria-hidden="true"></span>
                 <button type="button" class="tree-node" :class="{ 'tree-node--selected': selectedId === row.node.id, 'tree-node--branch': hasChildren(row.node) }" :data-testid="`tree-node-${row.node.code}`" @click="selectNode(row.node)">{{ row.node.name }}</button>
               </div>
-              <span v-if="hasChildren(row.node)" class="tree-progress">{{ summarize(row.node).done }}/{{ summarize(row.node).total }} 已毕业</span>
-              <span v-else class="tree-leaf-state" :class="stateTone(row.node.state)"><span class="tree-leaf-dot" aria-hidden="true"></span>{{ stateLabel(row.node.state) }}</span>
+              <span v-if="!row.moreFor && hasChildren(row.node)" class="tree-progress">
+                <template v-if="summarize(row.node).total">{{ summarize(row.node).done }}/{{ summarize(row.node).total }} 已毕业</template>
+                <template v-else>{{ summarize(row.node).references }} 个历年考点</template>
+                <template v-if="summarize(row.node).total && summarize(row.node).references"> · {{ summarize(row.node).references }} 个历年考点</template>
+              </span>
+              <span v-else-if="!row.moreFor && row.node.is_reference_only" class="tree-leaf-state tree-leaf-state--reference" :class="stateTone(row.node.state)"><span class="tree-leaf-dot" aria-hidden="true"></span>{{ stateLabel(row.node.state) }} · 历年真题</span>
+              <span v-else-if="!row.moreFor" class="tree-leaf-state" :class="stateTone(row.node.state)"><span class="tree-leaf-dot" aria-hidden="true"></span>{{ stateLabel(row.node.state) }}</span>
             </div>
           </div>
         </div>
@@ -298,16 +451,21 @@ onMounted(() => void load());
         <p v-else-if="detailError" class="state state--error">{{ detailError }}</p>
 
         <div v-else-if="detail" data-testid="knowledge-detail">
+          <p class="knowledge-breadcrumb" data-testid="knowledge-breadcrumb">{{ selectedPath.map((node) => node.name).join(' / ') }}</p>
           <h2 data-testid="detail-title">{{ detail.node.name }}</h2>
+          <p v-if="detail.node.is_reference_only" class="hint exam-reference-note" data-testid="exam-reference-only-note">
+            {{ detail.node.code.includes('.family.') ? '这是项目按原始标签整理的跨年份专题汇总，不是官方考点分类；列表会保留每道题的原始标签。原卷题干不在系统内，可打开来源或本地原卷完成后加入今日学习。' : '这是历年真题知识节点：这里提供原卷来源，不包含题干。完成原卷后在今日学习自评；标记“已掌握”将作为本节点的毕业证据。' }}
+          </p>
           <p class="state" data-testid="detail-state">
             {{ stateLabel(detail.node.state) }}
           </p>
 
           <nav class="mode-switch">
             <button type="button" :class="{ active: tab === 'overview' }" data-testid="tab-overview" @click="tab = 'overview'">概览</button>
-            <button type="button" :class="{ active: tab === 'questions' }" data-testid="tab-questions" @click="tab = 'questions'">题库</button>
-            <button type="button" :class="{ active: tab === 'attempts' }" data-testid="tab-attempts" @click="tab = 'attempts'">练习记录</button>
-            <button type="button" :class="{ active: tab === 'materials' }" data-testid="tab-materials" @click="tab = 'materials'">关联资料</button>
+            <button v-if="detail.node.is_assessable && !detail.node.is_reference_only" type="button" :class="{ active: tab === 'questions' }" data-testid="tab-questions" @click="tab = 'questions'">题库</button>
+            <button v-if="detail.node.is_assessable" type="button" :class="{ active: tab === 'attempts' }" data-testid="tab-attempts" @click="tab = 'attempts'">练习记录</button>
+            <button v-if="detail.exam_references.length || detail.node.is_reference_only" type="button" :class="{ active: tab === 'exam' }" data-testid="tab-exam-references" @click="tab = 'exam'">历年真题 <span class="exam-reference-count">{{ detail.exam_references.length }}</span></button>
+            <button v-if="detail.node.is_assessable" type="button" :class="{ active: tab === 'materials' }" data-testid="tab-materials" @click="tab = 'materials'">关联资料</button>
           </nav>
 
           <!--
@@ -319,13 +477,26 @@ onMounted(() => void load());
             class="card"
             :data-testid="detail.node.is_assessable ? 'knowledge-leaf-overview' : 'knowledge-parent-summary'"
           >
+            <RouterLink
+              v-if="detail.lesson_available"
+              class="knowledge-lesson-link"
+              data-testid="knowledge-lesson-link"
+              :to="'/knowledge/' + encodeURIComponent(detail.node.code) + '/lesson'"
+            >
+              <AppIcon name="materials" :size="19" />
+              <span class="knowledge-lesson-link__body">
+                <strong>{{ detail.node.name }} · {{ detail.node.is_assessable ? "系统讲解" : "章节导读" }}</strong>
+                <small>{{ detail.node.is_assessable ? "概念、例题与易错点" : "本章学习顺序与知识点入口" }}</small>
+              </span>
+              <span aria-hidden="true">→</span>
+            </RouterLink>
             <p v-if="detail.node.summary"><strong>知识摘要：</strong>{{ detail.node.summary }}</p>
             <p v-if="detail.node.learning_goal"><strong>学习目标：</strong>{{ detail.node.learning_goal }}</p>
 
             <p v-if="detail.node.next_step" class="notice" data-testid="next-step">
               <strong>下一步：</strong>{{ detail.node.next_step }}
             </p>
-            <details class="knowledge-advanced" data-testid="knowledge-advanced">
+            <details v-if="detail.node.is_assessable" class="knowledge-advanced" data-testid="knowledge-advanced">
               <summary>查看毕业进度与考核要求</summary>
             <!-- 毕业进度：逐项来自后端 gap_items，前端不自己算毕业条件 -->
             <h3 class="section-title">毕业进度</h3>
@@ -387,15 +558,17 @@ onMounted(() => void load());
                 {{ detail.node.day_span === null ? "—" : `${detail.node.day_span} 天` }}
                 （{{ detail.node.first_confirmed_on ?? "—" }} → {{ detail.node.last_confirmed_on ?? "—" }}）
               </dd>
-              <dt>已有真实变式题确认</dt>
-              <dd data-testid="has-variant">{{ detail.node.has_real_variant ? "是" : "否" }}</dd>
+              <template v-if="!detail.node.is_reference_only">
+                <dt>已有真实变式题确认</dt>
+                <dd data-testid="has-variant">{{ detail.node.has_real_variant ? "是" : "否" }}</dd>
+              </template>
               <dt>下次复习</dt>
               <dd>{{ formatTime(detail.node.next_review_at) }}</dd>
             </dl>
             </details>
 
             <!-- 叶子整体自评：只有 is_assessable 叶子才有这一组按钮 -->
-            <div class="actions actions--grades" data-testid="node-assessment">
+            <div v-if="detail.node.is_assessable" class="actions actions--grades" data-testid="node-assessment">
               <button type="button" :disabled="nodeSubmitting" data-testid="node-self-mastered" @click="nodeAssess('mastered')">
                 我已掌握
               </button>
@@ -406,7 +579,7 @@ onMounted(() => void load());
                 我未掌握
               </button>
             </div>
-            <p class="hint">整体自评会记录基础确认，不会算作做过题。</p>
+            <p v-if="detail.node.is_assessable" class="hint">整体自评会记录基础确认，不会算作做过题。</p>
             <p v-if="nodeNotice" class="notice" data-testid="node-notice">{{ nodeNotice }}</p>
             <p v-if="nodeError" class="form-error">{{ nodeError }}</p>
           </section>
@@ -439,10 +612,45 @@ onMounted(() => void load());
             </ul>
           </section>
 
+          <section v-else-if="tab === 'exam'" class="card exam-reference-panel" data-testid="exam-reference-panel">
+            <p class="hint">索引仅记录来源提供的考点标签；标签不是官方命题标注，可能存在分类争议。需要练习请打开原卷核对题号。</p>
+            <p v-if="examReferenceGroups.length === 0" class="state state--empty">这个知识点暂时没有已导入的历年题号。</p>
+            <details v-for="(group, index) in examReferenceGroups" :key="group.year" class="exam-year" :open="index === 0">
+              <summary>{{ group.year }} 年 · {{ group.references.length }} 条题号关联</summary>
+              <ul class="exam-reference-list">
+                <li v-for="reference in group.references" :key="reference.id" class="exam-reference-item">
+                  <div class="exam-reference-item__heading">
+                    <strong>第 {{ reference.question_number }} 题</strong>
+                    <span>{{ reference.subject }}</span>
+                    <span v-if="reference.topic_label">{{ reference.topic_label }}</span>
+                  </div>
+                  <p v-if="reference.source_topic_label !== reference.topic_label" class="hint">原索引标签：{{ reference.source_topic_label }}</p>
+                  <div class="exam-reference-item__sources">
+                    <a v-if="reference.question_source_url" :href="reference.question_source_url" target="_blank" rel="noopener noreferrer">打开题目来源 ↗</a>
+                    <a v-if="reference.topic_source_url" :href="reference.topic_source_url" target="_blank" rel="noopener noreferrer">查看标签来源 ↗</a>
+                    <span>本地原卷目录：桌面 / 考研知识点 / {{ reference.local_folder }}</span>
+                  </div>
+                  <p class="hint">{{ reference.source_note }}</p>
+                  <button
+                    type="button"
+                    class="exam-reference-add"
+                    :disabled="addingExamReferenceId === reference.id || queuedExamReferenceIds.has(reference.id)"
+                    :data-testid="`add-exam-reference-${reference.id}`"
+                    @click="addExamReference(reference)"
+                  >
+                    {{ queuedExamReferenceIds.has(reference.id) ? "已在今日学习" : addingExamReferenceId === reference.id ? "正在加入…" : "加入今日学习" }}
+                  </button>
+                </li>
+              </ul>
+            </details>
+            <p v-if="examReferenceNotice" class="notice" data-testid="exam-reference-notice">{{ examReferenceNotice }}</p>
+            <p v-if="examReferenceError" class="form-error" data-testid="exam-reference-error">{{ examReferenceError }}</p>
+          </section>
+
           <!-- 关联资料 -->
           <section v-else class="card" data-testid="panel-materials">
-            <p v-if="!detail.materials_ready" class="state state--empty">
-              资料索引接入后可显示该知识点的关联资料片段。
+            <p class="state state--empty">
+              系统讲解可从「概览」打开；这里暂不自动匹配上传资料，避免把不相关的内容误标为关联。
             </p>
           </section>
         </div>
@@ -473,6 +681,7 @@ onMounted(() => void load());
 .tree-node--selected { background: #f0f1f2 !important; }
 .tree-progress, .tree-leaf-state { flex: 0 0 auto; margin-left: 4px; color: var(--text-tertiary); font-size: 11px; white-space: nowrap; }
 .tree-leaf-state { display: inline-flex; align-items: center; gap: 5px; }
+.tree-leaf-state--reference { color: #617d6a; }
 .tree-leaf-dot { width: 6px; height: 6px; border-radius: 50%; background: #b9bbbe; }
 .tree-leaf-state.tone--mastered .tree-leaf-dot { background: var(--success); }
 .tree-leaf-state.tone--consolidating .tree-leaf-dot { background: var(--warning); }
@@ -527,4 +736,46 @@ onMounted(() => void load());
   .tree-viewport { min-height: 380px; max-height: 55vh; }
   .detail { margin-top: 20px; }
 }
-.tree-viewport { border: 1px solid var(--border); border-radius: 14px; }</style>
+.tree-viewport { border: 1px solid var(--border); border-radius: 14px; }
+.knowledge-lesson-link { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 18px; border: 1px solid var(--border); border-radius: 12px; color: var(--text); text-decoration: none; }
+.knowledge-lesson-link:hover, .knowledge-lesson-link:focus-visible { border-color: #a9c8e6; background: #f7fbff; }
+.knowledge-lesson-link__body { display: grid; flex: 1; gap: 3px; }
+.knowledge-lesson-link__body strong { font-size: 14px; font-weight: 600; }
+.knowledge-lesson-link__body small { color: var(--text-secondary); font-size: 12px; }
+.tree-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.tree-heading > div { display: flex; align-items: baseline; gap: 12px; }
+.tree-heading span { color: var(--text-tertiary); font-size: 12px; }
+.tree-collapse, .tree-toolbar button { padding: 5px 9px; border: 0; border-radius: 8px; background: transparent; color: var(--text-secondary); font-size: 12px; }
+.tree-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.tree-toolbar input { width: min(340px, 100%); min-width: 0; min-height: 36px; padding: 7px 12px; border: 1px solid #e5eaf0; border-radius: 10px; background: #fafcfe; font-size: 13px; }
+.tree-toolbar select { width: auto; max-width: 180px; min-height: 36px; padding: 5px 10px; border: 1px solid #e5eaf0; border-radius: 10px; background: #fff; font-size: 12px; }
+.tree-viewport { min-height: 400px; background: radial-gradient(#e9edf1 .7px, transparent .7px) 0 0 / 18px 18px; border-color: #e6ebef; }
+.tree-entry { border-color: #e1e9e6; box-shadow: 0 2px 7px rgb(36 57 48 / 3%); }
+.tree-entry--more { padding: 5px 10px; border: 0; background: #f5f8f7; box-shadow: none; }
+.tree-more { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; padding: 8px 0; border: 0; background: transparent; color: #456657; font-size: 12px; }
+.tree-more small { color: #809187; font-size: 10px; }
+.exam-reference-note { margin: -2px 0 10px; }
+.exam-reference-count { display: inline-flex; min-width: 18px; justify-content: center; margin-left: 3px; padding: 1px 5px; border-radius: 999px; background: #f0f3f6; color: var(--text-secondary); font-size: 10px; }
+.exam-reference-panel > .hint:first-child { margin-top: 0; }
+.exam-year { border-bottom: 1px solid var(--border); }
+.exam-year > summary { padding: 13px 0; color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer; }
+.exam-reference-list { margin: 0; padding: 0; list-style: none; }
+.exam-reference-item { padding: 12px 0; border-top: 1px solid var(--border); }
+.exam-reference-item__heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; font-size: 13px; }
+.exam-reference-item__heading > span { color: var(--text-secondary); }
+.exam-reference-item__sources { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 7px; font-size: 11px; }
+.exam-reference-item__sources a { color: #416d96; text-decoration: none; }
+.exam-reference-item__sources a:hover { text-decoration: underline; }
+.exam-reference-item .hint { margin: 5px 0 0; font-size: 11px; }
+.exam-reference-add { margin-top: 10px; padding: 6px 11px; border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--text-secondary); font-size: 12px; }
+.exam-reference-add:hover:not(:disabled) { border-color: #b8c9d9; color: #355b7d; background: #f6f9fc; }
+.exam-reference-add:disabled { cursor: default; opacity: .65; }
+.knowledge-breadcrumb { margin: 0 0 8px; color: var(--text-tertiary); font-size: 12px; overflow-wrap: anywhere; }
+.detail { margin-left: 0; margin-right: 0; }
+@media (max-width: 600px) {
+  .tree-toolbar { flex-wrap: wrap; }
+  .tree-toolbar input { flex: 1 1 200px; width: auto; }
+  .tree-viewport { min-height: 340px; }
+  .tree-heading > div { display: grid; gap: 3px; }
+}
+</style>

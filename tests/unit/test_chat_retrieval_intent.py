@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
+from uuid import uuid4
 
 from backend.chat.service import (
     Provider,
+    _prompt,
     build_chat_retrieval_plan,
     classify_answer_style,
     _is_overview_question,
@@ -108,6 +111,7 @@ def test_provider_classifier_uses_small_bounded_request(monkeypatch) -> None:
     ("question", "style", "full_document"),
     [
         ("什么是洛必达法则？", "brief", False),
+        ("洛必达法则是什么，如何使用，有哪些注意事项？", "normal", False),
         ("解释一下洛必达法则的适用条件", "normal", False),
         ("大概说一下验收文件讲了什么", "brief", True),
         ("每一个阶段都给我细讲一下", "detailed", True),
@@ -119,3 +123,74 @@ def test_answer_style_is_independent_from_document_coverage(
 ) -> None:
     assert classify_answer_style(question) == style
     assert _is_overview_question(question) is full_document
+
+
+def test_prompt_rejects_irrelevant_retrieval_and_requires_short_refusal() -> None:
+    hit = SimpleNamespace(
+        chunk_id=uuid4(),
+        content="等比级数在公比绝对值小于 1 时收敛。",
+        material_title="高等数学核心考点讲义",
+        heading_path=("级数", "等比级数"),
+    )
+
+    messages, _ = _prompt(
+        "TCP 拥塞控制是怎么工作的？",
+        [hit],
+        [],
+        mode="builtin",
+    )
+
+    system_prompt = messages[0]["content"]
+    assert "不得因片段出现在上下文中" in system_prompt
+    assert "## 通用知识参考" in system_prompt
+    assert "不要拼接无关片段" in system_prompt
+    assert "通用知识参考部分不得使用任何 [C数字] 引用" in system_prompt
+
+
+def test_overview_prompt_avoids_claiming_unseen_sections_are_absent() -> None:
+    hit = SimpleNamespace(
+        chunk_id=uuid4(),
+        content="阶段 A 完成基础结构和运行环境。",
+        material_title="阶段A验收笔记",
+        heading_path=("阶段 A",),
+    )
+
+    messages, _ = _prompt(
+        "请概述《阶段A验收笔记》的主要内容。",
+        [hit],
+        [],
+        mode="user",
+        full_document=True,
+    )
+
+    system_prompt = messages[0]["content"]
+    assert "所选资料全部可读取的已索引正文片段" in system_prompt
+    assert "不得仅因某章节或细节未在片段中出现" in system_prompt
+    assert "逐一回应用户明确提出的要求" in system_prompt
+
+
+def test_answer_prompt_requires_explicit_final_result() -> None:
+    hit = SimpleNamespace(
+        chunk_id=uuid4(),
+        content="某极限通过等价无穷小替换化简后等于 1/2。",
+        material_title="高等数学核心考点讲义",
+        heading_path=("极限", "等价无穷小"),
+    )
+
+    messages, _ = _prompt(
+        "这个等价无穷小替换的极限是多少？",
+        [hit],
+        [],
+        mode="builtin",
+    )
+
+    assert "必须明确给出最终结果" in messages[0]["content"]
+    assert "最多给一个自拟例子" in messages[0]["content"]
+    assert "补充说明且不附资料引用" in messages[0]["content"]
+
+
+@pytest.mark.parametrize("question", ["概述《阶段A验收笔记》。", "总结这份文件。", "概括文件的主要内容。"])
+def test_bare_document_overview_verbs_are_recognized(question: str) -> None:
+    from backend.chat.service import _is_overview_question
+
+    assert _is_overview_question(question) is True

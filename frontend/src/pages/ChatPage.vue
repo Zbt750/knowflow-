@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import {
@@ -22,6 +22,7 @@ import { appendQuestions, fetchToday } from "../api/study";
 import { isTodayActive, type TodayActive } from "../types/practice";
 import { useAsyncTask } from "../composables/useAsyncTask";
 import MarkdownContent from "../components/MarkdownContent.vue";
+import AppIcon from "../components/AppIcon.vue";
 
 defineOptions({ name: "ChatPage" });
 
@@ -38,6 +39,9 @@ const pageTask = useAsyncTask<void>(null, {
   fallbackMessage: "无法加载问答页面",
 });
 const loading = computed(() => pageTask.state.value === "loading");
+// 首次挂载时，按钮已进入 DOM 但页面初始化请求可能尚未开始；
+// 在初始化完成前禁止切换，避免早期点击被 onMounted 的默认会话模式覆盖。
+const pageInitialized = ref(false);
 // `error` 仍由页面持有：它的文案要按业务分支细分（新建会话失败、改名失败、
 // 删除失败、追练追加失败、上游未配置…），不适合塞进一个统一映射表。
 // 页面加载失败这一种情况由 pageTask.state==='error' 决定，见 onMounted。
@@ -46,13 +50,14 @@ const error = ref("");
 // 由流内多个分支（错误帧、断连、取消）决定何时复位，
 // 与「一次请求的 submitting」不是同一个语义，硬套 submit() 反而会藏掉流的状态。
 const sending = ref(false);
-type StreamStage = "retrieving" | "generating" | "streaming";
+type StreamStage = "retrieving" | "generating" | "streaming" | "recovering";
 const streamStage = ref<StreamStage>("retrieving");
 const activeStreamMessageId = ref<string | null>(null);
 const streamElapsedSeconds = ref(0);
 const streamStageLabel = computed(() => {
   if (streamStage.value === "retrieving") return "正在检索资料…";
   if (streamStage.value === "generating") return "资料已检索，正在组织回答…";
+  if (streamStage.value === "recovering") return "正在自动恢复完整回答…";
   return "正在输出回答…";
 });
 let streamTimer: number | null = null;
@@ -169,7 +174,7 @@ async function runContextAction(action: "rename" | "share" | "pin" | "delete"): 
 
 const currentModeLabel = computed(() => selectedMode.value === "user" ? "我的资料" : "内置资料");
 const hasReadyMaterials = computed(() => readyByMode.value[selectedMode.value] > 0);
-const canSend = computed(() => Boolean((question.value.trim() || quotedAnswers.value.length) && !sending.value && hasReadyMaterials.value));
+const canSend = computed(() => Boolean((question.value.trim() || quotedAnswers.value.length) && !sending.value && !loading.value));
 const questionIdsInTodayPlan = computed(() => new Set(todayPlan.value?.items.map((item) => item.question_id) ?? []));
 const canAppendFollowups = computed(() => Boolean(todayPlan.value && selectedFollowupIds.value.length && !appendingFollowups.value));
 
@@ -222,6 +227,10 @@ function onAnswerTextSelection(): void {
 function onSelectionPointerDown(event: PointerEvent): void {
   if (!(event.target instanceof Element)) return;
   if (event.target.closest(".selection-quote-action, .message-bubble--selectable")) return;
+  answerSelection.value = null;
+}
+function dismissSelectionAction(): void {
+  // 引用浮层按选中时的位置定位；滚动后主动收起，避免它漂离所选文本。
   answerSelection.value = null;
 }
 function addSelectedAnswerToComposer(): void {
@@ -296,17 +305,51 @@ async function refreshTodayPlan(): Promise<void> {
   const response = await fetchToday();
   todayPlan.value = isTodayActive(response) ? response : null;
 }
+let sessionLoadVersion = 0;
+const sessionLoading = ref(false);
 async function openSession(session: ChatSession): Promise<void> {
   if (sending.value) return;
+  const version = ++sessionLoadVersion;
+  sessionLoading.value = true;
   error.value = "";
   feedbackNotice.value = "";
   resetAnswerActions();
   clearQuotedAnswerContext();
   sessionId.value = session.session_id;
   selectedMode.value = session.mode;
-  messages.value = await fetchChatMessages(session.session_id);
+  messages.value = [];
+  try {
+    const items = await fetchChatMessages(session.session_id);
+    if (version !== sessionLoadVersion || sessionId.value !== session.session_id) return;
+    messages.value = items;
+  } catch (caught) {
+    if (version === sessionLoadVersion) error.value = caught instanceof ApiError ? caught.message : "无法读取会话，请稍后重试";
+    return;
+  } finally {
+    if (version === sessionLoadVersion) sessionLoading.value = false;
+  }
   if (route.query.session_id && route.query.session_id !== session.session_id) await router.replace({ path: "/chat" });
   await scrollToBottom();
+}
+
+async function syncRouteSession(): Promise<void> {
+  if (!route.path.startsWith("/chat") || loading.value) return;
+  const requestedId = typeof route.query.session_id === "string" ? route.query.session_id : null;
+  if (!requestedId || requestedId === sessionId.value || sending.value) return;
+  try {
+    const allSessions = await listChatSessions();
+    if (route.query.session_id !== requestedId || sending.value) return;
+    const target = allSessions.find((item) => item.session_id === requestedId);
+    if (!target) {
+      error.value = "分享的会话不存在或已删除";
+      return;
+    }
+    selectedMode.value = target.mode;
+    sessions.value = allSessions.filter((item) => item.mode === target.mode);
+    await openSession(target);
+  } catch (caught) {
+    error.value = caught instanceof ApiError ? caught.message : "无法读取分享的会话，请稍后重试";
+  }
 }
 /**
  * 开一段**尚未落库**的新对话。
@@ -316,6 +359,8 @@ async function openSession(session: ChatSession): Promise<void> {
  */
 function startDraft(): void {
   if (sending.value) return;
+  ++sessionLoadVersion;
+  sessionLoading.value = false;
   error.value = "";
   feedbackNotice.value = "";
   resetAnswerActions();
@@ -335,7 +380,7 @@ function startDraft(): void {
  * 会话在 `send()` 里才落库，所以历史里出现的每一条都至少问过一个问题。
  */
 async function changeScope(mode: ChatMode): Promise<void> {
-  if (sending.value) return;
+  if (sending.value || loading.value || !pageInitialized.value) return;
   selectedMode.value = mode;
   startDraft();
   await refreshSessions().catch(() => undefined);
@@ -386,15 +431,22 @@ async function copyAnswer(content: string): Promise<void> {
 }
 
 async function send(): Promise<void> {
-  if (sending.value || (!question.value.trim() && !quotedAnswers.value.length)) return;
-  if (!hasReadyMaterials.value) {
-    error.value = `当前「${currentModeLabel.value}」没有已完成索引的资料。请切换资料范围，或先到“资料”页完成上传和索引。`;
+  if (sessionLoading.value) {
+    error.value = "正在读取会话，请稍后发送。输入内容已保留。";
     return;
   }
+  if (sending.value || (!question.value.trim() && !quotedAnswers.value.length)) return;
   const quoteContext = quotedAnswers.value.map((item) =>
     "引用的回答片段：\n" + item.text.split("\n").map((line) => "> " + line).join("\n"),
   ).join("\n\n");
   const text = [quoteContext, question.value.trim()].filter(Boolean).join("\n\n");
+  if (Array.from(text).length > 4000) {
+    error.value = "问题与引用合计不能超过 4000 字，请缩短问题或移除部分引用。输入内容已保留。";
+    return;
+  }
+  const draft = question.value;
+  const draftQuotes = [...quotedAnswers.value];
+  let accepted = false;
   error.value = "";
   feedbackNotice.value = "";
   resetAnswerActions();
@@ -429,13 +481,15 @@ async function send(): Promise<void> {
   try {
     await streamChatAnswer(id, text, async (event, data) => {
       if (event === "meta") {
+        accepted = true;
         assistant.message_id = String(data.message_id);
         activeStreamMessageId.value = assistant.message_id;
         streamStage.value = "generating";
       }
       if (event === "delta") {
-        streamStage.value = "streaming";
-        assistant.content += String(data.text ?? "");
+        streamStage.value = data.recovering === true ? "recovering" : "streaming";
+        if (data.replace === true) assistant.content = String(data.text ?? "");
+        else assistant.content += String(data.text ?? "");
         await scrollToBottom();
       }
       if (event === "citations") {
@@ -443,6 +497,8 @@ async function send(): Promise<void> {
       }
       if (event === "done") {
         assistant.status = "completed";
+        if (typeof data.answer === "string") assistant.content = data.answer;
+        assistant.answer_source = (data.answer_source as ChatMessage["answer_source"]) ?? null;
         assistant.response_duration_ms = typeof data.response_duration_ms === "number" ? data.response_duration_ms : null;
         assistant.matched_kp_id = data.matched_kp_id ? String(data.matched_kp_id) : null;
         // 归因依据由后端给出并落库，前端只负责显示，不自己算。
@@ -456,7 +512,9 @@ async function send(): Promise<void> {
         const code = String(data.code ?? "");
         error.value =
           code === "llm_not_configured"
-            ? "尚未配置问答模型：请在项目根目录的 .env 里配置 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL 后重启后端。"
+            ? "尚未配置问答模型：请打开左下角设置，填写并保存模型配置。"
+            : code === "answer_truncated"
+              ? "自动恢复后仍达到模型输出上限。已保留未完成内容，请检查设置中的模型与输出预算后重试。"
             : code === "retrieval_timeout"
               ? "资料检索超过 30 秒，已停止本次请求。请确认资料已完成索引，或缩小问题范围后重试。"
             : code === "retrieval_failed"
@@ -477,7 +535,9 @@ async function send(): Promise<void> {
       if (caught instanceof ApiError) {
         error.value =
           caught.code === "llm_not_configured"
-            ? "尚未配置问答模型：请在项目根目录的 .env 里配置 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL 后重启后端。"
+            ? "尚未配置问答模型：请打开左下角设置，填写并保存模型配置。"
+            : caught.code === "answer_truncated"
+              ? "自动恢复后仍达到模型输出上限。已保留未完成内容，请检查设置中的模型与输出预算后重试。"
             : caught.code === "retrieval_timeout"
               ? "资料检索超过 30 秒，已停止本次请求。请确认资料已完成索引，或缩小问题范围后重试。"
             : caught.message;
@@ -486,13 +546,17 @@ async function send(): Promise<void> {
       }
     }
   } finally {
-    sending.value = false;
+    if (!accepted && !question.value && !quotedAnswers.value.length) {
+      question.value = draft;
+      quotedAnswers.value = draftQuotes;
+    }
     activeStreamMessageId.value = null;
     stopStreamTimer();
     controller = null;
     await refreshSessions().catch(() => undefined);
     await fetchChatMessages(id).then((items) => { if (sessionId.value === id) messages.value = items; }).catch(() => undefined);
     await scrollToBottom();
+    sending.value = false;
   }
 }
 function cancel(): void {
@@ -568,37 +632,45 @@ async function appendSelectedFollowups(): Promise<void> {
   }
 }
 onMounted(async () => {
-  await pageTask.run(async () => {
-    await Promise.all([refreshMaterials(), refreshTodayPlan()]);
-    // 先不带 mode 取一次历史：**最近用过的那条会话的模式**就是用户上次待的地方，
-    // 用它作为默认范围。这样刷新页面会回到原处，而不是每次跳回另一个范围。
-    const recent = await listChatSessions();
-    const fallback: ChatMode = readyByMode.value.user > 0 || readyByMode.value.builtin === 0 ? "user" : "builtin";
-    const sharedId = typeof route.query.session_id === "string" ? route.query.session_id : null;
-    const initial = sharedId ? recent.find((item) => item.session_id === sharedId) : recent[0];
-    selectedMode.value = initial?.mode ?? fallback;
-    await refreshSessions();
-    // 分享链接优先打开指定会话；普通访问仍回到最近使用的会话。
-    if (initial) await openSession(initial);
-    else startDraft();
-    if (sharedId && !initial) error.value = "分享的会话不存在或已删除";
-  });
-  // 页面级加载失败：把统一状态给出的文案（含非 ApiError 的兜底）接到页面提示上。
-  if (pageTask.state.value === "error") error.value = pageTask.errorMessage.value ?? "无法加载问答页面";
+  try {
+    await pageTask.run(async () => {
+      await Promise.all([refreshMaterials(), refreshTodayPlan()]);
+      // 先不带 mode 取一次历史：**最近用过的那条会话的模式**就是用户上次待的地方，
+      // 用它作为默认范围。这样刷新页面会回到原处，而不是每次跳回另一个范围。
+      const recent = await listChatSessions();
+      const fallback: ChatMode = readyByMode.value.user > 0 || readyByMode.value.builtin === 0 ? "user" : "builtin";
+      const sharedId = typeof route.query.session_id === "string" ? route.query.session_id : null;
+      const initial = sharedId ? recent.find((item) => item.session_id === sharedId) : recent[0];
+      selectedMode.value = initial?.mode ?? fallback;
+      await refreshSessions();
+      // 分享链接优先打开指定会话；普通访问仍回到最近使用的会话。
+      if (initial) await openSession(initial);
+      else startDraft();
+      if (sharedId && !initial) error.value = "分享的会话不存在或已删除";
+    });
+    // 页面级加载失败：把统一状态给出的文案（含非 ApiError 的兜底）接到页面提示上。
+    if (pageTask.state.value === "error") error.value = pageTask.errorMessage.value ?? "无法加载问答页面";
+  } finally {
+    pageInitialized.value = true;
+  }
 });
 onMounted(() => {
   loadPinnedSessions();
   window.addEventListener("resize", updateSidebarMode);
   document.addEventListener("pointerdown", onDocumentPointerDown);
   document.addEventListener("pointerdown", onSelectionPointerDown);
+  window.addEventListener("scroll", dismissSelectionAction, true);
   window.addEventListener("keydown", onContextMenuEscape);
 });
+watch(() => route.query.session_id, () => { void syncRouteSession(); });
+onActivated(() => { void syncRouteSession(); });
 onBeforeUnmount(() => {
   controller?.abort();
   stopStreamTimer();
   window.removeEventListener("resize", updateSidebarMode);
   document.removeEventListener("pointerdown", onDocumentPointerDown);
   document.removeEventListener("pointerdown", onSelectionPointerDown);
+  window.removeEventListener("scroll", dismissSelectionAction, true);
   window.removeEventListener("keydown", onContextMenuEscape);
 });
 </script>
@@ -609,12 +681,14 @@ onBeforeUnmount(() => {
     <aside class="conversation-sidebar" aria-label="会话历史">
       <div class="sidebar-head">
         <h2>对话</h2>
-        <button class="icon-button" type="button" title="新建对话" :disabled="sending" @click="startDraft">＋</button>
+        <button class="icon-button" type="button" title="新建对话" :disabled="sending || loading" @click="startDraft">＋</button>
       </div>
       <div class="scope-picker" aria-label="选择资料范围">
-        <button type="button" class="scope-switch" data-testid="scope-switch" :disabled="sending" :aria-label="`当前${currentModeLabel}，切换到${selectedMode === 'user' ? '内置资料' : '我的资料'}`" @click="changeScope(selectedMode === 'user' ? 'builtin' : 'user')">
-          <span>当前：{{ currentModeLabel }} <small>{{ readyByMode[selectedMode] }} 份</small></span>
-          <span aria-hidden="true">切换 ↕</span>
+        <span class="scope-picker__label">资料范围</span>
+        <button type="button" class="scope-switch" data-testid="scope-switch" :disabled="sending || loading || !pageInitialized" :aria-label="`当前${currentModeLabel}，切换到${selectedMode === 'user' ? '内置资料' : '我的资料'}`" @click="changeScope(selectedMode === 'user' ? 'builtin' : 'user')">
+          <span class="scope-switch__icon" aria-hidden="true"><AppIcon name="book" :size="17" /></span>
+          <span class="scope-switch__text"><strong>当前：{{ currentModeLabel }}</strong><small>{{ readyByMode[selectedMode] }} 份可检索资料</small></span>
+          <span class="scope-switch__change" aria-hidden="true">切换 <span class="scope-switch__chevron">↔</span></span>
         </button>
       </div>
       <div class="history-label">历史会话</div>
@@ -649,11 +723,11 @@ onBeforeUnmount(() => {
       <p v-if="error" class="chat-notice chat-notice--error" role="alert">{{ error }} <RouterLink v-if="error.includes('尚未配置问答模型')" to="/settings">查看设置</RouterLink></p>
       <p v-if="feedbackNotice" class="chat-notice chat-notice--success">{{ feedbackNotice }}</p>
       <p v-if="!hasReadyMaterials" class="chat-notice chat-notice--setup">
-        当前范围没有已经完成索引的资料。<RouterLink to="/materials">去资料页上传、查看索引状态或切换资料范围</RouterLink>。
+        当前范围暂无可检索资料，仍可提问并获得通用知识参考。需要依据文件回答时，请先<RouterLink to="/materials">添加资料并完成索引</RouterLink>。
       </p>
 
       <section ref="scrollBox" class="messages" aria-live="polite" :aria-busy="sending" @mouseup="onAnswerTextSelection" @keyup="onAnswerTextSelection">
-        <div v-if="loading" class="empty-state">正在读取会话和资料状态…</div>
+        <div v-if="loading || sessionLoading" class="empty-state">{{ loading ? "正在读取会话和资料状态…" : "正在读取对话…" }}</div>
         <div v-else-if="messages.length === 0" class="empty-state">
           <strong>从一个资料内的问题开始</strong>
           <span>例如：这份资料中，阶段 D 的 SSE 事件顺序是什么？</span>
@@ -664,6 +738,9 @@ onBeforeUnmount(() => {
           <div class="message-avatar" aria-hidden="true">{{ message.role === "user" ? "你" : "AI" }}</div>
           <div class="message-body">
             <div class="message-meta">{{ message.role === "user" ? "你的问题" : "资料问答助手" }}</div>
+            <p v-if="message.role === 'assistant' && (message.answer_source === 'general' || message.answer_source === 'mixed')" class="message-meta" data-testid="answer-source">
+              {{ message.answer_source === 'general' ? '通用知识参考 · 非资料结论' : '资料依据 + 通用知识参考' }}
+            </p>
             <div v-if="message.role === 'assistant' && message.status === 'generating'" class="response-progress" role="status" data-testid="response-progress">
               <span v-if="message.message_id === activeStreamMessageId" class="response-progress__dots" aria-hidden="true"><i></i><i></i><i></i></span>
               <span>{{ message.message_id === activeStreamMessageId ? streamStageLabel : "这次回答尚未完成。" }}</span>
@@ -778,8 +855,8 @@ onBeforeUnmount(() => {
           <button type="button" class="composer-suggestions__skip" data-testid="action-skip" @click="skipSuggestions">跳过</button>
         </div>
         <label class="sr-only" for="chat-question">你的问题</label>
-        <textarea id="chat-question" v-model="question" :disabled="sending" maxlength="4000" rows="1" placeholder="输入问题，或先选中回答内容作为引用…" @keydown.enter.exact.prevent="send" />
-        <div class="composer-footer"><small>{{ hasReadyMaterials ? `将在「${currentModeLabel}」内检索` : "请先选择含有已索引资料的范围" }}</small><div><button v-if="sending" type="button" @click="cancel">停止生成</button><button class="send-button" type="submit" :disabled="!canSend">发送</button></div></div>
+        <textarea id="chat-question" v-model="question" :disabled="sending || loading" maxlength="4000" rows="1" placeholder="输入问题，或先选中回答内容作为引用…" @keydown.enter.exact.prevent="send" />
+        <div class="composer-footer"><small>{{ hasReadyMaterials ? `优先依据「${currentModeLabel}」，不足时标明通用参考` : "无资料依据时提供通用知识参考" }}</small><div><button v-if="sending" type="button" @click="cancel">停止生成</button><button class="send-button" type="submit" :disabled="!canSend">发送</button></div></div>
       </form>
     </main>
     <Teleport to="body">
@@ -1034,5 +1111,23 @@ onBeforeUnmount(() => {
 @media (max-width: 760px) {
   .conversation-row { flex: 0 0 176px; }
   .conversation-item { min-height: 48px; }
+}
+.scope-picker { margin: 13px 2px 17px; container-type: inline-size; }
+.scope-picker__label { display: block; margin: 0 5px 7px; color: var(--text-tertiary); font-size: 11px; }
+.scope-picker .scope-switch { display: flex; align-items: center; gap: 9px; min-height: 59px; padding: 9px 10px; border: 1px solid #d6e2ef; border-radius: 11px; background: rgba(255, 255, 255, .9); text-align: left; }
+.scope-picker .scope-switch:hover:not(:disabled) { border-color: #a9c3df; background: #fff; }
+.scope-picker .scope-switch:focus-visible { outline: 2px solid #8fb4dc; outline-offset: 2px; }
+.scope-switch__icon { display: grid; flex: 0 0 30px; width: 30px; height: 30px; place-items: center; border-radius: 8px; color: #52769c; background: #edf4fc; }
+.scope-switch__text { display: grid; flex: 1; min-width: 0; gap: 2px; margin: 0 !important; }
+.scope-switch__text strong { color: var(--text); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.scope-switch__text small { margin: 0; color: var(--text-tertiary); font-size: 10px; white-space: nowrap; }
+.scope-picker .scope-switch__change { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; margin: 0; color: #647d99; font-size: 10px; }
+.scope-switch__chevron { font-size: 14px; line-height: 1; }
+@container (max-width: 190px) { .scope-picker .scope-switch__change { display: none; } }
+@container (max-width: 145px) { .scope-picker .scope-switch__icon { display: none; } }
+@media (max-width: 760px) {
+  .scope-picker { width: min(300px, 100%); margin: 6px 0; }
+  .scope-picker__label { display: none; }
+  .scope-picker .scope-switch { min-height: 48px; padding: 6px 9px; }
 }
 </style>

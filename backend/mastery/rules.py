@@ -175,6 +175,7 @@ _TYPE_LABELS: dict[str, str] = {
     "calculation": "计算大题",
     "proof": "证明题",
     "subjective": "主观题",
+    "external_exam": "历年真题",
 }
 
 

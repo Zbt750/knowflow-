@@ -1,6 +1,7 @@
 import { api } from "./client";
 import type {
   AssessmentResponse,
+  KnowledgeLessonResponse,
   KnowledgeNodeDetail,
   KnowledgeTreeResponse,
   NodeSelfAssessmentResponse,
@@ -27,6 +28,12 @@ export function generateTodayPlan(
 export function appendQuestions(planId: string, questionIds: string[]): Promise<TodayResponse> {
   return api.post<TodayResponse>(`/api/plans/${planId}/questions`, {
     question_ids: questionIds,
+  });
+}
+
+export function appendExamReferencesToday(referenceIds: string[]): Promise<TodayResponse> {
+  return api.post<TodayResponse>("/api/plans/today/exam-references", {
+    reference_ids: referenceIds,
   });
 }
 
@@ -57,6 +64,10 @@ export function fetchKnowledgeTree(): Promise<KnowledgeTreeResponse> {
 
 export function fetchKnowledgeNode(kpId: string): Promise<KnowledgeNodeDetail> {
   return api.get<KnowledgeNodeDetail>(`/api/knowledge/${kpId}`);
+}
+
+export function fetchKnowledgeLesson(code: string): Promise<KnowledgeLessonResponse> {
+  return api.get<KnowledgeLessonResponse>("/api/knowledge/lessons/" + encodeURIComponent(code));
 }
 
 export function submitNodeSelfAssessment(

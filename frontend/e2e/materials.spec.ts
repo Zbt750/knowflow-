@@ -43,7 +43,8 @@ async function uploadLecture(page: import("@playwright/test").Page): Promise<str
   );
 
   await page.goto("/materials");
-  await expect(page.getByTestId("materials-page")).toBeVisible();
+  // 首次进入会加载懒加载页面模块；允许冷启动/编译波动，但仍会在 30 秒后明确失败。
+  await expect(page.getByTestId("materials-page")).toBeVisible({ timeout: 30_000 });
 
   const fileChooser = page.waitForEvent("filechooser");
   await page.getByTestId("upload-toggle").click();

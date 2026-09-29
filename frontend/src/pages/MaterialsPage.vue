@@ -70,6 +70,7 @@ const router = useRouter();
 const focusedChunkId = ref<string | null>(null);
 
 let pollTimer: number | null = null;
+let uploadController: AbortController | null = null;
 
 
 const materials = computed(() => list.data.value?.items ?? []);
@@ -81,6 +82,16 @@ const searchQuery = ref("");
 let searchTimer: number | null = null;
 let listRequestToken = 0;
 const pageCount = computed(() => Math.max(1, Math.ceil((list.data.value?.total ?? 0) / PAGE_SIZE)));
+const pageNumbers = computed(() => {
+  const start = Math.max(1, Math.min(currentPage.value - 2, pageCount.value - 4));
+  return Array.from({ length: Math.min(5, pageCount.value) }, (_, index) => start + index);
+});
+const entryRange = computed(() => {
+  const total = list.data.value?.total ?? 0;
+  if (!total) return "暂无资料";
+  const first = (currentPage.value - 1) * PAGE_SIZE + 1;
+  return `${first}–${Math.min(first + materials.value.length - 1, total)} / ${total} 份`;
+});
 const visibleMaterials = materials;
 /** 有资料正在处理时才需要轮询，避免空转请求。 */
 const hasPending = computed(() =>
@@ -108,6 +119,8 @@ async function loadList(preserveSelection = true): Promise<void> {
   });
   if (token !== listRequestToken) return;
   if (!result) return;
+  // 搜索请求也会改变当前页内的处理状态；不要只在初次挂载时启动轮询。
+  syncPolling();
   if (!result.items.length && result.total > 0 && currentPage.value > 1) {
     currentPage.value = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
     await loadList(false);
@@ -200,7 +213,7 @@ async function syncUrlQuery(materialId: string, chunkId: string | null, restore:
 }
 
 async function goToPage(page: number): Promise<void> {
-  if (page < 1 || page > pageCount.value || page === currentPage.value) return;
+  if (isBusy.value || page < 1 || page > pageCount.value || page === currentPage.value) return;
   currentPage.value = page;
   showDetail.value = false;
   await loadList(false);
@@ -228,12 +241,12 @@ async function refreshQuietly(): Promise<void> {
     const response = await listMaterials(PAGE_SIZE, (page - 1) * PAGE_SIZE, query);
     if (token !== listRequestToken) throw new StaleResponse();
     return response;
-  });
+  }, { keepPreviousData: true });
   if (token !== listRequestToken) return;
   const current = selectedId.value;
   if (result && current) {
     // 先取出到局部变量，Promise 回调里才能安全使用（此时可能已被改成 null）。
-    const material = await detail.run(() => getMaterial(current));
+    const material = await detail.run(() => getMaterial(current), { keepPreviousData: true });
     // ready 但块列表还是空，说明刚刚处理完（或块列表请求还没跟上）—— 补一次请求。
     // 判据用「块列表是否已有内容」而不是「状态是否刚变化」：
     // 后者需要额外记录上次状态，容易在 selectMaterial 等路径上漏记而失效。
@@ -249,6 +262,14 @@ async function refreshQuietly(): Promise<void> {
 }
 
 function cancelUpload(): void {
+  const wasUploading = upload.submitting.value;
+  uploadController?.abort();
+  uploadController = null;
+  if (wasUploading) {
+    // 取消浏览器到服务端的上传请求；如果服务端已完整收到并提交，任务仍可能继续。
+    upload.reset();
+    uploadNotice.value = "已取消上传请求。若文件已完整送达服务端，资料仍可能进入列表。";
+  }
   selectedFile.value = null;
   uploadTitle.value = "";
   actionError.value = null;
@@ -292,10 +313,14 @@ async function submitUpload(): Promise<void> {
     return;
   }
 
+  const controller = new AbortController();
+  uploadController = controller;
   const created = await upload.submit(() =>
-    uploadMaterial(file, uploadTitle.value.trim(), "user"),
+    uploadMaterial(file, uploadTitle.value.trim(), "user", controller.signal),
   );
+  if (uploadController === controller) uploadController = null;
   if (!created) {
+    if (controller.signal.aborted) return;
     actionError.value = errorText(upload.errorCode.value, upload.errorMessage.value);
     return;
   }
@@ -390,6 +415,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  uploadController?.abort();
+  uploadController = null;
   window.removeEventListener("keydown", handleKeydown);
   if (pollTimer !== null) window.clearInterval(pollTimer);
   pollTimer = null;
@@ -400,7 +427,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="page materials-page" data-testid="materials-page">
     <header class="materials-header">
-      <div><p>阅读和管理已收录的资料。</p></div>
+      <div><p>选择资料，直接阅读正文。</p></div>
       <div class="materials-header-actions">
         <button type="button" class="refresh-button" :disabled="isBusy" @click="loadList(true)">刷新</button>
         <button type="button" class="upload-toggle" data-testid="upload-toggle" @click="fileInput?.click()">添加资料</button>
@@ -418,7 +445,7 @@ onBeforeUnmount(() => {
       <div class="upload-selection"><strong>{{ selectedFile.name }}</strong><span>{{ formatBytes(selectedFile.size) }}</span></div>
       <label class="field field--title"><span>资料标题</span><input v-model="uploadTitle" type="text" maxlength="200" placeholder="资料标题" data-testid="upload-title" /></label>
       <button type="submit" class="primary upload-submit" :disabled="isBusy" data-testid="upload-submit">{{ upload.submitting.value ? "上传中…" : "确认上传" }}</button>
-      <button type="button" class="upload-cancel" @click="cancelUpload">取消</button>
+      <button type="button" class="upload-cancel" data-testid="upload-cancel" @click="cancelUpload">{{ upload.submitting.value ? "取消上传" : "取消" }}</button>
       <p v-if="actionError" class="form-error" data-testid="action-error">{{ actionError }}</p>
     </form>
     <p v-if="uploadNotice && !selectedFile" class="notice upload-brief-notice" data-testid="upload-notice">{{ uploadNotice }}</p>
@@ -441,25 +468,34 @@ onBeforeUnmount(() => {
               <span class="file-glyph" aria-hidden="true"></span>
               <span class="material-item__main">
                 <span class="material-item__title">{{ item.title }}</span>
+                <span class="material-item__sub">{{ item.source_type === "builtin" ? "系统资料" : "我的资料" }}<template v-if="item.original_filename"> · {{ item.original_filename }}</template></span>
                 <span v-if="item.last_error_code" class="material-item__error">{{ materialErrorLabel(item.last_error_code) }}</span>
               </span>
               <span class="material-status" :class="materialStatusClass(item.status)">{{ materialStatusLabel(item.status) }}</span>
-              <button type="button" class="material-view" :aria-label="'查看' + item.title" @click="openMaterial(item.id)">查看</button>
+              <button type="button" class="material-view" :aria-label="'查看' + item.title" @click="openMaterial(item.id)">阅读 <span aria-hidden="true">→</span></button>
             </div>
           </li>
         </ul>
-        <nav v-if="pageCount > 1" class="materials-pagination" aria-label="资料分页">
-          <button type="button" :disabled="currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
-          <span>第 {{ currentPage }} / {{ pageCount }} 页</span>
-          <button type="button" :disabled="currentPage === pageCount" @click="goToPage(currentPage + 1)">下一页</button>
+        <nav v-if="list.state.value === 'success'" class="materials-pagination" aria-label="资料分页" data-testid="materials-pagination">
+          <span class="materials-entry-range">{{ entryRange }}</span>
+          <div class="materials-page-buttons">
+            <button type="button" :disabled="isBusy || currentPage === 1" @click="goToPage(currentPage - 1)">上一页</button>
+            <button v-if="pageNumbers[0] > 1" type="button" aria-label="第 1 页" :disabled="isBusy" @click="goToPage(1)">1</button>
+            <span v-if="pageNumbers[0] > 2" aria-hidden="true">…</span>
+            <button v-for="page in pageNumbers" :key="page" type="button" :aria-label="`第 ${page} 页`" :aria-current="page === currentPage ? 'page' : undefined" :disabled="isBusy" @click="goToPage(page)">{{ page }}</button>
+            <span v-if="pageNumbers[pageNumbers.length - 1] < pageCount - 1" aria-hidden="true">…</span>
+            <button v-if="pageNumbers[pageNumbers.length - 1] < pageCount" type="button" :aria-label="`第 ${pageCount} 页`" :disabled="isBusy" @click="goToPage(pageCount)">{{ pageCount }}</button>
+            <button type="button" :disabled="isBusy || currentPage === pageCount" @click="goToPage(currentPage + 1)">下一页</button>
+          </div>
+          <span class="materials-page-status" aria-live="polite">第 {{ currentPage }} / {{ pageCount }} 页</span>
         </nav>
       </section>
     </div>
 
     <div v-if="showDetail" class="reader-backdrop" @click="closeDetail"></div>
     <aside v-if="showDetail" class="detail-panel" role="dialog" aria-modal="true" aria-label="资料阅读器">
-      <p v-if="detail.state.value === 'loading'" class="detail-empty">正在打开资料…</p>
-      <p v-else-if="!selected" class="detail-empty" data-testid="detail-empty">暂时无法读取这份资料。</p>
+      <p v-if="detail.state.value === 'loading' && (!selected || selected.id !== selectedId)" class="detail-empty">正在打开资料…</p>
+      <p v-else-if="!selected || selected.id !== selectedId" class="detail-empty" data-testid="detail-empty">暂时无法读取这份资料。</p>
       <div v-else data-testid="material-detail">
         <header class="detail-head">
           <div><h2 data-testid="detail-title">{{ selected.title }}</h2><p>{{ selected.original_filename ?? "资料" }}</p></div>
@@ -749,7 +785,62 @@ onBeforeUnmount(() => {
 .materials-list-head input { width: min(230px, 48%); min-height: 32px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 9px; background: #fff; font-size: 12px; }
 .materials-list-head input::placeholder { color: var(--text-tertiary); }
 .materials-pagination { border-radius: 0 0 14px 14px; }
+/* 资料列表以“打开阅读”为主，来源信息退到第二行。 */
+.materials-page { width: min(1080px, 100%); }
+.materials-header { align-items: center; margin: 3px 0 22px; }
+.materials-header p { margin: 0; color: var(--text-tertiary); font-size: 13px; }
+.materials-header-actions { gap: 10px; }
+.materials-header-actions .refresh-button { border-color: transparent; color: var(--text-secondary); background: transparent; }
+.materials-header-actions .refresh-button:hover:not(:disabled) { background: #f4f7fb; }
+.materials-header-actions .upload-toggle { min-height: 35px; padding-inline: 14px; border-radius: 9px; font-size: 12px; }
+.stats-row { gap: 7px 20px; margin-bottom: 16px; padding: 0 0 13px; border-bottom-color: #edf0f4; }
+.stats-row strong { font-size: 13px; }
+.stats-row small { font-size: 11px; }
+.list-panel { border-color: #e5eaf0; border-radius: 12px; }
+.materials-list-head { min-height: 68px; padding: 13px 18px; border-bottom-color: #edf0f4; }
+.materials-list-head h2 { font-size: 16px; }
+.materials-list-head input { width: min(250px, 46%); min-height: 35px; padding-inline: 12px; border-color: #e0e6ee; background: #fbfcfe; font-size: 12px; }
+.materials-list-head input:focus { border-color: #9bb9dc; background: #fff; outline: 2px solid #e3effc; }
+.material-list li:not(:last-child) { border-bottom-color: #edf0f4; }
+.material-item { grid-template-columns: 26px minmax(0, 1fr) 78px 65px; gap: 13px; min-height: 70px; padding: 10px 18px; }
+.material-item:hover:not(:disabled) { background: #f8fafc; }
+.material-item--selected, .material-item--selected:hover:not(:disabled) { background: #f3f8fe; }
+.file-glyph { width: 20px; height: 25px; border-color: #9eb2c7; border-radius: 3px; }
+.file-glyph::before { background: #a9bdcf; box-shadow: 0 4px #a9bdcf, 0 8px #a9bdcf; }
+.material-item__main { gap: 4px; }
+.material-item__title { font-size: 14px; font-weight: 570; }
+.material-item__sub { color: var(--text-tertiary); font-size: 11px; }
+.material-status { font-size: 11px; }
+.material-view { display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; min-height: 30px; color: #365c82; font-weight: 530; }
+.material-view:hover:not(:disabled) { color: #23476e; background: transparent; text-decoration: underline; }
+.materials-pagination { padding: 12px 0; border-top-color: #edf0f4; }
+.detail-panel { width: min(620px, 100vw); padding: 29px 36px 44px; box-shadow: -16px 0 45px rgba(20, 38, 58, .09); }
+.detail-head h2 { font-size: 20px; line-height: 1.4; }
+.reader-body { padding-top: 18px; }
+.reader-text { font-size: 15px; line-height: 1.9; }
 @media (max-width: 560px) {
   .materials-list-head input { width: min(170px, 53%); }
+  .materials-header { margin-bottom: 14px; }
+  .materials-header p { font-size: 12px; }
+  .material-item { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 9px; min-height: 66px; padding-inline: 12px; }
+  .material-item .material-view { padding-inline: 4px; }
+  .detail-panel { width: 100vw; padding: 20px 18px 36px; }
+}
+.materials-layout .list-panel { overflow: hidden; border: 1px solid #e8edf2; border-radius: 16px; background: #fff; box-shadow: 0 4px 24px rgb(25 43 65 / 3%); }
+.materials-list-head { padding: 18px 20px; background: #fcfdfe; }
+.materials-list-head input { border-radius: 9px; border-color: #e5eaf0; background: #fff; }
+.material-item { padding-block: 17px; }
+.materials-pagination { justify-content: space-between; gap: 12px; padding: 16px 20px; border-radius: 0; }
+.materials-page-buttons { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px; }
+.materials-page-buttons button { min-width: 30px; min-height: 30px; border-radius: 7px; font-variant-numeric: tabular-nums; }
+.materials-page-buttons button[aria-current="page"] { color: #345c85; background: #edf4fc; font-weight: 600; }
+.materials-entry-range, .materials-page-status { color: var(--text-tertiary); white-space: nowrap; font-size: 11px; }
+@media (max-width: 760px) {
+  .materials-pagination { flex-wrap: wrap; }
+  .materials-page-buttons { order: 3; flex-basis: 100%; }
+}
+@media (max-width: 560px) {
+  .materials-list-head { padding-inline: 12px; }
+  .materials-pagination { padding: 13px 12px; }
 }
 </style>
