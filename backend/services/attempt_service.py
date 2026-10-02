@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.mastery.enums import EventType, MasteryState, SelfGrade
-from backend.mastery.evidence import classify_evidence
 from backend.mastery.policy import MasteryPolicy
 from backend.mastery.rules import effective_confirmation_count
 from backend.mastery.storage import (
@@ -23,11 +22,11 @@ from backend.models.learning import (
     ExamQuestionReference,
     KpMasteryPolicy,
     KpState,
-    KnowledgePoint,
     LearningEvent,
     PracticeItem,
     QuestionAttempt,
 )
+from backend.services.practice_lock import lock_practice_item
 
 
 @dataclass(frozen=True)
@@ -78,6 +77,8 @@ def assess_practice_item(
         select(QuestionAttempt).where(QuestionAttempt.idempotency_key == idempotency_key)
     )
     if old_attempt is not None:
+        if old_attempt.practice_item_id != item_id or old_attempt.grading_evidence is not None:
+            raise ValueError("idempotency_key_conflict")
         # 前端网络超时重试时不再创建第二条历史，也不能再次累计毕业确认。
         state = session.get(KpState, old_attempt.kp_id)
         count = _count(snapshot_from_storage(state)) if state is not None else 0
@@ -89,9 +90,15 @@ def assess_practice_item(
         )
 
     # 先锁队列项和投影：同一题的重复提交必须串行，否则两次请求会同时读到旧窗口。
-    item = session.scalar(select(PracticeItem).where(PracticeItem.id == item_id).with_for_update())
-    if item is None:
-        raise ValueError("practice_item_not_found")
+    item = lock_practice_item(session, item_id)
+    # 等待锁期间另一请求可能已提交；重新查幂等记录，避免同 key 重试变成冲突。
+    repeated = session.scalar(select(QuestionAttempt).where(QuestionAttempt.idempotency_key == idempotency_key))
+    if repeated is not None:
+        if repeated.practice_item_id != item_id or repeated.grading_evidence is not None:
+            raise ValueError("idempotency_key_conflict")
+        state = session.get(KpState, repeated.kp_id)
+        return AssessmentResult(MasteryState(repeated.result_state), repeated.reason_code,
+                                repeated.next_review_at, _count(snapshot_from_storage(state)) if state else 0)
     if item.completed_at is not None:
         # 幂等重试已在函数开头按同 key 返回；换一个 key 再交同一题不是“重做”，必须拒绝。
         raise ValueError("practice_item_already_assessed")
@@ -110,11 +117,9 @@ def assess_practice_item(
     reference: ExamQuestionReference | None = item.exam_reference
     if question is None and reference is None:
         raise ValueError("practice_item_source_missing")
-    # 客观结果只是复盘参考：只有选择题在用户选了选项时才有 right/wrong。
-    objective_result = objective_result_for(
-        selected_option=selected_option,
-        correct_answer=question.correct_answer if question is not None else None,
-    )
+    # This endpoint is self-report only; even a selected option is not a verified
+    # machine verdict. The answer-submission endpoint owns objective grading.
+    objective_result = "unknown"
     attempt = QuestionAttempt(
         practice_item_id=item.id,
         question_id=question.id if question is not None else None,
@@ -133,25 +138,10 @@ def assess_practice_item(
     session.add(attempt)
     session.flush()  # 拿到 attempt.id，供 LearningEvent 的 source_id 审计关联。
 
-    # 按这个叶子自己的策略判定毕业：不同知识点的题型要求与门槛都不同。
+    # 复用投影事务，但自述不构造旧规则的 CONFIRMED 证据。
     policy = policy_from_storage(session.get(KpMasteryPolicy, item.kp_id))
-    kp = session.get(KnowledgePoint, item.kp_id)
-    evidence = classify_evidence(
-        self_grade=self_grade,
-        question_id=str(question.id if question is not None else reference.id),
-        is_variant=question.is_variant if question is not None else False,
-        occurred_at=now,
-        # 题型与考法必须进入证据，否则无法检查「题型覆盖」与「考法覆盖」。
-        question_type=question.question_type if question is not None else "external_exam",
-        skill_tags=(
-            tuple(question.skill_tags or ())
-            if question is not None
-            else tuple(dict.fromkeys((reference.topic_label, kp.name if kp is not None else "")))
-        ),
-        source="practice_item" if question is not None else "external_exam",
-    )
     event = DomainLearningEvent(
-        event_type=EventType.QUESTION_SELF_ASSESSED, occurred_at=now, evidence=evidence
+        event_type=EventType.PRACTICE_SELF_REPORTED, occurred_at=now, self_grade=self_grade
     )
     result = transition(snapshot_from_storage(kp_state), event, policy)
 
@@ -175,7 +165,7 @@ def assess_practice_item(
             kp_id=item.kp_id,
             source_id=attempt.id,
             event_type=event.event_type.value,
-            evidence_level=evidence.level.value,
+            evidence_level="weak",
             payload=snapshot_to_storage(result.snapshot, result.reason_code),
             occurred_at=now,  # NOT NULL；事件时间必须显式写，不能靠数据库默认值。
             idempotency_key=f"attempt:{idempotency_key}",  # 事件也只允许写一次。

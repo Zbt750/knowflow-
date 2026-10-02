@@ -1,0 +1,17 @@
+{
+  "version": "photo-handwriting-review-v1",
+  "dataset": "photo-handwriting-v1",
+  "reviewer": "Codex visual/content inspection, NOT independent teacher or human panel",
+  "live_prompt_version": "work-image-transcription-v1",
+  "current_prompt_version": "work-image-transcription-v2",
+  "current_prompt_live_retested": false,
+  "cases": [
+    {"id":"math","content":"Expected integral, limits, original incorrect antiderivative and arithmetic preserved","process_review":"Identified invalid antiderivative; did not treat coincidentally correct final value as correct process","format":"Equivalent LaTeX notation","needs_independent_review":true},
+    {"id":"proof","content":"Incorrect implication and assumption preserved rather than repaired","process_review":"Not called in this round","format":"Equivalent summation notation","needs_independent_review":true},
+    {"id":"code","content":"Boundary update bug, comparison and ordering preserved","process_review":"Identified possible nontermination from l=mid and r=mid","format":"BAD CASE: LaTeX-wrapped pseudocode is awkward to edit; v2 prompt fix offline only","needs_independent_review":true},
+    {"id":"symbols","content":"Radical extent, denominator, domain restriction, limit, negative matrix entry and row layout preserved","process_review":"Not called in this round","format":"Shared Markdown stripped delimiters: reproduced and fixed; recorded-output UI regression passes","needs_independent_review":true},
+    {"id":"discussion","content":"All three p cases, convergence/divergence, limits and conditional value preserved","process_review":"Not called in this round","format":"Equivalent LaTeX notation","needs_independent_review":true},
+    {"id":"blur","content":"Unreadable result explicitly marked, not inferred from visible integral","process_review":"Not called in this round","format":"No hallucinated numeric result in this sample","needs_independent_review":true}
+  ],
+  "limitations": ["Six AI-generated photos are not real student handwriting distribution", "No CER/WER or universal accuracy claim", "No photo auto-grading", "Prompt v2 still needs authorized live retest", "Physical mobile camera flow not verified"]
+}

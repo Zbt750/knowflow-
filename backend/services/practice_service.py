@@ -233,6 +233,7 @@ def _candidates_for(
                 last_self_grade=latest_grade.get(row.id),
                 last_practiced_at=last_practiced.get(row.id),
                 confirmed=str(row.id) in confirmed_ids,
+                pending_objective_review=state is not None and str(row.id) in (state.pending_review_question_ids or []),
             )
         )
     return candidates

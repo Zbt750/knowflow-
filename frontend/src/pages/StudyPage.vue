@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
 import { ApiError } from "../api/client";
 import {
   appendQuestions,
-  fetchAnswer,
+  revealAnswer,
+  submitAnswer,
   fetchKnowledgeTree,
   fetchKnowledgeNode,
   generateTodayPlan,
@@ -21,6 +22,7 @@ import {
 } from "../lib/labels";
 import type {
   KnowledgeNodeView,
+  AnswerSubmissionResponse,
   PlanItemView,
   PracticeItemAnswer,
   SelfGrade,
@@ -29,6 +31,22 @@ import type {
   TodaySetup,
 } from "../types/practice";
 import StudyFocus from "../components/StudyFocus.vue";
+import SelfReportActions from "../components/SelfReportActions.vue";
+import ProcessReview from "../components/ProcessReview.vue";
+import { createProcessReviewState, type ProcessReviewState } from "../api/study";
+import { studySummary, wrongAnswerItems } from "../lib/studySummary";
+import { answerFeedback } from "../lib/answerFeedback";
+import { answerInputHint } from "../lib/answerInput";
+import { canRetryAnswer } from "../lib/attemptSequence";
+import AttemptHistory from "../components/AttemptHistory.vue";
+const processDrafts = reactive<Record<string, string>>({});
+const processStates = reactive<Record<string, ProcessReviewState>>({});
+function processState(id: string): ProcessReviewState {
+  if (!processStates[id]) processStates[id] = createProcessReviewState();
+  // 必须从 reactive 容器读取代理；赋值表达式返回的是未代理原对象。
+  return processStates[id];
+}
+const practiceSummary = computed(() => studySummary(active.value?.items ?? []));
 import KnowledgeQuestionPickerTree from "../components/KnowledgeQuestionPickerTree.vue";
 import KnowledgeScopeTree from "../components/KnowledgeScopeTree.vue";
 import { knowledgeSelection } from "../lib/knowledgeSelection";
@@ -102,6 +120,64 @@ const submittingId = ref<string | null>(null);
 const gradeNotice = ref<Record<string, string>>({});
 const gradeError = ref<Record<string, string>>({});
 const rawAnswers = ref<Record<string, string>>({});
+const answerConfidence = ref<Record<string, string>>({});
+const submissionKeys = new Map<string, { fingerprint: string; key: string }>();
+const retryAttempts = ref<Record<string, string>>({});
+
+function beginAnswerRetry(item: PlanItemView): void {
+  if (submittingId.value !== null || answerLoadingId.value !== null || !canRetryAnswer(item.answer_submission)) return;
+  retryAttempts.value[item.id] = item.answer_submission!.attempt_id;
+  submissionKeys.delete(item.id);
+  rawAnswers.value[item.id] = "";
+  delete selectedOptions.value[item.id];
+  answerConfidence.value[item.id] = "";
+  delete gradeError.value[item.id];
+  setAnswerOpen(item.id, false); // Exposure is sticky on the server; hiding cannot undo it.
+}
+
+function cancelAnswerRetry(item: PlanItemView): void {
+  if (submittingId.value !== null) return;
+  delete retryAttempts.value[item.id];
+  rawAnswers.value[item.id] = item.answer_submission?.raw_answer ?? "";
+  answerConfidence.value[item.id] = item.answer_submission?.confidence ?? "";
+  if (item.answer_submission?.selected_option) selectedOptions.value[item.id] = item.answer_submission.selected_option;
+  else delete selectedOptions.value[item.id];
+}
+
+async function submitFinalAnswer(item: PlanItemView): Promise<void> {
+  if (submittingId.value !== null || answerLoadingId.value !== null) return;
+  const raw = rawAnswers.value[item.id];
+  const option = selectedOptions.value[item.id];
+  const confidence = answerConfidence.value[item.id];
+  const previous = retryAttempts.value[item.id];
+  const fingerprint = JSON.stringify([raw ?? null, option ?? null, confidence || null, previous ?? null]);
+  let entry = submissionKeys.get(item.id);
+  if (!entry || entry.fingerprint !== fingerprint) {
+    entry = { fingerprint, key: newIdempotencyKey(`answer-${item.id}`) };
+    submissionKeys.set(item.id, entry);
+  }
+  submittingId.value = item.id;
+  delete gradeError.value[item.id];
+  try {
+    const result = await submitAnswer(item.id, entry.key, raw, option, confidence, previous);
+    // 保留已提交的当前题，直到用户主动继续；刷新不会把解析机会跳走。
+    if (mode.value === "focus") focusItemId.value = item.id;
+    item.completed = true;
+    item.completed_at = result.submitted_at;
+    item.answer_submission = result;
+    delete retryAttempts.value[item.id];
+    await load();
+  } catch (error) {
+    if (error instanceof ApiError && ["answer_attempt_conflict", "answer_retry_not_allowed", "answer_question_changed", "answer_attempt_limit"].includes(error.code ?? "")) {
+      delete retryAttempts.value[item.id];
+      gradeError.value[item.id] = error.message;
+      await load();
+    } else gradeError.value[item.id] = error instanceof ApiError && error.code === "practice_item_already_assessed"
+      ? "本题已提交，请刷新后查看记录。" : "提交未确认，请重试；同一答案不会重复记入。";
+  } finally {
+    submittingId.value = null;
+  }
+}
 // 选择题选中的选项；只作为客观结果参考，不参与掌握度与毕业判定。
 const selectedOptions = ref<Record<string, string>>({});
 // 专注模式的本地光标：跳过只换到下一题，不改变服务端完成状态或掌握度。
@@ -163,8 +239,18 @@ const orderedItems = computed(() => [...(active.value?.items ?? [])].sort((a, b)
   || a.ordinal - b.ordinal,
 ));
 const remainingItems = computed(() => orderedItems.value.filter((item) => !item.completed));
+const wrongItems = computed(() => wrongAnswerItems(orderedItems.value));
+async function revisitWrongAnswer(itemId: string): Promise<void> {
+  if (submittingId.value !== null || answerLoadingId.value !== null || !wrongItems.value.some(item => item.id === itemId)) return;
+  mode.value = "focus";
+  focusItemId.value = itemId;
+  await nextTick();
+  const question = document.querySelector<HTMLElement>('[data-testid="focus-question"]');
+  question?.scrollIntoView({ block: "start", behavior: "smooth" });
+  question?.focus({ preventScroll: true });
+}
 const currentItem = computed<PlanItemView | null>(() =>
-  remainingItems.value.find((item) => item.id === focusItemId.value)
+  orderedItems.value.find((item) => item.id === focusItemId.value)
   ?? remainingItems.value[0]
   ?? null,
 );
@@ -192,6 +278,15 @@ async function load(): Promise<void> {
   if (token !== loadToken) return;
   const data = today.value;
   if (data && state.value === "success") {
+    if (data.status !== "setup") {
+      for (const item of data.items) {
+        if (item.answer_submission && !retryAttempts.value[item.id]) {
+          rawAnswers.value[item.id] = item.answer_submission.raw_answer ?? "";
+          answerConfidence.value[item.id] = item.answer_submission.confidence ?? "";
+          if (item.answer_submission.selected_option) selectedOptions.value[item.id] = item.answer_submission.selected_option;
+        }
+      }
+    }
     if (data.status === "setup") {
       // 默认采用推荐范围；用户需要时再打开调整面板增减叶子。
       selectedKpIds.value = data.recommendations.map((item) => item.kp_id);
@@ -266,7 +361,7 @@ async function toggleAnswer(item: TodayActive["items"][number]): Promise<void> {
   }
   answerLoadingId.value = item.id;
   answerError.value = null;
-  const data = await answerTask.run(() => fetchAnswer(item.id));
+  const data = await answerTask.run(() => revealAnswer(item.id));
   if (data) {
     answers.value[item.id] = data;
     setAnswerOpen(item.id, true);
@@ -295,9 +390,7 @@ async function grade(item: PlanItemView, selfGrade: SelfGrade): Promise<void> {
         focusItemId.value = next?.id ?? null;
       }
     } else {
-      gradeNotice.value[item.id] = item.is_external_reference
-        ? "已记录。标记“已掌握”的不同真题会计入该知识点毕业进度。"
-        : "已记录，可在知识树查看掌握情况。";
+      gradeNotice.value[item.id] = "作答表现已记录。";
       // 只有在**专注模式**下才自动跳到下一道未完成题。
       //
       // 为什么不能无条件切 focus：用户可以在全卷模式下逐题自评，
@@ -724,23 +817,21 @@ onMounted(async () => {
         <p class="eyebrow">历年真题 · {{ currentItem.exam_reference?.subject }}</p>
         <h2>{{ currentItem.exam_reference?.year }} 年第 {{ currentItem.exam_reference?.question_number }} 题</h2>
         <p class="external-exam-task__topic">{{ currentItem.exam_reference?.topic_label || currentItem.kp_name }}</p>
-        <p class="hint">请打开原卷完成这道题，再按实际掌握情况自评。自评为“已掌握”时，这道不同真题会作为 {{ currentItem.kp_name }} 的毕业证据。</p>
+        <p class="hint">请在原卷上作答并对照答案，记录本题表现；系统不判分。</p>
         <div class="external-exam-task__sources">
           <a v-if="currentItem.exam_reference?.question_source_url" :href="currentItem.exam_reference.question_source_url" target="_blank" rel="noopener noreferrer">打开题目来源 ↗</a>
           <span>本地原卷：桌面 / 考研知识点 / {{ currentItem.exam_reference?.local_folder }}</span>
         </div>
         <div class="actions actions--grades">
-          <button type="button" :disabled="submittingId === currentItem.id" @click="grade(currentItem, 'mastered')">已掌握</button>
-          <button type="button" :disabled="submittingId === currentItem.id" @click="grade(currentItem, 'partial')">部分掌握</button>
-          <button type="button" :disabled="submittingId === currentItem.id" @click="grade(currentItem, 'not_mastered')">未掌握</button>
           <button type="button" :disabled="submittingId === currentItem.id" @click="grade(currentItem, 'skip')">跳过</button>
         </div>
+        <SelfReportActions v-if="!currentItem.completed" :disabled="submittingId === currentItem.id" @grade="grade(currentItem, $event)" />
         <p v-if="gradeNotice[currentItem.id]" class="notice" data-testid="external-exam-focus-notice">{{ gradeNotice[currentItem.id] }}</p>
         <p v-if="gradeError[currentItem.id]" class="form-error">{{ gradeError[currentItem.id] }}</p>
       </section>
 
       <StudyFocus
-        v-else-if="mode === 'focus'"
+        v-if="mode === 'focus' && !currentItem?.is_external_reference"
         :item="currentItem"
         :answer="currentItem ? answers[currentItem.id] : undefined"
         :answer-open="currentItem ? isAnswerOpen(currentItem.id) : false"
@@ -752,20 +843,33 @@ onMounted(async () => {
         :remaining="remainingItems.length"
         :display-number="orderedItems.findIndex((item) => item.id === currentItem?.id) + 1"
         :raw-answer="currentItem ? rawAnswers[currentItem.id] ?? '' : ''"
+        :confidence="currentItem ? answerConfidence[currentItem.id] ?? '' : ''"
         :selected-option="currentItem ? selectedOptions[currentItem.id] : undefined"
+        :retrying="currentItem ? Boolean(retryAttempts[currentItem.id]) : false"
         @reveal="currentItem && toggleAnswer(currentItem)"
         @grade="(g: SelfGrade) => currentItem && grade(currentItem, g)"
+        @submit-answer="currentItem && submitFinalAnswer(currentItem)"
+        @continue="focusItemId = null"
+        @retry="currentItem && beginAnswerRetry(currentItem)"
+        @cancel-retry="currentItem && cancelAnswerRetry(currentItem)"
         @update:rawAnswer="(v: string) => currentItem && (rawAnswers[currentItem.id] = v)"
+        @update:confidence="(v: string) => currentItem && (answerConfidence[currentItem.id] = v)"
         @update:selectedOption="(v: string) => currentItem && (selectedOptions[currentItem.id] = v)"
-      />
+      >
+        <template #process-review>
+          <AttemptHistory v-if="currentItem?.answer_submission" :key="`history-${currentItem.id}`" :item-id="currentItem.id" :latest-attempt-id="currentItem.answer_submission.attempt_id" />
+          <ProcessReview v-if="currentItem && ['calculation', 'proof', 'subjective'].includes(currentItem.question_type)" :key="currentItem.id" :state="processState(currentItem.id)" :item-id="currentItem.id" :question-type="currentItem.question_type" :model-value="processDrafts[currentItem.id] ?? ''" @update:model-value="processDrafts[currentItem.id] = $event" />
+        </template>
+      </StudyFocus>
 
       <!-- 全卷模式：按题型显示全部，包括已完成 -->
-      <ol v-else class="paper-list" data-testid="paper-list">
+      <ol v-if="mode === 'paper'" class="paper-list" data-testid="paper-list">
         <li v-for="(item, index) in orderedItems" :key="item.id" class="paper-item">
           <header>
             <strong>第 {{ index + 1 }} 题</strong>
             <span class="tag tag--muted">{{ typeLabel(item.question_type) }}</span>
             <span class="tag tag--muted">{{ item.completed ? "已完成" : "未完成" }}</span>
+            <span v-if="item.answer_submission" role="status" :aria-label="answerFeedback(item.answer_submission).label" :data-result="answerFeedback(item.answer_submission).tone" :data-testid="`paper-submission-${item.id}`">{{ answerFeedback(item.answer_submission).symbol }}</span>
           </header>
           <div class="paper-question-layout">
             <div class="paper-question-main">
@@ -779,12 +883,10 @@ onMounted(async () => {
                 <a v-if="item.exam_reference.topic_source_url" :href="item.exam_reference.topic_source_url" target="_blank" rel="noopener noreferrer">查看考点来源 ↗</a>
                 <span>本地原卷：桌面 / 考研知识点 / {{ item.exam_reference.local_folder }}</span>
               </div>
-              <p class="hint">原卷题干不在系统内。完成后按实际表现自评；标记“已掌握”的不同真题会计入该知识点毕业条件。</p>
+              <p class="hint">原卷题干不在系统内，请自行对照答案记录表现；系统不判分。</p>
+              <SelfReportActions v-if="!item.completed" :disabled="submittingId === item.id" @grade="grade(item, $event)" />
               <div class="actions">
                 <template v-if="!item.completed">
-                  <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'mastered')">已掌握</button>
-                  <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'partial')">部分掌握</button>
-                  <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'not_mastered')">未掌握</button>
                   <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'skip')">跳过</button>
                 </template>
               </div>
@@ -808,7 +910,7 @@ onMounted(async () => {
                   :name="`paper-option-${item.id}`"
                   :value="key"
                   :checked="selectedOptions[item.id] === key"
-                  :disabled="item.completed"
+                  :disabled="(item.completed && !retryAttempts[item.id]) || submittingId === item.id"
                   :data-testid="`paper-option-${item.id}-${key}`"
                   @change="selectedOptions[item.id] = key"
                 />
@@ -817,16 +919,35 @@ onMounted(async () => {
             </li>
           </ul>
 
+          <label v-if="!item.options" class="paper-raw-answer">
+            <span>纸上作答，记录最终答案或关键结论（可选）</span>
+            <textarea
+              v-model="rawAnswers[item.id]"
+              rows="2"
+              :disabled="(item.completed && !retryAttempts[item.id]) || submittingId === item.id"
+              :data-testid="`paper-raw-answer-${item.id}`"
+              :placeholder="answerInputHint(item.answer_grading_method)"
+            ></textarea>
+          </label>
+          <label class="hint">
+            做题信心（可选）
+            <select v-model="answerConfidence[item.id]" :disabled="(item.completed && !retryAttempts[item.id]) || submittingId === item.id" :data-testid="`paper-confidence-${item.id}`">
+              <option value="">未填写</option><option value="certain">很确定</option><option value="uncertain">有思路但不稳</option><option value="guess">猜的</option><option value="no_idea">完全不会</option>
+            </select>
+          </label>
           <div class="actions">
-            <template v-if="!item.completed">
-              <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'mastered')">已掌握</button>
-              <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'partial')">部分掌握</button>
-              <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'not_mastered')">未掌握</button>
-              <button type="button" :disabled="submittingId === item.id" @click="grade(item, 'skip')">跳过</button>
+            <template v-if="!item.completed || retryAttempts[item.id]">
+              <button type="button" :disabled="submittingId !== null || answerLoadingId !== null" :data-testid="`paper-submit-answer-${item.id}`" @click="submitFinalAnswer(item)">{{ item.answer_grading_method ? "提交答案" : "记录作答" }}</button>
+              <button v-if="!item.completed" type="button" :disabled="submittingId === item.id" @click="grade(item, 'skip')">跳过</button>
             </template>
+            <button v-if="item.completed && !retryAttempts[item.id] && canRetryAnswer(item.answer_submission)" type="button" :disabled="submittingId !== null || answerLoadingId !== null" :data-testid="`paper-retry-answer-${item.id}`" @click="beginAnswerRetry(item)">再试一次</button>
+            <button v-if="retryAttempts[item.id]" type="button" :disabled="submittingId !== null" :data-testid="`paper-cancel-retry-${item.id}`" @click="cancelAnswerRetry(item)">取消修改</button>
           </div>
+          <SelfReportActions v-if="!item.completed && !item.answer_grading_method" :disabled="submittingId === item.id" @grade="grade(item, $event)" />
           <p v-if="gradeNotice[item.id]" class="notice" data-testid="paper-notice">{{ gradeNotice[item.id] }}</p>
           <p v-if="gradeError[item.id]" class="form-error">{{ gradeError[item.id] }}</p>
+          <AttemptHistory v-if="item.answer_submission" :item-id="item.id" :latest-attempt-id="item.answer_submission.attempt_id" />
+          <ProcessReview v-if="['calculation', 'proof', 'subjective'].includes(item.question_type)" :state="processState(item.id)" :item-id="item.id" :question-type="item.question_type" :model-value="processDrafts[item.id] ?? ''" @update:model-value="processDrafts[item.id] = $event" />
           </template>
             </div>
             <aside v-if="!item.is_external_reference" class="paper-answer-pane" aria-label="答案详解">
@@ -842,6 +963,22 @@ onMounted(async () => {
 
         </div>
         <aside class="study-active-aside">
+      <section v-if="practiceSummary.submitted || practiceSummary.selfReported" class="summary" data-testid="practice-result-summary">
+        <h2>本卷作答记录</h2>
+        <p>最终答案正确 {{ practiceSummary.correct }} · 错误 {{ practiceSummary.incorrect }} · 未判定 {{ practiceSummary.ungraded }}</p>
+        <p class="hint">辅助作答 {{ practiceSummary.assisted }} · 仅自评 {{ practiceSummary.selfReported }}。这些记录不等于知识点已掌握。</p>
+        <details v-if="wrongItems.length" class="wrong-answer-review" data-testid="wrong-answer-review">
+          <summary>回看错题 <span>{{ wrongItems.length }}</span></summary>
+          <ul aria-label="本卷错题">
+            <li v-for="item in wrongItems" :key="item.id">
+              <button type="button" :disabled="submittingId !== null || answerLoadingId !== null" :data-testid="`revisit-wrong-${item.id}`" @click="revisitWrongAnswer(item.id)">
+                第 {{ orderedItems.findIndex(candidate => candidate.id === item.id) + 1 }} 题 · {{ typeLabel(item.question_type) }}
+                <small>{{ item.kp_name }}</small>
+              </button>
+            </li>
+          </ul>
+        </details>
+      </section>
       <section class="summary">
         <h2>今日涉及的知识点</h2>
         <ul data-testid="today-kp-summary">
@@ -907,6 +1044,19 @@ onMounted(async () => {
 
 
 <style scoped>
+.wrong-answer-review { margin: 14px 0; font-size: 12px; }
+.wrong-answer-review summary { cursor: pointer; color: var(--text-secondary); }
+.wrong-answer-review summary span { margin-left: 6px; color: var(--text-tertiary); }
+.wrong-answer-review ul { max-height: 240px; overflow-y: auto; padding: 0; }
+.wrong-answer-review li { list-style: none; border: 0 !important; padding: 0 !important; }
+.wrong-answer-review button { width: 100%; text-align: left; border: 0; background: transparent; padding: 10px 0; font-size: 12px; }
+.wrong-answer-review button:hover:not(:disabled) { background: #f6f6f6; }
+.wrong-answer-review small { display: block; margin-top: 4px; color: var(--text-tertiary); }
+[data-result="wrong"] { color: #a64b4b; font-size: 22px; line-height: 1; }
+[data-result="right"] { color: #42755a; font-size: 18px; line-height: 1; }
+.paper-raw-answer { display: grid; gap: 6px; margin: 16px 0; }
+.paper-raw-answer > span { color: var(--text-secondary); font-size: 12px; }
+.paper-raw-answer textarea { max-width: 560px; width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: #fff; resize: vertical; font: inherit; }
 .study-setup-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(270px, .75fr);

@@ -35,13 +35,14 @@ from backend.services.builtin_material_service import (  # noqa: E402
     sync_builtin_reference_materials,
 )
 from backend.services.exam_reference_service import sync_exam_reference_index  # noqa: E402
+from backend.resources import bundled_path  # noqa: E402
 
 SEED_DIR = Path(__file__).resolve().parents[1] / "seed"
 
 
 def load_json(name: str) -> dict:
     # 显式 utf-8：Windows 默认编码不是 utf-8，中文题干会被读成乱码。
-    return json.loads((SEED_DIR / name).read_text(encoding="utf-8"))
+    return json.loads(bundled_path("seed/" + name).read_text(encoding="utf-8"))
 
 
 def upsert_knowledge_points(
@@ -122,6 +123,7 @@ def upsert_questions(db: Session, payload: dict) -> tuple[int, int]:
             if current is not None:
                 current.question_type = item["question_type"]
                 current.grading_mode = item["grading_mode"]
+                current.grading_config = item.get("grading_config")
                 current.difficulty = item["difficulty"]
                 current.question_role = item.get("question_role", "basic")
                 current.skill_tags = list(item.get("skill_tags") or [])
@@ -145,6 +147,7 @@ def upsert_questions(db: Session, payload: dict) -> tuple[int, int]:
                 kp_id=kp.id,
                 question_type=item["question_type"],
                 grading_mode=item["grading_mode"],
+                grading_config=item.get("grading_config"),
                 difficulty=item["difficulty"],
                 # 学习角色、考法标签与预计时长是毕业判定与时间预算的输入，必须一起写入。
                 question_role=item.get("question_role", "basic"),

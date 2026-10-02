@@ -15,6 +15,7 @@ from backend.api.routes.health import router as health_router
 from backend.api.routes.materials import router as materials_router
 from backend.api.routes.study import router as study_router
 from backend.api.routes.settings import router as settings_router
+from backend.api.routes.learning_tasks import router as learning_tasks_router
 from backend.services.model_settings_service import load_local_settings
 from backend.services.model_settings_service import is_loopback
 from urllib.parse import urlsplit
@@ -227,4 +228,5 @@ def create_app() -> FastAPI:
     # 资料库：上传、列表、详情、删除、重建与调试检索。
     app.include_router(materials_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
+    app.include_router(learning_tasks_router, prefix="/api")
     return app

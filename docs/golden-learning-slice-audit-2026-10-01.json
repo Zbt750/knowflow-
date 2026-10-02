@@ -1,0 +1,1086 @@
+{
+  "slice_id": "integral-binary-tree",
+  "version": "1",
+  "asset_sha256": "392414dee214ccd4ab61ced03ac35ea6de6aac5011c2b30e7a7a3fba908f5909",
+  "answerable_drafts": 16,
+  "verified_questions": 0,
+  "exam_references_counted_as_questions": 0,
+  "proposed_methods": {
+    "numeric_final": 9,
+    "single_choice": 4,
+    "manual_only": 3
+  },
+  "all_probes_passed": true,
+  "human_review_complete": false,
+  "automatic_checks_certify_content": false,
+  "cases": [
+    {
+      "source_id": "M01",
+      "kp_code": "math.exam.c431f98f817c",
+      "content_sha256": "28325c98f22a6915fafb3455e40eb8335ee11b1597b38752bd89236739499c03",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "numeric_final",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "1/3",
+            "selected_option": null,
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "99",
+            "selected_option": null,
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "sqrt(1)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "M02",
+      "kp_code": "math.exam.c431f98f817c",
+      "content_sha256": "0c269f7b8a3b90ab43ec2676e3381d5264176f2672af88f099fafb398689ecde",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "single_choice",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "a",
+            "result": "right",
+            "reason": "exact_option_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_option_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "B",
+            "result": "wrong",
+            "reason": "exact_option_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_option_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "Z",
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "M03",
+      "kp_code": "math.exam.c431f98f817c",
+      "content_sha256": "811b244984421feaefa42b709797172d908c5df55ac8479ad55286a22abf44b6",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "numeric_final",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "10",
+            "selected_option": null,
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "99",
+            "selected_option": null,
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "sqrt(1)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "M04",
+      "kp_code": "math.exam.c431f98f817c",
+      "content_sha256": "12d33caf02dca49f27af61bdfdd3dbe2c1b936161352238353940cc4d8f49153",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "numeric_final",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "3/2",
+            "selected_option": null,
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "99",
+            "selected_option": null,
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "sqrt(1)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "M05",
+      "kp_code": "math.exam.c431f98f817c",
+      "content_sha256": "72adcd1350ebf2065273c44bf18424b95bab1e9b05cb01fd53dbea67a795b714",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "numeric_final",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "1/6",
+            "selected_option": null,
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "99",
+            "selected_option": null,
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "sqrt(1)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "M06",
+      "kp_code": "math.exam.c431f98f817c",
+      "content_sha256": "76bd8e34634ee332dfcbd510263f378583c7a5013172f43f64b439a2d78d1da5",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "numeric_final",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "1",
+            "selected_option": null,
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "99",
+            "selected_option": null,
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "sqrt(1)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "M07",
+      "kp_code": "math.exam.c431f98f817c",
+      "content_sha256": "7bdad1560d70414d52c39b561dfbacd8b9d013a058284ee163c805cc2e4e952a",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": null,
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "ln(2)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_question"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_question"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "M08",
+      "kp_code": "math.exam.c431f98f817c",
+      "content_sha256": "e9205a426454052984ade541b8ccb2584f66ac5c6469b74b84358f84a78fb731",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": null,
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "将负半区间令 x=-t，得到该段积分为 -∫₀ᵃf(t)dt，与正半区间相消。",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_question"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_question"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "T01",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "content_sha256": "29b9ebfdc8bfb477c6428826026656411caf0ad811b99c592fbbdcf484aa88f1",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "numeric_final",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "8",
+            "selected_option": null,
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "99",
+            "selected_option": null,
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "sqrt(1)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "T02",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "content_sha256": "2b88d022825f7eb35717502e14bec52f40e07726b606d1be7bedc4b3480ec112",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "numeric_final",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "12",
+            "selected_option": null,
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "99",
+            "selected_option": null,
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "sqrt(1)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "T03",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "content_sha256": "319b93341f65c226bb895be400a73f654a4e9bc82b33723bb8e05ad0afc45bbf",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "single_choice",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "b",
+            "result": "right",
+            "reason": "exact_option_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_option_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "A",
+            "result": "wrong",
+            "reason": "exact_option_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_option_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "Z",
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "T04",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "content_sha256": "2c75eeb156936fbc46f6ecdef62c865d8c5fe41cb9a381c2650a09aa8565b978",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "numeric_final",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "7",
+            "selected_option": null,
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "99",
+            "selected_option": null,
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "sqrt(1)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "T05",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "content_sha256": "189de88edbf81208371f4ff348e4914ab735a9b31ec6010c7320a67d589dec22",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "numeric_final",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "6",
+            "selected_option": null,
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "99",
+            "selected_option": null,
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_numeric_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": "sqrt(1)",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "T06",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "content_sha256": "e92e96feefaf5d36d158595fe8b359fab1512a7654703c14e2c920158492b500",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "single_choice",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "c",
+            "result": "right",
+            "reason": "exact_option_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_option_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "A",
+            "result": "wrong",
+            "reason": "exact_option_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_option_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "Z",
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "T07",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "content_sha256": "65da96406840099ea6341368eda61b835482c00cd2a358a51dbe2d9526f93287",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": "single_choice",
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "a",
+            "result": "right",
+            "reason": "exact_option_comparison"
+          },
+          "actual": {
+            "result": "right",
+            "reason": "exact_option_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "B",
+            "result": "wrong",
+            "reason": "exact_option_comparison"
+          },
+          "actual": {
+            "result": "wrong",
+            "reason": "exact_option_comparison"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": "Z",
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_answer"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    },
+    {
+      "source_id": "T08",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "content_sha256": "9da9e53743dad1ae547a2f5ed6fc07442043690e60007850d4067ddf37f87550",
+      "reviews": {
+        "source": "GENERATED",
+        "stem": "GENERATED",
+        "answer": "GENERATED",
+        "explanation": "GENERATED",
+        "mapping": "GENERATED",
+        "grading": "GENERATED"
+      },
+      "verified": false,
+      "proposed_grading_method": null,
+      "actual_gate_result": "unknown",
+      "probes": [
+        {
+          "expected": {
+            "raw_answer": "count(null)=0；若左右孩子皆空则返回1；否则返回count(left)+count(right)。时间 O(n)，栈空间 O(h)。",
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "unsupported_question"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "unsupported_question"
+          },
+          "passed": true
+        },
+        {
+          "expected": {
+            "raw_answer": null,
+            "selected_option": null,
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "actual": {
+            "result": "unknown",
+            "reason": "not_answered"
+          },
+          "passed": true
+        }
+      ]
+    }
+  ],
+  "topics": [
+    {
+      "kp_code": "math.exam.c431f98f817c",
+      "name": "定积分的计算",
+      "node_binding_matches": true,
+      "lesson_path": "seed/lessons/math.exam.c431f98f817c.md",
+      "lesson_sha256": "8b6b88285be179ae818d500853672e2aed4b73cd761818aac5f85ff89aa0a57d",
+      "lesson_hash_matches": true,
+      "lesson_review": "UNVERIFIED",
+      "has_concept_conditions_example": true,
+      "draft_question_count": 8
+    },
+    {
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "name": "二叉树基础（性质+存储）",
+      "node_binding_matches": true,
+      "lesson_path": "seed/lessons/cs408.ds.topic.1efaf3d00b50.md",
+      "lesson_sha256": "92cd183cf82f9ffd0632c30671898c15e11fe0ee8b6a462ae59c1258e6036b18",
+      "lesson_hash_matches": true,
+      "lesson_review": "UNVERIFIED",
+      "has_concept_conditions_example": true,
+      "draft_question_count": 8
+    }
+  ],
+  "structural_checks_passed": true,
+  "release_ready": false
+}

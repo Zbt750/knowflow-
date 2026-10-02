@@ -6,6 +6,8 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 .venv/
+.venv-ragas/
+.venv-desktop-build/
 venv/
 
 # 环境与密钥：绝不提交；仅保留可公开分享的示例模板
@@ -34,6 +36,8 @@ frontend/.vite/
 storage/
 model-settings.bin
 model-settings.bin.*.tmp
+vision-model-settings.bin
+vision-model-settings.bin.*.tmp
 .pgdata/
 chroma/
 # 开发启动脚本写出的日志

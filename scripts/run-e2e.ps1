@@ -27,12 +27,16 @@
 [CmdletBinding()]
 param(
     [int]$Port = 8001,
-    [string]$OutputDir = ""
+    [string]$OutputDir = "",
+    [string]$TestFile = ""
 )
 
 $ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+if ($TestFile -and $TestFile -notmatch '^[a-zA-Z0-9_./-]+\.spec\.ts$') {
+    throw "TestFile 必须是测试文件路径，不能包含命令行选项"
+}
 
 # 隔离环境：测试库 + 测试专用存储目录，绝不碰开发库与 storage/chroma。
 $env:APP_ENV = "test"
@@ -52,9 +56,20 @@ $exitCode = 1
 $backend = $null
 
 function Stop-TestBackend {
-    if ($backend -and -not $backend.HasExited) {
-        Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
-        Write-Host "  已停止测试后端 PID $($backend.Id)"
+    if ($backend) {
+        # Windows venv 的 python.exe 可能只是 launcher，uvicorn 实际运行在
+        # 直接子进程中。只收回本次 launcher/子进程且命令、端口匹配的后端，
+        # 不按端口杀进程，也不误停开发后端或另一个任务的服务。
+        $owned = Get-CimInstance Win32_Process | Where-Object {
+            ($_.ProcessId -eq $backend.Id -or $_.ParentProcessId -eq $backend.Id) -and
+            $_.Name -eq 'python.exe' -and
+            $_.CommandLine -like '*scripts.e2e_backend:create_e2e_app*' -and
+            $_.CommandLine -match "--port\s+$Port(?:\s|$)"
+        } | Sort-Object @{ Expression = { $_.ProcessId -eq $backend.Id } }
+        foreach ($process in $owned) {
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+            Write-Host "  已停止测试后端 PID $($process.ProcessId)"
+        }
     }
     Set-Location $root
     Start-Sleep -Seconds 2
@@ -74,9 +89,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "=== 2/4 启动隔离测试后端（本次调用的后台进程）===" -ForegroundColor Cyan
+Write-Host "  模型：离线协议替身（不调用外部模型；真实质量评测请另行授权运行）"
 $pythonPath = (Get-Command python).Source
 $backend = Start-Process -FilePath $pythonPath `
-    -ArgumentList '-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1', '--port', "$Port", '--log-level', 'warning' `
+    -ArgumentList '-m', 'uvicorn', 'scripts.e2e_backend:create_e2e_app', '--factory', '--host', '127.0.0.1', '--port', "$Port", '--log-level', 'warning' `
     -PassThru -WindowStyle Hidden
 Write-Host "  PID = $($backend.Id)"
 
@@ -90,12 +106,18 @@ for ($i = 1; $i -le 60; $i++) {
     $answered = $false
     try {
         $health = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 3 -UseBasicParsing
-        if ($health.Content -match '"environment":"test"') {
+        $state = $health.Content | ConvertFrom-Json
+        if ($state.environment -eq 'test' -and $state.llm_model -eq 'e2e-offline-fixture') {
+            if ($state.database -ne 'connected' -or $state.retrieval -ne 'ready' -or $state.worker -ne 'running') {
+                Write-Host "  隔离后端依赖未就绪，拒绝启动浏览器回归：$($health.Content)" -ForegroundColor Red
+                Stop-TestBackend
+                exit 1
+            }
             Write-Host "  就绪（第 $i 次轮询）：$($health.Content)"
             $ready = $true
             $answered = $true
         } else {
-            Write-Host "  第 $i 次：后端不是 test 环境 —— $($health.Content)" -ForegroundColor Yellow
+            Write-Host "  第 $i 次：后端不是隔离离线替身环境，拒绝运行浏览器请求" -ForegroundColor Yellow
         }
     } catch { }
     if ($ready) { break }
@@ -119,14 +141,16 @@ Set-Location (Join-Path $root "frontend")
 # 成为可检索的事实，而不是靠推断。
 $jsonReport = Join-Path $env:TEMP "kaoyan-e2e-report-$PID.json"
 $env:PLAYWRIGHT_JSON_OUTPUT_NAME = $jsonReport
-npx playwright test --output="$OutputDir" --reporter=list,json
+$testArguments = @('playwright', 'test')
+if ($TestFile) { $testArguments += $TestFile }
+$testArguments += @("--output=$OutputDir", '--reporter=list,json')
+npx @testArguments
 $exitCode = $LASTEXITCODE
 if (Test-Path $jsonReport) {
     Write-Host "  JSON 报告：$jsonReport"
 } else {
     Write-Host "  警告：未生成 JSON 报告（$jsonReport），失败详情只能看上面的 list 输出。" -ForegroundColor Yellow
 }
-Write-Host "E2E 退出码 = $exitCode"
 Write-Host "E2E 退出码 = $exitCode"
 
 Write-Host "=== 4/4 回收测试后端 ===" -ForegroundColor Cyan

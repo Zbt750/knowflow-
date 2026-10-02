@@ -49,6 +49,8 @@ def snapshot_from_storage(state: KpState) -> MasterySnapshot:
         node_self_grade=SelfGrade(state.node_self_grade) if state.node_self_grade else None,
         manual_credit_count=state.manual_credit_count,
         manual_confirmed_at=state.manual_confirmed_at,
+        assessment_basis=getattr(state, "assessment_basis", "legacy_self_reported"),
+        pending_review_question_ids=tuple(getattr(state, "pending_review_question_ids", None) or ()),
     )
 
 
@@ -62,12 +64,16 @@ def apply_snapshot(state: KpState, snapshot: MasterySnapshot) -> None:
     state.node_self_grade = snapshot.node_self_grade.value if snapshot.node_self_grade else None
     state.manual_credit_count = snapshot.manual_credit_count
     state.manual_confirmed_at = snapshot.manual_confirmed_at
+    state.assessment_basis = snapshot.assessment_basis
+    state.pending_review_question_ids = list(snapshot.pending_review_question_ids)
 
 
 def snapshot_to_storage(snapshot: MasterySnapshot, reason_code: str) -> dict[str, object]:
     """learning_events.payload 的稳定结构；事件是不可变事实，必须能独立读懂。"""
     return {
         "state": snapshot.state.value,
+        "assessment_basis": snapshot.assessment_basis,
+        "pending_review_question_ids": list(snapshot.pending_review_question_ids),
         "reason_code": reason_code,
         "evidence_window_size": len(snapshot.evidence_window),
         "manual_credit_count": snapshot.manual_credit_count,

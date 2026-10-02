@@ -44,6 +44,8 @@ class MasterySnapshot:
     node_self_grade: SelfGrade | None
     manual_credit_count: int
     manual_confirmed_at: datetime | None
+    assessment_basis: str = "legacy_self_reported"
+    pending_review_question_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -52,7 +52,7 @@ def assess_knowledge_node(
     idempotency_key: str,
     now: datetime,
 ) -> NodeAssessmentResult:
-    """叶子节点的整体自评；贡献透明基础证据，不伪造题目作答。"""
+    """叶子节点自述仅作辅助反馈；不授予毕业确认，不伪造作答。"""
     # 先锁叶子和投影；父节点只能聚合，不能在这里领取基础证据。
     kp = session.scalar(
         select(KnowledgePoint).where(KnowledgePoint.id == kp_id).with_for_update()
@@ -80,7 +80,7 @@ def assess_knowledge_node(
     # 按这个叶子自己的策略判定：基础确认只帮助有效确认数，不能替代真实题与题型覆盖。
     policy = policy_from_storage(session.get(KpMasteryPolicy, kp_id))
     event = DomainLearningEvent(
-        event_type=EventType.NODE_SELF_ASSESSED, occurred_at=now, self_grade=self_grade
+        event_type=EventType.NODE_SELF_REPORTED, occurred_at=now, self_grade=self_grade
     )
     result = transition(snapshot_from_storage(state), event, policy)
     apply_snapshot(state, result.snapshot)
@@ -89,7 +89,7 @@ def assess_knowledge_node(
             kp_id=kp_id,
             source_id=None,  # 节点自评没有对应的 QuestionAttempt。
             event_type=event.event_type.value,
-            evidence_level=None,  # 基础证据不进证据窗口，它单独计数。
+            evidence_level=None,  # 节点自述无可靠作答证据，不单独增加基础确认。
             payload=snapshot_to_storage(result.snapshot, result.reason_code),
             occurred_at=now,
             idempotency_key=event_key,

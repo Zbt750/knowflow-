@@ -1,0 +1,39 @@
+{
+  "version": "p0-agent-content-review-v1",
+  "reviewer_type": "codex_agent_not_independent_human",
+  "human_review_status": "pending",
+  "scope": "Existing synthetic answers compared locally with the four approved synthetic fixtures; no new generation or judging",
+  "scores_adjusted": false,
+  "latest_run": "chat_ragas_four_metrics_20261001_105823.json",
+  "cases": [
+    {
+      "case_id": "file-exact",
+      "finding": "A-G coverage and citations correspond to the synthetic source. The extra private-scope validation chapter is grounded but outside the A-G reference answer.",
+      "precision_review": "C1-C7 each contribute a stage; judge demanded whole-answer coverage from each block. C8 is also outside the reference answer, so not all zero verdicts can be dismissed as judge error.",
+      "independent_human_review": "pending"
+    },
+    {
+      "case_id": "file-alias",
+      "finding": "Answer covers E/F/G only; C1/C3/C2 match the corresponding chapters in the single intended file.",
+      "precision_review": "8 blocks supplied, only 3 chapters requested and used. A-D and scope-validation blocks are excess context. Both real context redundancy and judge single-block-completeness bias must remain visible.",
+      "independent_human_review": "pending"
+    },
+    {
+      "case_id": "cross-file",
+      "finding": "Common persistence/restart fact has citations from both files. Desktop boundary and three successful backups match the supplement. Learning phases match the phase file. Synthetic scope-validation token is unnecessarily repeated; it is not a private-data leak in this authorized user-mode synthetic case.",
+      "precision_review": "Keep Precision 0 and Recall 2/3; scores cannot be replaced by this review. Unrequested scope-validation block is present. Judge repeatedly conflates single-block utility with full-comparison completeness.",
+      "performance_review": "First 4000-token generation ended length; full retry at 8000 ended stop. Total 38665.5 ms; observed generation tokens 12069 across both calls. Current 6000 first-budget policy has no live measurement yet.",
+      "independent_human_review": "pending"
+    }
+  ],
+  "historical_cases_to_retain": [
+    {"run": "chat-baseline-v3-20260929.json", "cases": ["missing-reference", "math-followup", "mode-isolation"], "reason": "Request or metric connection errors; do not impute zero or erase them."},
+    {"run": "chat-baseline-v3-20260929.json", "cases": ["408-bfs", "math-cancellation"], "reason": "Low Faithfulness 0.5 and 0.5263. Historical mathematical/algorithmic overreach remains a regression target."},
+    {"run": "chat-baseline-v3_1-20260929.json", "cases": ["missing-reference"], "reason": "Answer Relevancy 0 even though deterministic behavior passed; inspect the answer and judge-generated questions separately."},
+    {"run": "chat-baseline-v3_1-20260929.json", "cases": ["math-continuity"], "reason": "Keyword check can reject semantically correct necessary/sufficient wording. Passing RAGAS is not equivalent to factual verification."},
+    {"run": "chat-baseline-v3_1-20260929.json", "cases": ["408-thread"], "reason": "Successful final answer after failed first attempt; first-attempt usage unobserved."},
+    {"run": "chat-file-focus-v4-20260930.json", "cases": ["file-exact", "file-alias", "cross-file"], "reason": "All requests failed while model endpoint connectivity was broken; snapshots and diagnostic traces remain useful failure evidence, not quality scores."},
+    {"run": "chat-cross-file-budget-4000-20260930.json", "cases": ["cross-file"], "reason": "Relevancy 0.4646, Recall 0.6667, Precision 0. One stochastic budget experiment cannot prove policy benefit."},
+    {"run": "chat-cross-file-budget-6000-20260930.json", "cases": ["cross-file"], "reason": "Faithfulness 0.875, Recall 0.6667, Precision 0. Old v4 prompt, not evidence for current v5+6000 combination."}
+  ]
+}

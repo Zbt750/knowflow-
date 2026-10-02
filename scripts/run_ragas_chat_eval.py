@@ -2,7 +2,7 @@
 
 This is intentionally an optional evaluation tool, not an application runtime
 dependency. It exercises the real chat SSE endpoint, captures first-token and
-total latency, fetches the corresponding retrieval contexts, evaluates
+total latency, fetches the actual per-block model evidence snapshot, evaluates
 Context Precision / Context Recall / Faithfulness with RAGAS, and removes every
 temporary chat session it creates.
 
@@ -10,8 +10,8 @@ Safety:
 * Refuses to run unless the API reports APP_ENV=test.
 * Uses only the test API and fixture material titles in the JSONL dataset.
 * Reads the configured LLM key in memory for the judge; never prints or stores it.
-* Reports do not contain the full retrieved text; they contain score details,
-  cited/retrieved IDs, headings, and a bounded answer excerpt for diagnosis.
+* Ordinary reports retain bounded excerpts and metadata; the explicitly isolated
+  synthetic v3 baseline also retains complete answer/evidence for diagnosis.
 
 Install the isolated optional requirements, then run from the repository root:
     python -m pip install -r requirements-ragas.txt
@@ -30,6 +30,7 @@ import statistics
 import sys
 import time
 from dataclasses import asdict, dataclass
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,8 @@ class EvalCase:
     material_title: str | None
     required_any_groups: tuple[tuple[str, ...], ...]
     forbidden_any: tuple[str, ...]
+    category: str = "legacy"
+    setup_questions: tuple[str, ...] = ()
 
 
 def load_cases(path: Path) -> list[EvalCase]:
@@ -86,6 +89,8 @@ def load_cases(path: Path) -> list[EvalCase]:
                     for group in row.get("required_any_groups", [])
                 ),
                 forbidden_any=tuple(str(term) for term in row.get("forbidden_any", [])),
+                category=str(row.get("category", "legacy")),
+                setup_questions=tuple(str(q) for q in row.get("setup_questions", [])),
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise EvalError(f"数据集第 {line_no} 行字段无效：{type(exc).__name__}") from exc
@@ -104,7 +109,7 @@ def load_cases(path: Path) -> list[EvalCase]:
     return result
 
 
-def api_call(api_base: str, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+def api_call(api_base: str, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any] | list[dict[str, Any]]:
     payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
     headers = {"Accept": "application/json"}
     if payload is not None:
@@ -120,7 +125,7 @@ def api_call(api_base: str, method: str, path: str, body: dict[str, Any] | None 
         raise EvalError(f"API 请求失败：{method} {path} HTTP {exc.code}") from exc
     except (URLError, TimeoutError, OSError) as exc:
         raise EvalError(f"API 不可用：{method} {path} ({type(exc).__name__})") from exc
-    if not isinstance(value, dict):
+    if not isinstance(value, (dict, list)):
         raise EvalError(f"API 响应结构异常：{method} {path}")
     return value
 
@@ -141,12 +146,15 @@ def validate_local_api_target(api_base: str) -> tuple[str, int | None]:
     return parsed.hostname, parsed.port
 
 
-def validate_fixture_scope(api_base: str) -> None:
+def validate_fixture_scope(api_base: str, *, baseline_v3: bool = False) -> None:
     """Require the isolated API to contain only the two approved fixture docs."""
     approved = {
         "builtin": "高等数学核心考点讲义",
         "user": "阶段A验收笔记",
     }
+    if baseline_v3:
+        approved = {"builtin": ["合成数学条件讲义", "合成408机制讲义"],
+                    "user": ["合成项目阶段说明", "合成部署边界补充"]}
     for source_type, expected_title in approved.items():
         result = api_call(
             api_base,
@@ -156,8 +164,35 @@ def validate_fixture_scope(api_base: str) -> None:
         items = result.get("items", [])
         total = result.get("total")
         titles = [str(item.get("title", "")) for item in items]
-        if total != len(items) or titles != [expected_title]:
-            raise EvalError("安全停止：隔离库资料范围与已批准的两份测试讲义不一致")
+        expected = expected_title if isinstance(expected_title, list) else [expected_title]
+        if total != len(items) or sorted(titles) != sorted(expected):
+            raise EvalError("安全停止：隔离库资料范围与已批准的合成讲义不一致")
+
+
+def collect_failed_diagnostic(api_base: str, session_id: str, stream: dict, *, include_content: bool) -> dict:
+    """Recover this request only, before cleanup; never requery or score failures."""
+    message_id = (stream.get("done") or {}).get("message_id") or (stream.get("meta") or {}).get("message_id")
+    result = {"message_id": message_id, "stream_error": stream.get("error"), "total_ms": stream.get("total_ms")}
+    if not message_id:
+        return {**result, "diagnostic_status": "missing_message_id"}
+    try:
+        messages = api_call(api_base, "GET", f"/chat/sessions/{session_id}/messages")
+        message = next(item for item in messages if item.get("message_id") == message_id)
+        result.update(diagnostic_status="recovered", generation_trace=message.get("generation_trace"), status=message.get("status"))
+        if include_content:
+            result.update(actual_evidence=message.get("evaluation_evidence"), partial_answer=message.get("content", stream.get("answer", "")))
+    except Exception as exc:
+        result.update(diagnostic_status="recovery_failed", recovery_error_type=type(exc).__name__)
+    return result
+
+
+def has_visible_body(text: str) -> bool:
+    """Approximate body latency excluding complete prefixes and Markdown headings."""
+    from backend.chat.service import GENERAL_REFERENCE_PREFIX
+    if GENERAL_REFERENCE_PREFIX.startswith(text) or text in ("#", "##", "###"):
+        return False
+    text = text.replace(GENERAL_REFERENCE_PREFIX, "")
+    return any(line.strip() and not re.match(r"^\s*#{1,6}(?:\s|$)", line) for line in text.splitlines())
 
 
 def stream_answer(api_base: str, session_id: str, question: str) -> dict[str, Any]:
@@ -170,13 +205,14 @@ def stream_answer(api_base: str, session_id: str, question: str) -> dict[str, An
     )
     started = time.perf_counter()
     first_delta_ms: float | None = None
+    first_useful_body_ms: float | None = None
     events: dict[str, Any] = {}
     answer_parts: list[str] = []
     current_event = "message"
     data_lines: list[str] = []
 
     def consume_frame() -> None:
-        nonlocal first_delta_ms, current_event, data_lines
+        nonlocal first_delta_ms, first_useful_body_ms, current_event, data_lines
         if not data_lines:
             current_event = "message"
             return
@@ -191,7 +227,10 @@ def stream_answer(api_base: str, session_id: str, question: str) -> dict[str, An
             delta = str(value.get("text", ""))
             if delta and first_delta_ms is None:
                 first_delta_ms = (time.perf_counter() - started) * 1000
-            answer_parts.append(delta)
+            if value.get("replace"): answer_parts[:] = [delta]
+            else: answer_parts.append(delta)
+            if first_useful_body_ms is None and has_visible_body("".join(answer_parts)):
+                first_useful_body_ms = (time.perf_counter() - started) * 1000
         else:
             events[current_event] = value
         data_lines = []
@@ -220,6 +259,7 @@ def stream_answer(api_base: str, session_id: str, question: str) -> dict[str, An
     return {
         "answer": events.get("done", {}).get("answer", "".join(answer_parts)),
         "first_delta_ms": round(first_delta_ms, 1) if first_delta_ms is not None else None,
+        "first_useful_body_ms": round(first_useful_body_ms, 1) if first_useful_body_ms is not None else None,
         "total_ms": round(total_ms, 1),
         "meta": events.get("meta", {}),
         "citations": events.get("citations", {}).get("citations", []),
@@ -341,7 +381,7 @@ def phrase_check(case: EvalCase, answer: str, retrieval_mode: str) -> dict[str, 
     ]
     found_forbidden = [term for term in case.forbidden_any if term.casefold() in folded]
     if case.answerability == "guard":
-        passed = retrieval_mode == "scope_notice" and not missing_groups
+        passed = retrieval_mode == "scope_notice" and not missing_groups and not found_forbidden
     elif case.answerability == "general":
         passed = "通用知识参考" in answer and not missing_groups and not found_forbidden
     elif case.answerability == "unanswerable":
@@ -379,6 +419,60 @@ def phrase_check(case: EvalCase, answer: str, retrieval_mode: str) -> dict[str, 
     }
 
 
+def record_faithfulness_output(response_model, result, audit):
+    """Observe existing structured judge outputs, never add or change a judge call."""
+    name = response_model.__name__
+    if name not in {"StatementGeneratorOutput", "NLIStatementOutput"}:
+        return
+    original = list(result.statements)
+    statements = original[:256]
+    if name == "StatementGeneratorOutput":
+        audit.append({"phase": "statement_generation", "statements": [str(s)[:1200] for s in statements],
+                      "truncated": len(original) > 256 or any(len(str(s)) > 1200 for s in statements)})
+    else:
+        audit.append({"phase": "statement_verdicts", "statements": [
+            {"statement": str(s.statement)[:1200], "reason": str(s.reason)[:1200], "verdict": s.verdict}
+            for s in statements
+        ], "truncated": len(original) > 256 or any(len(str(s.statement)) > 1200 or len(str(s.reason)) > 1200 for s in statements)})
+
+
+def faithfulness_diagnostics_complete(audit, status):
+    if status != "scored" or len(audit) != 2:
+        return False
+    generated, judged = audit
+    return (generated.get("phase") == "statement_generation"
+            and judged.get("phase") == "statement_verdicts"
+            and not generated.get("truncated") and not judged.get("truncated")
+            and bool(generated.get("statements"))
+            and generated["statements"] == [s.get("statement") for s in judged.get("statements", [])]
+            and all(s.get("verdict") in (0, 1) for s in judged["statements"]))
+
+
+def validate_screening_snapshot(snapshot, expected_mode):
+    """Before paid judging, reject an arm whose actual evidence/config differs."""
+    if expected_mode is None:
+        return
+    from backend.chat.context_screening import POLICY_VERSION, MIN_COSINE
+    if expected_mode not in {"off", "filter"}:
+        raise EvalError("筛选对照模式无效")
+    diagnostic = snapshot.get("context_screening") if isinstance(snapshot, dict) else None
+    if not isinstance(diagnostic, dict) or diagnostic.get("mode") != expected_mode:
+        raise EvalError("实际快照筛选模式与本轮分支不一致")
+    if diagnostic.get("version") != POLICY_VERSION or diagnostic.get("threshold") != MIN_COSINE:
+        raise EvalError("实际快照筛选版本或门槛不一致")
+    fields = ("before_count", "after_count", "removed_count", "would_remove_count")
+    if any(type(diagnostic.get(k)) is not int or diagnostic[k] < 0 for k in fields):
+        raise EvalError("实际快照筛选计数无效")
+    before, after, removed, would_remove = (diagnostic[k] for k in fields)
+    if after != len(snapshot.get("contexts", [])) or before != after + removed or would_remove > before:
+        raise EvalError("实际快照片段与筛选计数不一致")
+    if expected_mode == "filter":
+        if diagnostic.get("applied") is not True or diagnostic.get("reason") != "eligible" or removed != would_remove:
+            raise EvalError("目标未实际进入受控筛选，不可记作filter对照")
+    elif diagnostic.get("applied") is not False or removed != 0 or would_remove != 0:
+        raise EvalError("off分支实际发生筛选")
+
+
 async def score_metrics(
     *,
     case: EvalCase,
@@ -404,6 +498,12 @@ async def score_metrics(
         if name != "answer_relevancy" and not contexts:
             results[name] = {"status": "skipped", "reason": "实际检索上下文为空"}
             continue
+        precision_audit = getattr(getattr(scorer, "llm", None), "precision_audit", None) if name == "context_precision" else None
+        if precision_audit is not None:
+            precision_audit.clear()
+        faithfulness_audit = getattr(getattr(scorer, "llm", None), "faithfulness_audit", None) if name == "faithfulness" else None
+        if faithfulness_audit is not None:
+            faithfulness_audit.clear()
         try:
             metric_args: dict[str, Any] = {"user_input": case.question}
             if name != "answer_relevancy":
@@ -446,6 +546,13 @@ async def score_metrics(
             audit = getattr(getattr(scorer, "llm", None), "relevancy_audit", None)
             if audit is not None:
                 results[name]["diagnostics"] = list(audit)
+        if precision_audit is not None:
+            results[name]["diagnostics"] = [dict(item) for item in precision_audit]
+            results[name]["diagnostic_context_count"] = len(contexts)
+            results[name]["diagnostics_complete"] = len(precision_audit) == len(contexts) and results[name]["status"] == "scored"
+        if faithfulness_audit is not None:
+            results[name]["diagnostics"] = deepcopy(faithfulness_audit)
+            results[name]["diagnostics_complete"] = faithfulness_diagnostics_complete(faithfulness_audit, results[name]["status"])
     return results
 
 
@@ -460,6 +567,43 @@ def mean_metric(rows: list[dict[str, Any]], metric: str) -> dict[str, Any]:
         "n": len(values),
         "mean": round(statistics.fmean(values), 4) if values else None,
         "min": round(min(values), 4) if values else None,
+    }
+
+
+def precision_conflict_review(
+    metrics: dict[str, Any], behavior: dict[str, Any], citation_audit: dict[str, Any]
+) -> dict[str, Any]:
+    """Flag a contradictory metric pattern for review, without changing scores."""
+    precision = metrics.get("context_precision", {})
+    recall = metrics.get("context_recall", {})
+    reviewable = (
+        precision.get("status") == "scored"
+        and precision.get("value") == 0.0
+        and precision.get("diagnostics_complete") is True
+        and behavior.get("passed") is True
+        and citation_audit.get("count", 0) > 0
+        and citation_audit.get("all_present_in_actual_evidence") is True
+    )
+    full_recall = recall.get("status") == "scored" and recall.get("value") == 1.0
+    # A judge may demand each individual chunk cover the whole answer. Flag
+    # repeated explicit wording even when recall is partial; this is a review
+    # request, not proof that the judge or retrieval is wrong.
+    diagnostics = precision.get("diagnostics") or []
+    completeness_reasons = sum(
+        1 for row in diagnostics if isinstance(row, dict) and row.get("verdict") == 0
+        and any(phrase in str(row.get("reason", "")).lower() for phrase in (
+            "full answer", "all stages", "entire answer", "complete answer",
+            "fully answer the question", "requires a comparison of both documents",
+            "完整答案", "全部阶段", "所有阶段",
+        ))
+    )
+    whole_answer_pattern = completeness_reasons >= 2
+    flagged = reviewable and (full_recall or whole_answer_pattern)
+    return {
+        "required": flagged,
+        "reason": ("zero_precision_with_full_recall_and_grounded_citations" if full_recall
+                   else "repeated_single_chunk_completeness_requirement") if flagged else None,
+        "score_adjusted": False,
     }
 
 
@@ -501,14 +645,20 @@ def make_scorers(
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
             self.relevancy_audit: list[dict[str, Any]] = []
+            self.precision_audit: list[dict[str, Any]] = []
+            self.faithfulness_audit: list[dict[str, Any]] = []
 
         async def agenerate(self, prompt, response_model):
             result = await super().agenerate(prompt, response_model)
+            record_faithfulness_output(response_model, result, self.faithfulness_audit)
             if response_model.__name__ == "AnswerRelevanceOutput":
                 self.relevancy_audit.append({
                     "question": str(result.question)[:1200],
                     "noncommittal": bool(result.noncommittal),
                 })
+            elif response_model.__name__ == "ContextPrecisionOutput":
+                self.precision_audit.append({"context_index": len(self.precision_audit),
+                                             "verdict": result.verdict, "reason": str(result.reason)[:1200]})
             return result
 
     judge_llm = AuditedInstructorLLM(
@@ -557,7 +707,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         from backend.config import get_settings
     except Exception as exc:
         raise EvalError(f"无法读取应用配置：{type(exc).__name__}") from exc
-    settings = get_settings()
+    settings = getattr(args, "evaluation_settings", None) or get_settings()
     # This CLI reads model configuration only and never connects to this shell's
     # database. Enforce isolation against the live API health response instead,
     # because the shell and already-running service may have different APP_ENVs.
@@ -566,13 +716,31 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         raise EvalError("安全停止：API 必须报告 environment=test 且 database=connected")
     if health.get("retrieval") != "ready":
         raise EvalError("隔离测试服务的 retrieval 未就绪")
-    validate_fixture_scope(args.api_base)
+    baseline_v3 = bool(getattr(args, "baseline_v3", False))
+    validate_fixture_scope(args.api_base, baseline_v3=baseline_v3)
 
     cases = load_cases(Path(args.dataset).resolve())
+    selected_case_ids = getattr(args, "selected_case_ids", None)
+    if selected_case_ids is not None:
+        selected = tuple(dict.fromkeys(selected_case_ids))
+        if len(selected) != len(selected_case_ids) or not set(selected).issubset({case.case_id for case in cases}):
+            raise EvalError("指定的选例有重复或不存在")
+        cases = [case for case in cases if case.case_id in selected]
     if args.limit is not None:
         if args.limit < 1:
             raise EvalError("--limit 必须大于 0")
         cases = cases[: args.limit]
+    if baseline_v3 and sum(1 + len(c.setup_questions) for c in cases) > 20:
+        raise EvalError("安全停止：真实问答含多轮铺垫不得超过20次")
+    question_requests = sum(1 + len(c.setup_questions) for c in cases)
+    max_question_requests = getattr(args, "max_question_requests", None)
+    if max_question_requests is not None and question_requests > max_question_requests:
+        raise EvalError("安全停止：选例问题请求超出本轮授权上限")
+    from scripts.rag_baseline_manifest import build_manifest
+    manifest = build_manifest(settings, Path(args.dataset), baseline_v3)
+    manifest["selected_case_ids"] = [case.case_id for case in cases]
+    manifest["question_request_limit"] = max_question_requests
+    manifest["planned_question_requests"] = question_requests
     judge_client, scorers, judge_provenance = make_scorers(
         settings,
         args.judge_model,
@@ -589,6 +757,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             contexts: list[str] = []
             context_source = "not_collected"
             error: str | None = None
+            failure_diagnostic = None
+            setup_results = []
             try:
                 session = api_call(
                     args.api_base,
@@ -597,9 +767,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                     {"title": f"RAGAS eval {case.case_id}", "mode": case.mode},
                 )
                 session_id = str(session["session_id"])
-                search_started = time.perf_counter()
-                hits, contexts, context_source = retrieve_contexts(args.api_base, case)
-                search_ms = round((time.perf_counter() - search_started) * 1000, 1)
+                setup_results = []
+                for setup_question in case.setup_questions:
+                    setup = stream_answer(args.api_base, session_id, setup_question)
+                    if setup.get("error") or not setup.get("done"):
+                        failure_diagnostic = collect_failed_diagnostic(args.api_base, session_id, setup, include_content=baseline_v3)
+                        raise EvalError("多轮铺垫失败；不重跑该场景")
+                    setup_results.append({"question": setup_question, "answer": setup["answer"], "total_ms": setup["total_ms"], "usage": setup["done"].get("usage"),
+                                          "retrieval_mode": (setup.get("meta") or {}).get("retrieval_mode"),
+                                          "scope_resolved": (setup.get("meta") or {}).get("retrieval_mode") not in (None, "unknown", "scope_notice")})
                 stream = stream_answer(args.api_base, session_id, case.question)
                 answer = str(stream["answer"])
                 if stream["error"]:
@@ -608,6 +784,24 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                     error = "stream_missing_done_event"
                 meta = stream["meta"] if isinstance(stream["meta"], dict) else {}
                 done = stream["done"] if isinstance(stream["done"], dict) else {}
+                if error:
+                    failure_diagnostic = collect_failed_diagnostic(args.api_base, session_id, stream, include_content=baseline_v3)
+                    raise EvalError(error)
+                messages = api_call(args.api_base, "GET", f"/chat/sessions/{session_id}/messages")
+                if not isinstance(messages, list) or any(not isinstance(item, dict) for item in messages):
+                    raise EvalError("消息恢复响应格式无效")
+                snapshot = next((item.get("evaluation_evidence") for item in messages
+                                 if item.get("message_id") == done.get("message_id")), None)
+                generation_trace = next((item.get("generation_trace") for item in messages
+                                         if item.get("message_id") == done.get("message_id")), None)
+                from backend.chat.evidence import validate_evidence_snapshot
+                try:
+                    hits, contexts = validate_evidence_snapshot(snapshot, done.get("message_id"))
+                except ValueError as exc:
+                    raise EvalError(str(exc)) from exc
+                validate_screening_snapshot(snapshot, getattr(args, "expected_context_screening", None))
+                context_source = "actual-model-evidence-v2"
+                search_ms = None  # 不把读取快照/生成耗时伪装成独立检索耗时。
                 retrieval_mode = str(meta.get("retrieval_mode", "unknown"))
                 behavior = phrase_check(case, answer, retrieval_mode)
                 citations = stream["citations"] if isinstance(stream["citations"], list) else []
@@ -615,7 +809,7 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 cited_ids = [str(card.get("chunk_id")) for card in citations if card.get("chunk_id")]
                 citation_audit = {
                     "count": len(citations),
-                    "all_present_in_debug_retrieval": (
+                    "all_present_in_actual_evidence": (
                         all(chunk_id in hit_ids for chunk_id in cited_ids) if hit_ids else None
                     ),
                     "unmatched_cited_chunk_ids": (
@@ -629,8 +823,13 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                     scorers=scorers,
                     timeout_seconds=args.metric_timeout,
                 )
+                precision_review = precision_conflict_review(metrics, behavior, citation_audit)
                 row = {
                     "case_id": case.case_id,
+                    "category": case.category,
+                    "setup_results": setup_results,
+                    "setup_scope_resolved": all(item["scope_resolved"] for item in setup_results),
+                    **({"answer": answer, "actual_evidence": snapshot, "manual_review": {"status": "pending"}} if baseline_v3 else {}),
                     "mode": case.mode,
                     "strategy": case.strategy,
                     "answerability": case.answerability,
@@ -653,12 +852,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                         for hit in hits
                     ],
                     "citation_audit": citation_audit,
+                    "precision_conflict_review": precision_review,
                     "search_latency_ms": search_ms,
                     "first_delta_ms": stream["first_delta_ms"],
+                    "first_useful_body_ms": stream.get("first_useful_body_ms"),
                     "total_latency_ms": stream["total_ms"],
                     "server_response_duration_ms": done.get("response_duration_ms"),
                     "token_usage": done.get("usage"),
                     "token_usage_observed": done.get("usage") is not None,
+                    "generation_trace": generation_trace,
                     "behavior_check": behavior,
                     "metrics": metrics,
                     "stream_error": error,
@@ -677,12 +879,15 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 rows.append(
                     {
                         "case_id": case.case_id,
+                        "category": case.category,
                         "mode": case.mode,
                         "question": case.question,
                         "error_type": type(exc).__name__,
                         "error": str(exc)[:300],
                         "search_latency_ms": search_ms,
                         "retrieval_context_source": context_source,
+                        "failure_diagnostic": failure_diagnostic,
+                        "setup_results": setup_results,
                     }
                 )
                 print(f"  ERROR {type(exc).__name__}: {str(exc)[:160]}", flush=True)
@@ -692,6 +897,11 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                         api_call(args.api_base, "DELETE", f"/chat/sessions/{session_id}")
                     except Exception as exc:
                         rows[-1]["session_cleanup_error"] = type(exc).__name__
+                checkpoint = getattr(args, "checkpoint", None)
+                if checkpoint:
+                    checkpoint = Path(checkpoint)
+                    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                    checkpoint.write_text(json.dumps({"status": "in_progress", "evaluation_configuration": manifest, "cases": rows}, ensure_ascii=False, indent=2), encoding="utf-8")
     finally:
         await judge_client.close()
 
@@ -750,6 +960,12 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
         "judge_max_tokens": args.judge_max_tokens,
         "judge_provenance": judge_provenance,
         "dataset": str(Path(args.dataset).resolve()),
+        "evaluation_configuration": manifest,
+        "scenario_summary": {category: {
+            "n": sum(row.get("category") == category for row in rows),
+            "errors": sum("error_type" in row for row in rows if row.get("category") == category),
+            "metrics": {name: mean_metric([row for row in rows if row.get("category") == category and "metrics" in row], name) for name in metric_names},
+        } for category in sorted({row.get("category", "legacy") for row in rows})},
         "summary": summary,
         "cases": rows,
     }

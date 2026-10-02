@@ -14,8 +14,10 @@ from sqlalchemy.orm import Session
 from backend.ingestion.file_storage import save_upload_streaming
 from backend.jobs.worker import enqueue_job
 from backend.models.rag import Material
+from backend.resources import bundled_path
 
-BUILTIN_REFERENCE_DIR = Path(__file__).resolve().parents[2] / "seed" / "materials" / "builtin"
+# None means the dynamic bundled location; tests may explicitly override it.
+BUILTIN_REFERENCE_DIR: Path | None = None
 _SAFE_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,99}\.md\Z")
 
 
@@ -32,11 +34,11 @@ async def sync_builtin_reference_materials(
     db: Session, *, materials_root: Path
 ) -> dict[str, int]:
     """导入固定目录下的 Markdown 参考讲义；不递归、不删除缺失资料。"""
-    source_root = BUILTIN_REFERENCE_DIR.resolve()
+    source_root = (BUILTIN_REFERENCE_DIR or bundled_path("seed/materials/builtin")).resolve()
     storage_root = materials_root.resolve()
     created = updated = unchanged = 0
 
-    for candidate in sorted(BUILTIN_REFERENCE_DIR.glob("*.md")):
+    for candidate in sorted(source_root.glob("*.md")):
         # 文件名白名单 + resolve 校验：不让符号链接或可控文件名把种子读取越界。
         if not _SAFE_NAME.fullmatch(candidate.name):
             continue

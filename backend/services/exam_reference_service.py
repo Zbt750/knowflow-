@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from backend.resources import bundled_path
 
 from backend.models.learning import (
     ExamQuestionReference,
@@ -232,9 +233,10 @@ def _node_depth(code: str, nodes: dict[str, dict[str, Any]]) -> int:
 
 
 def build_exam_reference_seed(
-    builtin_dir: Path = BUILTIN_DIR,
+    builtin_dir: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Parse annual indexes into topic nodes and per-question bindings."""
+    builtin_dir = builtin_dir or bundled_path("seed/materials/builtin")
     node_defs: dict[str, dict[str, Any]] = {}
     reference_defs: dict[tuple[str, int, int, str], dict[str, Any]] = {}
     family_rows: dict[str, dict[tuple[str, int, int], dict[str, Any]]] = {}

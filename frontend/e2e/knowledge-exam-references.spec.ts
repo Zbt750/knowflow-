@@ -37,7 +37,7 @@ const root = {
   children: [{ ...topic, id: "ref-ds", code: "cs408.ds", name: "数据结构", is_assessable: false, is_reference_only: false, children: [topic] }],
 };
 
-test("知识树历年题号可追溯来源、加入今日练习并标记毕业证据", async ({ page }) => {
+test("知识树历年题号可追溯来源、加入今日练习且不冒充机器判题", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/api/health", (route) => route.fulfill({ json: { status: "ok", database: "connected" } }));
@@ -96,7 +96,7 @@ test("知识树历年题号可追溯来源、加入今日练习并标记毕业�
   await page.getByRole("button", { name: "展开数据结构", exact: true }).click();
   await expect(page.getByText("未学习 · 历年真题")).toBeVisible();
   await page.getByTestId("tree-node-cs408.ds.topic.example").click();
-  await expect(page.getByTestId("exam-reference-only-note")).toContainText("毕业证据");
+  await expect(page.getByTestId("exam-reference-only-note")).toContainText("不作为毕业确认");
   await expect(page.getByTestId("knowledge-lesson-link")).toHaveCount(0);
   await page.getByTestId("tab-exam-references").click();
   await expect(page.getByTestId("exam-reference-panel")).toContainText("2010 年");
@@ -105,7 +105,7 @@ test("知识树历年题号可追溯来源、加入今日练习并标记毕业�
     "https://www.codebrick.tech/exam-408/q/ds/2010/01",
   );
   await page.getByRole("button", { name: "加入今日学习" }).click();
-  await expect(page.getByTestId("exam-reference-notice")).toContainText("计入本知识点毕业证据");
+  await expect(page.getByTestId("exam-reference-notice")).toContainText("不增加毕业确认");
   await expect(page.getByRole("button", { name: "已在今日学习" })).toBeDisabled();
   expect(errors).toEqual([]);
 });

@@ -32,12 +32,21 @@ GENERATED_TYPES = ROOT / "frontend" / "src" / "api" / "types.ts"
 
 # 契约表里必须存在的端点。少了一条通常意味着 app.py 忘了 include_router。
 REQUIRED_PATHS = (
+    "/api/learning-tasks/{task_id}/confirm",
+    "/api/learning-tasks",
+    "/api/learning-tasks/{task_id}",
+    "/api/learning-tasks/{task_id}/run",
+    "/api/learning-tasks/{task_id}/cancel",
     "/api/health",
     "/api/plans/today",
     "/api/plans/today/generate",
     "/api/plans/{plan_id}/items",
     "/api/plans/{plan_id}/questions",
     "/api/practice-items/{item_id}/answer",
+    "/api/practice-items/{item_id}/answer-submissions",
+    "/api/practice-items/{item_id}/process-reviews",
+    "/api/practice-items/{item_id}/process-reviews/latest",
+    "/api/practice-items/{item_id}/answer-reveal",
     "/api/practice-items/{item_id}/self-assessments",
     "/api/knowledge/tree",
     "/api/knowledge/{kp_id}/self-assessment",

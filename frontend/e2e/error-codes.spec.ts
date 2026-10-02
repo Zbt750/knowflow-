@@ -131,6 +131,7 @@ test.describe("错误码与页面行为（规格 2.5）", () => {
 
     await page.goto(STUDY);
     await expect(page.getByTestId("study-active")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("self-report").locator("summary").click();
     await page.getByTestId("self-grade-mastered").click();
 
     // 提示说明「已提交过」，并且页面刷新为服务端记录（进度不因这次点击再涨）。
@@ -146,6 +147,7 @@ test.describe("错误码与页面行为（规格 2.5）", () => {
 
     await page.goto(STUDY);
     await expect(page.getByTestId("study-active")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("self-report").locator("summary").click();
     await page.getByTestId("self-grade-mastered").click();
     // 仍然停在一个可作答的题卡上（而不是空态或死循环）。
     await expect(page.getByTestId("focus-question")).toBeVisible({ timeout: 15_000 });

@@ -61,6 +61,8 @@ class KpState(Base, TimestampMixin):
         ForeignKey("knowledge_points.id", ondelete="CASCADE"), primary_key=True
     )
     state: Mapped[str] = mapped_column(String(30), nullable=False, default="unseen")
+    assessment_basis: Mapped[str] = mapped_column(String(30), nullable=False, default="legacy_self_reported")
+    pending_review_question_ids: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
     # evidence_window 只存去重后的真实题目/历年原卷引用的 mastered 确认 + 上海日期。
     evidence_window: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
     review_stage: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -86,6 +88,7 @@ class Question(Base, TimestampMixin):
     grading_mode: Mapped[str] = mapped_column(
         String(30), nullable=False, default="self_assessed"
     )
+    grading_config: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     stem: Mapped[str] = mapped_column(Text, nullable=False)
     options: Mapped[list[Any] | None] = mapped_column(JSON)
     correct_answer: Mapped[str | None] = mapped_column(Text)
@@ -230,6 +233,7 @@ class PracticeItem(Base, TimestampMixin):
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     latest_self_grade: Mapped[str | None] = mapped_column(String(30))
+    answer_revealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     question: Mapped[Question | None] = relationship()
     exam_reference: Mapped[ExamQuestionReference | None] = relationship()
@@ -268,7 +272,8 @@ class QuestionAttempt(Base):
     objective_result: Mapped[str] = mapped_column(
         String(20), nullable=False, default="unknown"
     )
-    self_grade: Mapped[str] = mapped_column(String(30), nullable=False)
+    self_grade: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    grading_evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # 客户端重复提交同一动作时不再产生第二条历史。
     idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)

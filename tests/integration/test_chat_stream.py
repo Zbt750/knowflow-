@@ -45,6 +45,47 @@ BODY = (
     "## 洛必达法则\n\n"
     "洛必达法则用于处理 0/0 型与无穷比无穷型未定式，使用前必须判断未定式类型。\n"
 )
+
+
+@pytest.mark.parametrize("screening_mode,fail,expected", [
+    ("off", False, 2), ("shadow", False, 2), ("filter", False, 1), ("filter", True, 1),
+])
+def test_context_screening_persists_actual_sse_evidence(session_factory, stack, monkeypatch, screening_mode, fail, expected):
+    from backend.config import get_settings
+    from backend.chat.evidence import validate_evidence_snapshot
+    from backend.retrieval.protocols import RetrievalHit
+    from backend.services.retrieval_service import RetrievalOutcome
+    settings = get_settings()
+    monkeypatch.setattr(settings, "chat_context_screening", screening_mode)
+    monkeypatch.setattr(settings, "capture_test_evidence", True)
+    with session_factory.begin() as db:
+        body = "无关线程正文\n\n可导必连续，连续不一定可导。"
+        material = create_material(db, title="合成筛选对照", body=body, index_version="v1-test")
+        low = create_chunk(db, material, content="无关线程正文", ordinal=0)
+        high = create_chunk(db, material, content="可导必连续，连续不一定可导。", ordinal=1)
+        hits = [RetrievalHit(chunk_id=c.id, material_id=material.id, material_title=material.title,
+                            source_type="builtin", index_version="v1-test", ordinal=c.ordinal,
+                            content=c.content, heading_path=(), kp_ids=(), score=0.03, vector_score=cosine)
+                for c, cosine in [(low, 0.2), (high, 0.8)]]
+    monkeypatch.setattr(chat_service, "search_chunks", lambda *_, **__: RetrievalOutcome(hits=hits))
+    session_id = make_session(session_factory)
+    frames = collect_frames(session_factory, session_id=session_id, question="什么是连续？",
+                            stack=stack, provider=ScriptedProvider(["可导必连续[C1]。"], fail=fail),
+                            request=AlwaysAliveRequest())
+    assistant = assistant_rows(session_factory, session_id)[0]
+    assert assistant.status == ("failed" if fail else "completed")
+    diagnostic = assistant.metadata_["context_screening"]
+    assert diagnostic["mode"] == screening_mode
+    assert diagnostic["before_count"] == 2 and diagnostic["after_count"] == expected
+    snapshot = assistant.metadata_["evaluation_evidence"]
+    blocks, _ = validate_evidence_snapshot(snapshot, str(assistant.id))
+    assert len(blocks) == expected and snapshot["context_screening"] == diagnostic
+    if screening_mode == "filter":
+        assert snapshot["citations"] == {"C1": str(hits[1].chunk_id)}
+        assert "无关线程正文" not in str(snapshot["contexts"])
+    if not fail:
+        cards = next(data for event, data in frames if event == "citations")
+        assert str(hits[1 if screening_mode == "filter" else 0].chunk_id) in str(cards)
 HIT_TEXT = "洛必达法则用于处理 0/0 型与无穷比无穷型未定式，使用前必须判断未定式类型。"
 
 
@@ -132,15 +173,21 @@ def session_factory():
 
 @pytest.fixture(autouse=True)
 def clean_tables(session_factory) -> Iterator[None]:
-    with session_factory() as db:
-        db.execute(
-            text(
-                "TRUNCATE TABLE "
-                + ", ".join(CHAT_TABLES + tuple(t for t in RAG_TABLES if t not in CHAT_TABLES))
-                + " RESTART IDENTITY CASCADE"
+    # Cancelling an asyncio wrapper does not stop its retrieval worker. Wait for
+    # that worker to leave the DB before acquiring TRUNCATE's exclusive locks.
+    assert chat_service._RETRIEVAL_SLOT.acquire(timeout=10), "retrieval worker did not finish before test cleanup"
+    try:
+        with session_factory() as db:
+            db.execute(
+                text(
+                    "TRUNCATE TABLE "
+                    + ", ".join(CHAT_TABLES + tuple(t for t in RAG_TABLES if t not in CHAT_TABLES))
+                    + " RESTART IDENTITY CASCADE"
+                )
             )
-        )
-        db.commit()
+            db.commit()
+    finally:
+        chat_service._RETRIEVAL_SLOT.release()
     yield
 
 
@@ -182,6 +229,30 @@ def seed_material(session_factory, stack: RetrievalStack) -> None:
     )
     stack.vector_store.upsert([record], stack.embedder.encode([HIT_TEXT]))
     stack.keyword_index.rebuild([record])
+
+
+@pytest.mark.parametrize("heading", ["## 通用知识参考", "### 通用知识参考（补充背景）"])
+def test_mixed_stream_preserves_evidence_but_removes_background_citations(session_factory, stack, heading):
+    """真实保存链路用替身验证来源隔离，不把提示词存在当成模型遵循证明。"""
+    seed_material(session_factory, stack)
+    session_id = make_session(session_factory)
+    provider = ScriptedProvider([
+        "资料说明须先判断未定式类型[C1]。\n",
+        heading + "\n补充背景不是文件定义[C1][C99]。",
+    ])
+    frames = collect_frames(session_factory, session_id=session_id,
+                            question="洛必达法则用于什么类型的未定式？", stack=stack,
+                            provider=provider, request=AlwaysAliveRequest())
+    done = next(data for event, data in frames if event == "done")
+    stored = assistant_rows(session_factory, session_id)[0]
+    assert done["answer"] == stored.content
+    evidence, background = stored.content.split(heading, 1)
+    assert "[C1]" in evidence and "[C" not in background
+    assert stored.metadata_["answer_source"] == "mixed"
+    with session_factory() as db:
+        citations = list(db.scalars(select(MessageCitation).where(MessageCitation.message_id == stored.id)))
+    assert [row.label for row in citations] == ["C1"]
+    assert provider.calls == 1
 
 
 def make_session(session_factory, *, mode: str = "builtin") -> UUID:
@@ -236,6 +307,66 @@ def assistant_rows(session_factory, session_id: UUID) -> list[ChatMessage]:
 # ---------------------------------------------------------------------------
 # 正常完成
 # ---------------------------------------------------------------------------
+
+
+def test_stream_usage_and_trace_are_persisted(session_factory, stack):
+    from backend.chat.call_trace import observe_payload, PROMPT_VERSION
+    seed_material(session_factory, stack)
+    session_id = make_session(session_factory)
+    class UsageProvider(ScriptedProvider):
+        async def stream(self, messages, *, attempt=1):
+            async for part in super().stream(messages, attempt=attempt): yield part
+            observe_payload({"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+            observe_payload({"choices": [{"finish_reason": "stop"}]})
+    frames = collect_frames(session_factory, session_id=session_id, question="洛必达法则用于什么未定式？",
+                            stack=stack, provider=UsageProvider(["资料回答[C1]。"]), request=AlwaysAliveRequest())
+    done = next(data for event, data in frames if event == "done")
+    assert done["usage"]["total_tokens"] == 15
+    metadata = assistant_rows(session_factory, session_id)[0].metadata_
+    trace = metadata["generation_trace"]
+    assert trace["request_id"] == done["message_id"]
+    assert trace["prompt_version"] == PROMPT_VERSION
+    assert trace["observed_usage"] == done["usage"]
+    assert trace["calls"][0]["finish_reason"] == "stop"
+
+
+@pytest.mark.parametrize("capture", [False, True])
+@pytest.mark.parametrize("fail", [False, True])
+def test_actual_evidence_persistence_and_api_privacy(session_factory, stack, monkeypatch, capture, fail):
+    from types import SimpleNamespace
+    from backend.config import get_settings
+    from backend.api.routes.chat import list_messages
+    from backend.chat.evidence import validate_evidence_snapshot
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "capture_test_evidence", capture)
+    seed_material(session_factory, stack)
+    session_id = make_session(session_factory)
+
+    class RecordingProvider(ScriptedProvider):
+        async def stream(self, messages, *, attempt=1):
+            self.recorded_prompt = messages
+            async for part in super().stream(messages, attempt=attempt):
+                yield part
+
+    provider = RecordingProvider(["真实回答[C1]。"], fail=fail)
+    collect_frames(session_factory, session_id=session_id,
+                   question="洛必达法则用于处理什么类型的未定式？", stack=stack,
+                   provider=provider, request=AlwaysAliveRequest())
+    assistant = assistant_rows(session_factory, session_id)[0]
+    assert assistant.status == ("failed" if fail else "completed")
+    assert ("evaluation_evidence" in assistant.metadata_) is capture
+    if capture:
+        blocks, contexts = validate_evidence_snapshot(assistant.metadata_["evaluation_evidence"], str(assistant.id))
+        assert blocks and "\n\n".join(contexts) == provider.recorded_prompt[-2]["content"].removeprefix("【资料证据】\n")
+    for env, enabled in [("dev", True), ("test", False), ("test", True)]:
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            session_factory=session_factory, settings=SimpleNamespace(app_env=env, capture_test_evidence=enabled))))
+        messages = list_messages(request, session_id)
+        restored = next(m for m in messages if m["message_id"] == str(assistant.id))
+        assert ("evaluation_evidence" in restored) is (env == "test" and enabled)
+        if env == "test" and enabled and capture:
+            assert restored["evaluation_evidence"] == assistant.metadata_["evaluation_evidence"]
 
 
 def test_frame_order_is_meta_delta_citations_done(session_factory, stack) -> None:
@@ -401,15 +532,27 @@ def test_retrieval_timeout_emits_error_and_marks_assistant_failed(
     """检索线程卡住时，SSE 必须在总时限后以错误帧结束。"""
     session_id = make_session(session_factory)
     monkeypatch.setattr(chat_service, "RETRIEVAL_TIMEOUT_SECONDS", 0.01)
+    worker_started = Event()
     worker_finished = Event()
 
     def slow_prepare(_factory, **_kwargs) -> None:
         try:
+            worker_started.set()
             time.sleep(0.08)
         finally:
             worker_finished.set()
 
     monkeypatch.setattr(chat_service, "_prepare_from_factory", slow_prepare)
+    original_submit = chat_service._submit_preparation
+
+    def submit_started_worker(*args, **kwargs):
+        future = original_submit(*args, **kwargs)
+        # 此用例验证“正在执行的线程不可被取消”，不是“队列中的任务被取消”。
+        # 10ms 内线程可能尚未调度；必须先建立 running 前置条件再开始超时计时。
+        assert worker_started.wait(timeout=2), "test retrieval worker did not start"
+        return future
+
+    monkeypatch.setattr(chat_service, "_submit_preparation", submit_started_worker)
     frames = collect_frames(
         session_factory,
         session_id=session_id,

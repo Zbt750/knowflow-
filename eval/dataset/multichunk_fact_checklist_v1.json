@@ -1,0 +1,28 @@
+{
+  "version": "multichunk-facts-v1",
+  "cases": {
+    "file-exact": [
+      {"id": "stage-a", "answer_any": ["阶段A", "阶段 A"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段A 连通"]}]},
+      {"id": "stage-b", "answer_any": ["阶段B", "阶段 B"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段B 学习记录"]}]},
+      {"id": "stage-c", "answer_any": ["阶段C", "阶段 C"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段C 资料"]}]},
+      {"id": "stage-d", "answer_any": ["阶段D", "阶段 D"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段D 问答"]}]},
+      {"id": "stage-e", "answer_any": ["阶段E", "阶段 E"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段E 体验"]}]},
+      {"id": "stage-f", "answer_any": ["阶段F", "阶段 F"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段F 部署"]}]},
+      {"id": "stage-g", "answer_any": ["阶段G", "阶段 G"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段G 闭环"]}]}
+    ],
+    "file-alias": [
+      {"id": "stage-e", "answer_any": ["阶段E", "阶段 E"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段E 体验"]}]},
+      {"id": "stage-f", "answer_any": ["阶段F", "阶段 F"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段F 部署"]}]},
+      {"id": "stage-g", "answer_any": ["阶段G", "阶段 G"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段G 闭环"]}]}
+    ],
+    "cross-file": [
+      {"id": "common-persistence", "answer_any": ["持久化", "重启后"], "sources": [
+        {"material_title": "合成项目阶段说明", "evidence_any": ["数据库持久化"]},
+        {"material_title": "合成部署边界补充", "evidence_any": ["保留数据库数据"]}
+      ]},
+      {"id": "stage-unique", "answer_any": ["阶段A", "阶段 A"], "sources": [{"material_title": "合成项目阶段说明", "evidence_any": ["阶段A 连通"]}]},
+      {"id": "desktop-boundary", "answer_any": ["桌面安装"], "sources": [{"material_title": "合成部署边界补充", "evidence_any": ["桌面安装验收"]}]},
+      {"id": "backup-retention", "answer_any": ["三次成功备份", "三次", "3次"], "sources": [{"material_title": "合成部署边界补充", "evidence_any": ["至少保留最近三次成功备份"]}]}
+    ]
+  }
+}

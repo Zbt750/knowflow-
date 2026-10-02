@@ -222,7 +222,7 @@ test.describe("阶段 B：知识树页面", () => {
     await expect(page.getByTestId("selected-kp-count")).toContainText("本次包含 1 个知识点");
   });
 
-  test("叶子整体自评显示透明基础确认 +2，且不伪装成做过两题", async ({ page }) => {
+  test("叶子自述只保存辅助反馈，不增加基础确认或伪造练习", async ({ page }) => {
     await page.goto("/knowledge");
     await revealLeaf(page, [
       "math.calculus",
@@ -234,19 +234,19 @@ test.describe("阶段 B：知识树页面", () => {
     // 自评反馈是瞬时提示：后端返回后立即读取。
     const notice = page.getByTestId("node-notice");
     await expect(notice).toBeVisible({ timeout: 15_000 });
-    // 必须明确显示基础确认 +2，绝不伪装成用户做过两题。
-    await expect(notice).toContainText("基础确认 +2");
+    // 明确说明不增加客观确认。
+    await expect(notice).toContainText("不增加客观确认");
     await page.getByTestId("knowledge-advanced").locator("summary").click();
-    await expect(page.getByTestId("manual-credit")).toHaveText("2");
+    await expect(page.getByTestId("manual-credit")).toHaveText("0");
 
     // 练习记录里绝不能出现两条伪造的作答。
     await page.getByTestId("tab-attempts").click();
     await expect(page.getByTestId("attempt-history")).toContainText("还没有练习记录");
 
-    // 再点「我部分掌握」：基础确认清零，练习记录仍然为空。
+    // 改为自述不太熟悉：仍不增加确认或练习记录。
     await page.getByTestId("tab-overview").click();
     await page.getByTestId("node-self-partial").click();
-    await expect(page.getByTestId("node-notice")).toContainText("基础确认为 0", { timeout: 15_000 });
+    await expect(page.getByTestId("node-notice")).toContainText("不增加客观确认", { timeout: 15_000 });
     await page.getByTestId("knowledge-advanced").locator("summary").click();
     await expect(page.getByTestId("manual-credit")).toHaveText("0");
     await page.getByTestId("tab-attempts").click();
@@ -315,14 +315,12 @@ test.describe("阶段 B：今日学习主流程", () => {
     expect(narrowFocusStemBox && narrowFocusAnswerBox && narrowFocusAnswerBox.y > narrowFocusStemBox.y).toBeTruthy();
     await page.setViewportSize({ width: 1366, height: 768 });
 
-    // 四种自评按钮都存在。
-    for (const id of ["self-grade-mastered", "self-grade-partial", "self-grade-not-mastered", "self-grade-skip"]) {
-      await expect(page.getByTestId(id)).toBeEnabled();
-    }
+    await expect(page.getByTestId("self-grade-skip")).toBeEnabled();
+    await expect(page.getByTestId("self-grade-mastered")).toHaveCount(0);
 
     // 提交「已掌握」。提交成功后页面按设计跳到下一道未完成题，
     // 因此自评反馈要在全卷模式里回看（该题保留在卷内）。
-    await page.getByTestId("self-grade-mastered").click();
+    await page.getByTestId("submit-answer").click();
 
     // 等自评**确实提交完成**再切视图。
     //
@@ -365,9 +363,7 @@ test.describe("阶段 B：今日学习主流程", () => {
     // 全卷里能看到变式题标签（毕业证据来源对用户透明）。
     await expect(paper).toContainText("变式题");
     // 自评反馈来自后端 reason_code 与有效确认数。
-    const paperNotice = page.getByTestId("paper-notice").first();
-    await expect(paperNotice).toBeVisible({ timeout: 15_000 });
-    await expect(paperNotice).toContainText("已记录");
+    await expect(page.locator('[data-testid^="paper-submission-"]').first()).toBeVisible();
 
     // 今日知识点摘要显示实际涉及的知识点与完成数量。
     await expect(page.getByTestId("today-kp-summary")).toBeVisible();
@@ -375,6 +371,7 @@ test.describe("阶段 B：今日学习主流程", () => {
 
     // 回到专注模式后，已完成的题不会再出现。
     await page.getByTestId("mode-focus").click();
+    await page.getByTestId("continue-question").click();
     await expect(page.getByTestId("focus-question")).toBeVisible();
     await expect(page.getByTestId("focus-question").locator("header")).toContainText("未完成");
   });
@@ -417,8 +414,9 @@ test.describe("阶段 B：今日学习主流程", () => {
           response.url().includes("/api/plans/today") && response.request().method() === "GET",
         { timeout: 15_000 },
       );
-      await page.getByTestId("self-grade-mastered").click();
+      await page.getByTestId("submit-answer").click();
       await refreshed;
+      await page.getByTestId("continue-question").click();
     }
 
     // 此时计划应为 completed，专注模式显示空态。
@@ -644,8 +642,8 @@ test.describe("阶段 B：从知识树补充与选择题选项", () => {
     );
     expect(assess.status()).toBe(200);
     const payload = await assess.json();
-    // 客观结果只是复盘参考；自评才是毕业依据。
-    expect(payload.effective_confirmation_count).toBeGreaterThan(0);
+    // 自述入口不产生客观确认，选项判分必须走答案提交服务。
+    expect(payload.effective_confirmation_count).toBe(0);
   });
 
   test("自评刷新期间整卷始终在场，且不会把用户从全卷弹回专注", async ({ page }) => {
@@ -679,10 +677,11 @@ test.describe("阶段 B：从知识树补充与选择题选项", () => {
     const pendingItem = page
       .getByTestId("paper-list")
       .locator("li.paper-item")
-      .filter({ has: page.getByRole("button", { name: "已掌握" }) })
+      .filter({ has: page.locator(".self-report") })
       .first();
     await expect(pendingItem).toBeVisible();
-    await pendingItem.getByRole("button", { name: "已掌握" }).click();
+    await pendingItem.locator(".self-report summary").click();
+    await pendingItem.getByRole("button", { name: "独立完成" }).click();
 
     // 刷新窗口内：卷子必须始终在场，绝不能出现「整页 loading」把它摘掉。
     await expect(page.getByTestId("paper-list")).toBeVisible();

@@ -74,6 +74,7 @@ class QuestionCandidate:
     confirmed: bool = False
     # 距上次练习多少天；复测排序与文案会用到。
     days_since_practiced: int | None = None
+    pending_objective_review: bool = False
 
     @property
     def minutes(self) -> int:
@@ -199,18 +200,18 @@ def select_questions(
             policy=policy,
         )
         missing = _missing_gap_keys(gap)
-        if not missing:
+        if not missing and not any(item.pending_objective_review for item in remaining):
             # 缺口补齐就停：再选只是重复劳动。
             break
         covered = covered_skill_tags(simulated)
         span_before = _span_days(simulated, manual_credit_count, manual_confirmed_at)
 
-        best: tuple[int, int, str, QuestionCandidate] | None = None
+        best: tuple[tuple[bool, int, int, str], QuestionCandidate] | None = None
         for candidate in remaining:
             gain = _coverage(
                 candidate, missing_keys=missing, policy=policy, covered_tags=covered
             )
-            if gain <= 0:
+            if gain <= 0 and not candidate.pending_objective_review:
                 continue
             # 重做旧题时再确认一次「今天是否真的把跨度拉开」，
             # 否则会在同一天反复推荐同一道题却没有实际推进。
@@ -219,15 +220,16 @@ def select_questions(
                 if _span_days(trial, manual_credit_count, manual_confirmed_at) <= span_before:
                     continue
             # 收益相同时先选更短的题：更容易塞进预算，也更快拿到反馈。
-            key = (gain, -candidate.minutes, candidate.question_id)
-            if best is None or key > (best[0], -best[1], best[2]):
-                best = (gain, candidate.minutes, candidate.question_id, candidate)
+            key = (candidate.pending_objective_review, gain, -candidate.minutes, candidate.question_id)
+            if best is None or key > best[0]:
+                best = (key, candidate)
 
         if best is None:
             # 剩下的题都推进不了缺口了，停。
             break
 
-        gain, cost, _, chosen = best
+        _, chosen = best
+        cost = chosen.minutes
         if spent + cost > total_budget:
             # 预算不够放这道题就不再硬塞；剩余的题留给下一次学习。
             skipped = len(remaining)
@@ -245,7 +247,7 @@ def select_questions(
                     chosen, policy=policy, covered=covered, missing=missing
                 ),
                 # 重做已确认过的题：页面据此说明「题库已练过，这是复测」。
-                is_review=chosen.confirmed,
+                is_review=chosen.confirmed or chosen.pending_objective_review,
             )
         )
         # 把它加入模拟窗口，下一轮就能看到缺口已经缩小。
@@ -305,7 +307,7 @@ def _priority_for_chosen(
     chosen: QuestionCandidate, *, policy: MasteryPolicy, missing: set[str]
 ) -> Priority:
     """入选题目的优先级标签：用于页面解释「为什么推荐这道题」。"""
-    if chosen.last_self_grade == "not_mastered":
+    if chosen.pending_objective_review or chosen.last_self_grade == "not_mastered":
         return Priority.FAILED_TYPE
     if chosen.last_self_grade == "partial":
         return Priority.PARTIAL_TYPE
@@ -329,6 +331,8 @@ def _reason_for(
 ) -> str:
     """给用户看的推荐原因，说明这道题在补什么缺口。"""
     # 「上次未掌握」永远排在最前：这是用户最该看到的信号，与优先级标签保持一致。
+    if chosen.pending_objective_review:
+        return "最近答错，优先复测"
     if chosen.last_self_grade == "not_mastered":
         return "上次未掌握，优先重做"
     if chosen.last_self_grade == "partial":

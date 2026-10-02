@@ -1,0 +1,1086 @@
+{
+  "schema_version": "golden-learning-slice-v1",
+  "slice_id": "integral-binary-tree",
+  "version": "1",
+  "topics": [
+    {
+      "kp_code": "math.exam.c431f98f817c",
+      "name": "定积分的计算",
+      "subject": "math2",
+      "lesson_sha256": "8b6b88285be179ae818d500853672e2aed4b73cd761818aac5f85ff89aa0a57d",
+      "lesson_review": {
+        "status": "UNVERIFIED"
+      }
+    },
+    {
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "name": "二叉树基础（性质+存储）",
+      "subject": "408",
+      "lesson_sha256": "92cd183cf82f9ffd0632c30671898c15e11fe0ee8b6a462ae59c1258e6036b18",
+      "lesson_review": {
+        "status": "UNVERIFIED"
+      }
+    }
+  ],
+  "questions": [
+    {
+      "content": {
+        "source_id": "M01",
+        "kp_code": "math.exam.c431f98f817c",
+        "question_type": "fill_blank",
+        "stem": "计算定积分 $\\int_0^1 x^2\\,dx$，只提交最终数值。",
+        "options": null,
+        "correct_answer": "1/3",
+        "explanation": "原函数为 x³/3，代入 1 和 0 得 1/3。",
+        "grading_method": "numeric_final",
+        "estimated_minutes": 3,
+        "skill_tags": [
+          "幂函数积分"
+        ],
+        "question_role": "basic",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 M01（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "1/3",
+          "result": "right",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "99",
+          "result": "wrong",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "sqrt(1)",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "M02",
+        "kp_code": "math.exam.c431f98f817c",
+        "question_type": "single_choice",
+        "stem": "定积分 $\\int_{-1}^1 x^3\\,dx$ 的值是？",
+        "options": {
+          "A": "0",
+          "B": "1/2",
+          "C": "-1/2",
+          "D": "1"
+        },
+        "correct_answer": "A",
+        "explanation": "x³ 在对称区间连续且为奇函数，因此积分为 0。",
+        "grading_method": "single_choice",
+        "estimated_minutes": 2,
+        "skill_tags": [
+          "对称性",
+          "适用条件"
+        ],
+        "question_role": "basic",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 M02（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "selected_option": "a",
+          "result": "right",
+          "reason": "exact_option_comparison"
+        },
+        {
+          "selected_option": "B",
+          "result": "wrong",
+          "reason": "exact_option_comparison"
+        },
+        {
+          "selected_option": "Z",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "M03",
+        "kp_code": "math.exam.c431f98f817c",
+        "question_type": "calculation",
+        "stem": "计算 $\\int_0^2(3x^2+1)\\,dx$，只提交最终数值。",
+        "options": null,
+        "correct_answer": "10",
+        "explanation": "原函数为 x³+x，代入上下限得 8+2=10。",
+        "grading_method": "numeric_final",
+        "estimated_minutes": 4,
+        "skill_tags": [
+          "直接积分"
+        ],
+        "question_role": "typical",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 M03（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "10",
+          "result": "right",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "99",
+          "result": "wrong",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "sqrt(1)",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "M04",
+        "kp_code": "math.exam.c431f98f817c",
+        "question_type": "calculation",
+        "stem": "计算 $\\int_0^1 2x(x^2+1)\\,dx$，只提交最终数值。",
+        "options": null,
+        "correct_answer": "3/2",
+        "explanation": "令 u=x²+1，du=2x dx，上下限为 1 和 2，积分等于 (4-1)/2=3/2。也可展开逐项积分。",
+        "grading_method": "numeric_final",
+        "estimated_minutes": 5,
+        "skill_tags": [
+          "换元积分",
+          "上下限"
+        ],
+        "question_role": "variant",
+        "difficulty": "basic",
+        "is_variant": true
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 M04（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "3/2",
+          "result": "right",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "99",
+          "result": "wrong",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "sqrt(1)",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "M05",
+        "kp_code": "math.exam.c431f98f817c",
+        "question_type": "calculation",
+        "stem": "计算 $\\int_0^1 x(1-x)\\,dx$，只提交最终数值。",
+        "options": null,
+        "correct_answer": "1/6",
+        "explanation": "展开为 x-x²，积分得 1/2-1/3=1/6。",
+        "grading_method": "numeric_final",
+        "estimated_minutes": 4,
+        "skill_tags": [
+          "直接积分",
+          "展开"
+        ],
+        "question_role": "typical",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 M05（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "1/6",
+          "result": "right",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "99",
+          "result": "wrong",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "sqrt(1)",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "M06",
+        "kp_code": "math.exam.c431f98f817c",
+        "question_type": "calculation",
+        "stem": "计算 $\\int_{-1}^1 |x|\\,dx$，只提交最终数值。",
+        "options": null,
+        "correct_answer": "1",
+        "explanation": "分成 [-1,0] 和 [0,1]，分别积分 -x 和 x，结果为 1/2+1/2=1。",
+        "grading_method": "numeric_final",
+        "estimated_minutes": 5,
+        "skill_tags": [
+          "分段积分",
+          "对称性"
+        ],
+        "question_role": "variant",
+        "difficulty": "basic",
+        "is_variant": true
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 M06（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "1",
+          "result": "right",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "99",
+          "result": "wrong",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "sqrt(1)",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "M07",
+        "kp_code": "math.exam.c431f98f817c",
+        "question_type": "calculation",
+        "stem": "计算 $\\int_1^2 dx/x$，提交精确表达式（不要求近似小数）。",
+        "options": null,
+        "correct_answer": "ln(2)",
+        "explanation": "积分区间内 x>0，原函数为 ln x，所以结果为 ln 2。当前数值比较器不支持这种符号判等，须保留为未机器判定。",
+        "grading_method": null,
+        "estimated_minutes": 5,
+        "skill_tags": [
+          "对数积分",
+          "判题边界"
+        ],
+        "question_role": "typical",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 M07（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "ln(2)",
+          "result": "unknown",
+          "reason": "unsupported_question"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "M08",
+        "kp_code": "math.exam.c431f98f817c",
+        "question_type": "proof",
+        "stem": "设 a>0，f 在 [-a,a] 上连续且为奇函数，证明 $\\int_{-a}^a f(x)\\,dx=0$。",
+        "options": null,
+        "correct_answer": "将负半区间令 x=-t，得到该段积分为 -∫₀ᵃf(t)dt，与正半区间相消。",
+        "explanation": "连续性保证积分存在。由奇函数性质 f(-t)=-f(t)，负半段积分等于正半段积分的相反数；不能只输入 0 就当作证明完成。",
+        "grading_method": null,
+        "estimated_minutes": 8,
+        "skill_tags": [
+          "对称性",
+          "证明条件"
+        ],
+        "question_role": "comprehensive",
+        "difficulty": "medium",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 M08（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "将负半区间令 x=-t，得到该段积分为 -∫₀ᵃf(t)dt，与正半区间相消。",
+          "result": "unknown",
+          "reason": "unsupported_question"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "T01",
+        "kp_code": "cs408.ds.topic.1efaf3d00b50",
+        "question_type": "fill_blank",
+        "stem": "一棵非空二叉树恰有 7 个度为 2 的节点，它有多少个叶子节点？",
+        "options": null,
+        "correct_answer": "8",
+        "explanation": "非空二叉树满足 n₀=n₂+1，所以叶子数为 8。",
+        "grading_method": "numeric_final",
+        "estimated_minutes": 2,
+        "skill_tags": [
+          "节点计数",
+          "非空条件"
+        ],
+        "question_role": "basic",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 T01（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "8",
+          "result": "right",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "99",
+          "result": "wrong",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "sqrt(1)",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "T02",
+        "kp_code": "cs408.ds.topic.1efaf3d00b50",
+        "question_type": "calculation",
+        "stem": "非空二叉树有 5 个叶子、3 个度为 1 的节点，求总节点数。",
+        "options": null,
+        "correct_answer": "12",
+        "explanation": "n₂=n₀-1=4，总节点数为 5+3+4=12。",
+        "grading_method": "numeric_final",
+        "estimated_minutes": 3,
+        "skill_tags": [
+          "节点计数"
+        ],
+        "question_role": "typical",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 T02（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "12",
+          "result": "right",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "99",
+          "result": "wrong",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "sqrt(1)",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "T03",
+        "kp_code": "cs408.ds.topic.1efaf3d00b50",
+        "question_type": "single_choice",
+        "stem": "根节点算第 1 层，高度为 4 层的二叉树最多有多少个节点？",
+        "options": {
+          "A": "7",
+          "B": "15",
+          "C": "16",
+          "D": "31"
+        },
+        "correct_answer": "B",
+        "explanation": "最多节点数为 2⁴-1=15；高度按层数而非边数定义。",
+        "grading_method": "single_choice",
+        "estimated_minutes": 2,
+        "skill_tags": [
+          "高度约定",
+          "层数"
+        ],
+        "question_role": "basic",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 T03（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "selected_option": "b",
+          "result": "right",
+          "reason": "exact_option_comparison"
+        },
+        {
+          "selected_option": "A",
+          "result": "wrong",
+          "reason": "exact_option_comparison"
+        },
+        {
+          "selected_option": "Z",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "T04",
+        "kp_code": "cs408.ds.topic.1efaf3d00b50",
+        "question_type": "fill_blank",
+        "stem": "一棵完全二叉树共有 13 个节点，问叶子节点数是多少？",
+        "options": null,
+        "correct_answer": "7",
+        "explanation": "编号 1 到 6 可有孩子，7 到 13 为叶子，故叶子数为 ceil(13/2)=7。",
+        "grading_method": "numeric_final",
+        "estimated_minutes": 3,
+        "skill_tags": [
+          "完全二叉树",
+          "节点计数"
+        ],
+        "question_role": "variant",
+        "difficulty": "basic",
+        "is_variant": true
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 T04（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "7",
+          "result": "right",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "99",
+          "result": "wrong",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "sqrt(1)",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "T05",
+        "kp_code": "cs408.ds.topic.1efaf3d00b50",
+        "question_type": "fill_blank",
+        "stem": "非空二叉树共有 5 个节点，使用每节点两个孩子指针的二叉链表且无额外头节点，空孩子指针共有多少个？",
+        "options": null,
+        "correct_answer": "6",
+        "explanation": "10 个孩子指针槽中有 4 个对应实际边，因此空指针为 10-4=6。",
+        "grading_method": "numeric_final",
+        "estimated_minutes": 3,
+        "skill_tags": [
+          "链式存储",
+          "空指针"
+        ],
+        "question_role": "typical",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 T05（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "6",
+          "result": "right",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "99",
+          "result": "wrong",
+          "reason": "exact_numeric_comparison"
+        },
+        {
+          "raw_answer": "sqrt(1)",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "T06",
+        "kp_code": "cs408.ds.topic.1efaf3d00b50",
+        "question_type": "single_choice",
+        "stem": "二叉树根为 A，A 的左孩子为 B、右孩子为 C；B 的左孩子为 D、右孩子为 E，C、D、E 无孩子。先序遍历是哪一个？",
+        "options": {
+          "A": "D B E A C",
+          "B": "D E B C A",
+          "C": "A B D E C",
+          "D": "A B C D E"
+        },
+        "correct_answer": "C",
+        "explanation": "先序按根、左、右递归：先 A，再遍历 B 的子树得到 B D E，最后 C，合为 A B D E C。",
+        "grading_method": "single_choice",
+        "estimated_minutes": 3,
+        "skill_tags": [
+          "遍历基础"
+        ],
+        "question_role": "typical",
+        "difficulty": "basic",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 T06（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "selected_option": "c",
+          "result": "right",
+          "reason": "exact_option_comparison"
+        },
+        {
+          "selected_option": "A",
+          "result": "wrong",
+          "reason": "exact_option_comparison"
+        },
+        {
+          "selected_option": "Z",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "T07",
+        "kp_code": "cs408.ds.topic.1efaf3d00b50",
+        "question_type": "single_choice",
+        "stem": "根算第 1 层，普通二叉树高度为 4 层，每个内部节点只需有一个孩子。最少节点数是多少？",
+        "options": {
+          "A": "4",
+          "B": "7",
+          "C": "8",
+          "D": "15"
+        },
+        "correct_answer": "A",
+        "explanation": "单链形状即可达到 4 层且只有 4 个节点；不能将普通二叉树默认成满二叉树。",
+        "grading_method": "single_choice",
+        "estimated_minutes": 2,
+        "skill_tags": [
+          "高度约定",
+          "最少节点"
+        ],
+        "question_role": "variant",
+        "difficulty": "basic",
+        "is_variant": true
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 T07（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "selected_option": "a",
+          "result": "right",
+          "reason": "exact_option_comparison"
+        },
+        {
+          "selected_option": "B",
+          "result": "wrong",
+          "reason": "exact_option_comparison"
+        },
+        {
+          "selected_option": "Z",
+          "result": "unknown",
+          "reason": "unsupported_answer"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    },
+    {
+      "content": {
+        "source_id": "T08",
+        "kp_code": "cs408.ds.topic.1efaf3d00b50",
+        "question_type": "subjective",
+        "stem": "用伪代码写出二叉树叶子计数算法，说明空树与单节点情况，以及时间和递归栈空间复杂度。",
+        "options": null,
+        "correct_answer": "count(null)=0；若左右孩子皆空则返回1；否则返回count(left)+count(right)。时间 O(n)，栈空间 O(h)。",
+        "explanation": "必须先处理空指针再访问孩子。每个真实节点访问一次，空树返回 0，单节点返回 1。仅最终数字无法检验算法；本题只能保存过程或辅助审阅，不宣称沙箱执行通过。",
+        "grading_method": null,
+        "estimated_minutes": 8,
+        "skill_tags": [
+          "边界处理",
+          "递归算法",
+          "复杂度"
+        ],
+        "question_role": "comprehensive",
+        "difficulty": "medium",
+        "is_variant": false
+      },
+      "source": {
+        "kind": "original",
+        "origin": "AI_GENERATED",
+        "citation": "Golden Learning Slice v1 原创合成题 T08（不是考研真题）",
+        "rights_basis": "项目内原创合成候选内容；未复制原卷题干，待人工审查来源与可发布性"
+      },
+      "reviews": {
+        "source": {
+          "status": "GENERATED"
+        },
+        "stem": {
+          "status": "GENERATED"
+        },
+        "answer": {
+          "status": "GENERATED"
+        },
+        "explanation": {
+          "status": "GENERATED"
+        },
+        "mapping": {
+          "status": "GENERATED"
+        },
+        "grading": {
+          "status": "GENERATED"
+        }
+      },
+      "probes": [
+        {
+          "raw_answer": "count(null)=0；若左右孩子皆空则返回1；否则返回count(left)+count(right)。时间 O(n)，栈空间 O(h)。",
+          "result": "unknown",
+          "reason": "unsupported_question"
+        },
+        {
+          "result": "unknown",
+          "reason": "not_answered"
+        }
+      ]
+    }
+  ]
+}

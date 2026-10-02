@@ -74,6 +74,7 @@ class GoalCandidate:
     last_self_grade: str | None = None
     # 窗口内是否有真实确认，或有节点整体自评的基础确认。
     has_evidence: bool = False
+    has_pending_objective_review: bool = False
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,7 @@ class SelectedGoal:
 def _resolve_layer(candidate: GoalCandidate, now: datetime) -> GoalLayer | None:
     """判断知识点落在哪一层；返回 None 表示不该推荐。"""
     # 1 上次未掌握：比「到复测日」更紧急，所以排在前面（冲突规则的落点）。
-    if candidate.last_self_grade == "not_mastered":
+    if candidate.has_pending_objective_review or candidate.last_self_grade == "not_mastered":
         return GoalLayer.NOT_MASTERED
     # 2 已到复测日期。
     if candidate.next_review_at is not None and candidate.next_review_at <= now:
@@ -134,7 +135,7 @@ def compute_goal_score(
         days = max(0.0, delta)
     # 归一化到 [0, 1)，绝不超过 1，否则会跨到下一层。
     fraction = min(days, 999.0) / 1000.0
-    return (100.0 - int(layer)) + fraction, LAYER_REASON_CODES[layer]
+    return (100.0 - int(layer)) + fraction, "objective_review" if candidate.has_pending_objective_review else LAYER_REASON_CODES[layer]
 
 
 def select_daily_goals(
@@ -164,7 +165,7 @@ def select_daily_goals(
                 kp_id=candidate.kp_id,
                 score=score,
                 reason=reason,
-                next_step=report.next_step if report else "",
+                next_step="复测最近答错的题" if candidate.has_pending_objective_review else report.next_step if report else "",
                 missing_types=report.missing_types if report else (),
                 gap_summary=(
                     tuple((item.key, item.current, item.required) for item in report.items)

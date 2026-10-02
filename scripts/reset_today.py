@@ -34,6 +34,8 @@ def reset_today(db) -> dict[str, int]:
     reset = 0
     for state in db.scalars(select(KpState)).all():
         state.state = "unseen"
+        state.assessment_basis = "legacy_self_reported"
+        state.pending_review_question_ids = []
         state.evidence_window = []
         state.review_stage = 0
         state.next_review_at = None

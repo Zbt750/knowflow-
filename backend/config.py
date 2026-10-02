@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -18,6 +19,9 @@ class Settings(BaseSettings):
 
     # dev 是本机开发；test 会额外启用测试数据库保护；prod 留给最终部署。
     app_env: Literal["dev", "test", "prod"] = "dev"
+    app_runtime_profile: Literal["web", "desktop"] = "web"
+    # 原文证据只允许显式启用的隔离评测；开发/生产默认不留副本。
+    capture_test_evidence: bool = False
     allowed_web_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     # Pydantic 启动时校验连接串格式；开发/部署默认始终读这一项。
     database_url: PostgresDsn
@@ -27,6 +31,9 @@ class Settings(BaseSettings):
     embedding_model: str = "BAAI/bge-small-zh-v1.5"
     # reranker 可为空表示先走无重排降级；变量名与 .env.example 的 RERANKER_MODEL 一致。
     reranker_model: str | None = None
+    # Experimental ordinary-query policy: shadow records counts without changing evidence.
+    # Never enable globally based only on the tiny synthetic validation set.
+    chat_context_screening: Literal["off", "shadow", "filter"] = "off"
     # 学习日、毕业跨天和复测日期都使用同一时区。
     timezone: str = "Asia/Shanghai"
     # 这些是相对项目根目录的目录；启动时由 lifespan 幂等创建。
@@ -41,6 +48,8 @@ class Settings(BaseSettings):
     local_model_settings_error: bool = False
     # 网络调用统一从此读取超时；provider 不得把 60 秒写死在多个文件。
     llm_timeout_seconds: float = 60.0
+    # 兼容端点不一定支持 stream_options；确认支持后显式启用。
+    llm_stream_include_usage: bool = False
     # 单次回答的输出上限；provider 必须把它传给 max_tokens。
     #
     # 为什么从 800 提到 4000（实测得出，不是拍脑袋）：
@@ -69,6 +78,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_development_database_in_test(self) -> "Settings":
+        if self.capture_test_evidence and self.app_env != "test":
+            raise ValueError("CAPTURE_TEST_EVIDENCE 仅允许在 APP_ENV=test 使用")
         # test 环境不允许静默回退到开发 DATABASE_URL，迁移和 pytest 都必须显式给测试 URL。
         if self.app_env == "test" and self.test_database_url is None:
             raise ValueError("APP_ENV=test 时必须设置 TEST_DATABASE_URL")
@@ -103,4 +114,5 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     # 一个进程只解析一次；测试改环境变量后调用 cache_clear()。
-    return Settings()
+    # Installed desktop processes never consume a checkout's .env or credentials.
+    return Settings(_env_file=None) if os.environ.get("APP_RUNTIME_PROFILE") == "desktop" else Settings()

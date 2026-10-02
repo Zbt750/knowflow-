@@ -3,9 +3,11 @@
 export type MasteryState = "unseen" | "consolidating" | "stuck" | "mastered";
 export type PlanStatus = "active" | "completed";
 export type SelfGrade = "mastered" | "partial" | "not_mastered" | "skip";
+export type AnswerSubmissionResponse = import("../api/types").components["schemas"]["AnswerSubmissionResponse"];
 
 /** 推荐层级码（六层，已确认优先级）；页面负责映射成中文。 */
 export type RecommendationReason =
+  | "objective_review"
   | "not_mastered"
   | "overdue_review"
   | "partial_mastery"
@@ -61,6 +63,8 @@ export interface PlanItemView {
   is_review: boolean;
   is_external_reference: boolean;
   exam_reference: ExamQuestionReferenceView | null;
+  answer_submission?: AnswerSubmissionResponse | null;
+  answer_grading_method?: string | null;
 }
 
 export interface TodaySummaryKp {
@@ -128,6 +132,8 @@ export interface KnowledgeNodeView {
   summary: string | null;
   learning_goal: string | null;
   state: MasteryState | null;
+  assessment_basis?: string | null;
+  pending_review_count?: number;
   next_review_at: string | null;
   mastered_at: string | null;
   node_self_grade: string | null;
@@ -190,7 +196,8 @@ export interface NodeAttemptView {
   question_id: string | null;
   exam_reference_id?: string | null;
   question_stem: string;
-  self_grade: SelfGrade;
+  self_grade: SelfGrade | null;
+  grading_evidence?: Record<string, unknown> | null;
   objective_result: string;
   result_state: string;
   reason_code: string;
@@ -205,6 +212,7 @@ export interface KnowledgeNodeDetail {
   exam_references: ExamQuestionReferenceView[];
   lesson_available: boolean;
   materials_ready: boolean;
+  capability_profile?: import("../api/types").components["schemas"]["CapabilityProfile"] | null;
 }
 
 export interface NodeSelfAssessmentResponse {

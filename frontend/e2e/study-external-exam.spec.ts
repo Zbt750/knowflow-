@@ -49,7 +49,7 @@ function activePlan(completed = false) {
   };
 }
 
-test("历年原卷任务在专注和全卷模式都清楚显示来源，并将自评提交为毕业证据", async ({ page }) => {
+test("历年原卷任务显示来源，自行对照只记录完成表现而不增加毕业确认", async ({ page }) => {
   let completed = false;
   let submitted: Record<string, unknown> | null = null;
   const errors: string[] = [];
@@ -65,9 +65,9 @@ test("历年原卷任务在专注和全卷模式都清楚显示来源，并将�
       json: {
         practice_item_id: "external-item-1",
         kp_id: "kp-stack-applications",
-        state: "mastered",
-        reason_code: "graduated",
-        effective_confirmation_count: 1,
+        state: "unseen",
+        reason_code: "self_feedback_only",
+        effective_confirmation_count: 0,
         manual_credit_count: 0,
         next_review_at: null,
       },
@@ -76,12 +76,13 @@ test("历年原卷任务在专注和全卷模式都清楚显示来源，并将�
 
   await page.goto("/study");
   await expect(page.getByTestId("focus-external-exam-task")).toContainText("2010 年第 1 题");
-  await expect(page.getByTestId("focus-external-exam-task")).toContainText("作为 栈的应用 的毕业证据");
+  await expect(page.getByTestId("focus-external-exam-task")).toContainText("系统不判分");
   await page.getByTestId("full-paper").click();
   await expect(page.getByTestId("external-exam-external-item-1")).toContainText("本地原卷：桌面 / 考研知识点 / 408/2010");
   await expect(page.getByRole("button", { name: "查看答案详解" })).toHaveCount(0);
   await page.getByTestId("mode-focus").click();
-  await page.getByTestId("focus-external-exam-task").getByRole("button", { name: "已掌握" }).click();
+  await page.getByTestId("focus-external-exam-task").locator(".self-report summary").click();
+  await page.getByTestId("focus-external-exam-task").getByRole("button", { name: "独立完成" }).click();
   await expect.poll(() => submitted).toMatchObject({ self_grade: "mastered" });
   await expect(page.getByTestId("study-status")).toContainText("已完成");
   expect(errors).toEqual([]);

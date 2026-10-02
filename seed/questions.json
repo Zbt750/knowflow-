@@ -14,14 +14,15 @@
       ],
       "estimated_minutes": 3,
       "stem": "下列哪一个极限可以直接使用洛必达法则，而不需要先做其他处理。",
+      "grading_config": {"verified": true, "method": "single_choice", "version": "review-2026-09-29"},
       "options": {
         "A": "lim(x->0) sin x / x",
         "B": "lim(x->0) (1 + x)^(1/x)",
-        "C": "lim(x->0) (tan x - sin x) / x^3",
+        "C": "lim(x->0) (1/x - 1/sin x)",
         "D": "lim(x->0) (x + 1) / (x + 2)"
       },
       "correct_answer": "A",
-      "explanation": "A 是标准的 0/0 型，分子分母在 0 的邻域可导且分母导数不为零，可以直接使用。B 是 1 的无穷次幂型，C 是加减结构需先变形，D 不是未定式。"
+      "explanation": "A 是标准的 0/0 型，分子分母在去心邻域可导且分母导数不为零，可以直接使用。B 是 1 的无穷次幂型，需要先取对数；C 是两个发散项的差，需要先通分改写为商；D 不是未定式。"
     },
     {
       "kp_code": "math.calculus.limit.lhopital",
@@ -37,6 +38,7 @@
       ],
       "estimated_minutes": 5,
       "stem": "求极限 lim(x->0) (e^x - 1) / x 的值。",
+      "grading_config": {"verified": true, "method": "numeric_final", "version": "review-2026-09-29"},
       "options": null,
       "correct_answer": "1",
       "explanation": "0/0 型未定式，分子分母都可导，一次洛必达得 lim(x->0) e^x / 1 = 1。纸笔练习时先写类型再求导。"
@@ -55,6 +57,7 @@
       ],
       "estimated_minutes": 12,
       "stem": "计算 lim(x->1) (x^2 - 1) / (x - 1)，并写出类型判断与每一步依据。",
+      "grading_config": {"verified": true, "method": "numeric_final", "version": "review-2026-09-29"},
       "options": null,
       "correct_answer": "2",
       "explanation": "代入 x=1 得 0/0 型；分子分母在 1 的邻域可导且分母导数 1 不为零，可用洛必达法则，得 lim(x->1) 2x = 2。也可先因式分解约去 (x-1)，两条路都要会。"
@@ -108,6 +111,7 @@
       ],
       "estimated_minutes": 3,
       "stem": "当 x 趋于 0 时，下列无穷小中与 x 等价的是哪一个。",
+      "grading_config": {"verified": true, "method": "single_choice", "version": "review-2026-09-29-b2"},
       "options": {
         "A": "sin x",
         "B": "1 - cos x",
@@ -130,6 +134,7 @@
       ],
       "estimated_minutes": 5,
       "stem": "求极限 lim(x->0) ln(1 + x) / x 的值。",
+      "grading_config": {"verified": true, "method": "numeric_final", "version": "review-2026-09-29-b2"},
       "options": null,
       "correct_answer": "1",
       "explanation": "ln(1 + x) 与 x 是等价无穷小，结构是乘除，替换合法，比值极限为 1。"
@@ -165,6 +170,7 @@
       ],
       "estimated_minutes": 3,
       "stem": "下列哪一步替换是错误的。",
+      "grading_config": {"verified": true, "method": "single_choice", "version": "review-2026-09-29-b2"},
       "options": {
         "A": "lim(x->0) sin 3x / x 中把 sin 3x 换成 3x",
         "B": "lim(x->0) x ln(1 + x) / x^2 中把 ln(1 + x) 换成 x",
@@ -187,6 +193,7 @@
       ],
       "estimated_minutes": 3,
       "stem": "由方程 x^2 + y^2 = 25 确定的隐函数 y = y(x)，在点 (3, 4) 处的导数 dy/dx 等于多少。",
+      "grading_config": {"verified": true, "method": "single_choice", "version": "review-2026-09-29-b2"},
       "options": {
         "A": "-3/4",
         "B": "3/4",
@@ -246,8 +253,8 @@
       "estimated_minutes": 12,
       "stem": "已知曲线 y^2 = x^3 - 3x + 1，求它在点 (0, 1) 处的切线方程，并说明为什么不能直接把 y 当成自变量求导。",
       "options": null,
-      "correct_answer": "y = -3x + 1",
-      "explanation": "两边对 x 求导得 2y·y' = 3x^2 - 3，在 (0,1) 处 y' = -3/2·... 逐步代入得 y' = -3，切线为 y = -3x + 1。若把 y 当自变量求导会得到 dx/dy，方向正好相反，必须先明确对谁求导。"
+      "correct_answer": "y = -3x/2 + 1",
+      "explanation": "两边对 x 求导得 2y·y' = 3x^2 - 3，在 (0,1) 处 y' = (3·0^2 - 3)/(2·1) = -3/2，切线为 y - 1 = (-3/2)x，即 y = -3x/2 + 1。这里 y 不为零，局部可以把 y 看作 x 的函数。对 y 求导会得到 dx/dy，不能把它直接当成 dy/dx。"
     },
     {
       "kp_code": "math.calculus.series.geometric",
@@ -262,6 +269,7 @@
       ],
       "estimated_minutes": 3,
       "stem": "等比级数 a + a·r + a·r^2 + …（a 不为零）收敛的充要条件是下面哪一个。",
+      "grading_config": {"verified": true, "method": "single_choice", "version": "review-2026-09-29-b2"},
       "options": {
         "A": "公比的绝对值小于 1",
         "B": "公比的绝对值小于或等于 1",
@@ -284,6 +292,7 @@
       ],
       "estimated_minutes": 5,
       "stem": "求 1 + 1/2 + 1/4 + 1/8 + … 这一无穷等比数列各项之和。",
+      "grading_config": {"verified": true, "method": "numeric_final", "version": "review-2026-09-29-b2"},
       "options": null,
       "correct_answer": "2",
       "explanation": "首项 1、公比 1/2，公比绝对值小于 1 故收敛，和为 1/(1-1/2) = 2。"
@@ -301,6 +310,7 @@
       ],
       "estimated_minutes": 5,
       "stem": "某无穷等比级数的公比为 1/3，已知它所有项之和等于 1，求它的首项。",
+      "grading_config": {"verified": true, "method": "numeric_final", "version": "review-2026-09-29-b2"},
       "options": null,
       "correct_answer": "2/3",
       "explanation": "设首项为 a，由求和公式得 a/(1-1/3) = 1，即 a = 2/3。这是把求和公式反解首项。"
@@ -319,6 +329,7 @@
       ],
       "estimated_minutes": 3,
       "stem": "判断下列说法哪个正确：公比为 -1/2 的等比级数。",
+      "grading_config": {"verified": true, "method": "single_choice", "version": "review-2026-09-29-b2"},
       "options": {
         "A": "因为公比为负，级数一定发散",
         "B": "收敛，且和为 2a/3",
@@ -341,6 +352,7 @@
       ],
       "estimated_minutes": 3,
       "stem": "交换行列式的任意两行，行列式的值会怎样变化。",
+      "grading_config": {"verified": true, "method": "single_choice", "version": "review-2026-09-29-b2"},
       "options": {
         "A": "保持不变",
         "B": "改变符号",
@@ -363,6 +375,7 @@
       ],
       "estimated_minutes": 3,
       "stem": "已知 3 阶矩阵 A 满足 |A| = 5，则 |2A| 等于多少。",
+      "grading_config": {"verified": true, "method": "single_choice", "version": "review-2026-09-29-b2"},
       "options": {
         "A": "10",
         "B": "25",
@@ -385,6 +398,7 @@
       ],
       "estimated_minutes": 12,
       "stem": "已知 3 阶矩阵 A 满足 |A| = -2 且 A 可逆，求 |A^-1| 的值。",
+      "grading_config": {"verified": true, "method": "numeric_final", "version": "review-2026-09-29-b2"},
       "options": null,
       "correct_answer": "-1/2",
       "explanation": "由 A·A^-1 = E，两边取行列式得 |A|·|A^-1| = 1，故 |A^-1| = 1/|A| = -1/2。可逆条件保证 |A| 不为零。"

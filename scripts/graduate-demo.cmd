@@ -1,9 +1,8 @@
 @echo off
 chcp 65001 >nul
-REM Graduation demo: prepare state so you can graduate today
+REM Read-only graduation gap inspection. Legacy write actions are disabled.
 REM Usage:
-REM   scripts\graduate-demo.cmd first    prepare day 1 (finish questions, then shift 2 days back)
-REM   scripts\graduate-demo.cmd retest   prepare the retest day (put a review question in today's paper)
+REM   first/retest are rejected before database access; self-report is not confirmation.
 REM   scripts\graduate-demo.cmd show     show current graduation gaps
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0.."

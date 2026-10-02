@@ -4,6 +4,25 @@ from datetime import datetime
 
 from backend.mastery.enums import EvidenceLevel, SelfGrade
 from backend.mastery.types import Evidence
+from backend.mastery.attempt_sequence import NON_CONFIRMING_CORRECT
+
+
+def classify_objective_evidence(
+    *, result: str, verified: bool, assisted: bool, question_id: str,
+    is_variant: bool, occurred_at: datetime, question_type: str,
+    skill_tags: tuple[str, ...] = (),
+    confidence: str | None = None,
+    sequence_category: str | None = None,
+) -> Evidence:
+    if occurred_at.tzinfo is None:
+        raise ValueError("occurred_at 必须带时区")
+    level = EvidenceLevel.WEAK
+    if verified and result == "right":
+        level = EvidenceLevel.PARTIAL if assisted or confidence in {"guess", "no_idea"} or sequence_category in NON_CONFIRMING_CORRECT else EvidenceLevel.CONFIRMED
+    elif verified and result == "wrong":
+        level = EvidenceLevel.FAILURE
+    return Evidence(question_id, level, is_variant, occurred_at,
+                    "objective_final", question_type, skill_tags)
 
 
 def classify_evidence(

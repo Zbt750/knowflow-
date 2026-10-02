@@ -177,6 +177,10 @@ def list_messages(request: Request, session_id: UUID):
                     row, cards[row.id], names.get(row.matched_kp_id) if row.matched_kp_id else None
                 ),
                 "citations": cards[row.id],
+                **({"evaluation_evidence": row.metadata_.get("evaluation_evidence"),
+                    "generation_trace": row.metadata_.get("generation_trace")}
+                   if request.app.state.settings.app_env == "test"
+                   and request.app.state.settings.capture_test_evidence else {}),
             }
             for row in rows
         ]

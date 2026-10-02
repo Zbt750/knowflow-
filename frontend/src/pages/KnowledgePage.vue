@@ -4,6 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 
 import { ApiError } from "../api/client";
 import AppIcon from "../components/AppIcon.vue";
+import KnowledgeCapabilities from "../components/KnowledgeCapabilities.vue";
 import {
   appendExamReferencesToday,
   fetchKnowledgeNode,
@@ -136,7 +137,7 @@ async function addExamReference(reference: ExamQuestionReferenceView): Promise<v
     queuedExamReferenceIds.value = new Set(
       today.items.flatMap((item) => item.exam_reference?.id ? [item.exam_reference.id] : []),
     );
-    examReferenceNotice.value = "已加入今日学习。完成原卷后按实际表现自评；标记“已掌握”会计入本知识点毕业证据。";
+    examReferenceNotice.value = "已加入今日学习。自行对照记录只作辅助反馈，不增加毕业确认。";
   } catch (error) {
     examReferenceError.value = error instanceof ApiError ? error.message : "加入今日学习失败，请重试。";
   } finally {
@@ -348,7 +349,7 @@ async function nodeAssess(grade: "mastered" | "partial" | "not_mastered"): Promi
 
     // 基础确认数由后端给出：绝不在前端假装用户做了两题。
     const credit =
-      result.manual_credit_count > 0 ? `基础确认 +${result.manual_credit_count}` : "基础确认为 0";
+      result.reason_code === "self_feedback_only" ? "信心已记录，不增加客观确认" : result.manual_credit_count > 0 ? `基础确认 +${result.manual_credit_count}` : "基础确认为 0";
     nodeNotice.value =
       `${reasonCodeLabel(result.reason_code)}；${credit}；` +
       `有效确认 ${result.effective_confirmation_count}；当前状态 ${stateLabel(result.state)}`;
@@ -454,11 +455,15 @@ onMounted(async () => {
           <p class="knowledge-breadcrumb" data-testid="knowledge-breadcrumb">{{ selectedPath.map((node) => node.name).join(' / ') }}</p>
           <h2 data-testid="detail-title">{{ detail.node.name }}</h2>
           <p v-if="detail.node.is_reference_only" class="hint exam-reference-note" data-testid="exam-reference-only-note">
-            {{ detail.node.code.includes('.family.') ? '这是项目按原始标签整理的跨年份专题汇总，不是官方考点分类；列表会保留每道题的原始标签。原卷题干不在系统内，可打开来源或本地原卷完成后加入今日学习。' : '这是历年真题知识节点：这里提供原卷来源，不包含题干。完成原卷后在今日学习自评；标记“已掌握”将作为本节点的毕业证据。' }}
+            {{ detail.node.code.includes('.family.') ? '这是项目按原始标签整理的跨年份专题汇总，不是官方考点分类；列表会保留原始标签。可打开来源完成原卷后记录作答表现。' : '这里提供原卷来源，不包含题干。可在今日学习记录本题表现；自述不作为毕业确认。' }}
           </p>
-          <p class="state" data-testid="detail-state">
-            {{ stateLabel(detail.node.state) }}
-          </p>
+            <p class="state" data-testid="detail-state">
+              {{ stateLabel(detail.node.state) }}
+            </p>
+            <p v-if="detail.node.is_assessable" class="hint" data-testid="assessment-basis">
+              {{ detail.node.assessment_basis === 'objective_v1' ? '依据：经核验的最终答案。自评只作辅助，不增加毕业次数。' : '依据：历史自评记录，尚未切换为客观作答证据。' }}
+              <span v-if="detail.node.pending_review_count">另有 {{ detail.node.pending_review_count }} 道错题待复测。</span>
+            </p>
 
           <nav class="mode-switch">
             <button type="button" :class="{ active: tab === 'overview' }" data-testid="tab-overview" @click="tab = 'overview'">概览</button>
@@ -493,6 +498,8 @@ onMounted(async () => {
             <p v-if="detail.node.summary"><strong>知识摘要：</strong>{{ detail.node.summary }}</p>
             <p v-if="detail.node.learning_goal"><strong>学习目标：</strong>{{ detail.node.learning_goal }}</p>
 
+            <KnowledgeCapabilities v-if="detail.capability_profile" :profile="detail.capability_profile" />
+
             <p v-if="detail.node.next_step" class="notice" data-testid="next-step">
               <strong>下一步：</strong>{{ detail.node.next_step }}
             </p>
@@ -519,7 +526,7 @@ onMounted(async () => {
             <dl class="facts">
               <dt>有效确认数</dt>
               <dd data-testid="effective-count">{{ detail.node.effective_confirmation_count }}</dd>
-              <dt>基础确认（节点整体自评）</dt>
+              <dt>历史基础确认</dt>
               <dd data-testid="manual-credit">{{ detail.node.manual_credit_count }}</dd>
               <dt>必考题型</dt>
               <dd data-testid="required-types">
@@ -570,16 +577,16 @@ onMounted(async () => {
             <!-- 叶子整体自评：只有 is_assessable 叶子才有这一组按钮 -->
             <div v-if="detail.node.is_assessable" class="actions actions--grades" data-testid="node-assessment">
               <button type="button" :disabled="nodeSubmitting" data-testid="node-self-mastered" @click="nodeAssess('mastered')">
-                我已掌握
+                自述熟悉
               </button>
               <button type="button" :disabled="nodeSubmitting" data-testid="node-self-partial" @click="nodeAssess('partial')">
-                我部分掌握
+                自述不太熟悉
               </button>
               <button type="button" :disabled="nodeSubmitting" data-testid="node-self-not-mastered" @click="nodeAssess('not_mastered')">
-                我未掌握
+                自述不熟悉
               </button>
             </div>
-            <p v-if="detail.node.is_assessable" class="hint">整体自评会记录基础确认，不会算作做过题。</p>
+            <p v-if="detail.node.is_assessable" class="hint">自述仅作辅助反馈，不增加毕业确认；旧自评历史保留。</p>
             <p v-if="nodeNotice" class="notice" data-testid="node-notice">{{ nodeNotice }}</p>
             <p v-if="nodeError" class="form-error">{{ nodeError }}</p>
           </section>
@@ -604,7 +611,8 @@ onMounted(async () => {
             <ul v-else>
               <li v-for="attempt in detail.attempts" :key="attempt.id" class="attempt-item">
                 <p>{{ attempt.question_stem }}</p>
-                <span class="tag" :class="stateTone(attempt.result_state)">{{ gradeLabel(attempt.self_grade) }}</span>
+                <span class="tag" :class="stateTone(attempt.result_state)">{{ attempt.self_grade ? gradeLabel(attempt.self_grade) : attempt.objective_result === 'right' ? '最终答案正确' : attempt.objective_result === 'wrong' ? '最终答案不正确' : '未自动判定' }}</span>
+                <span v-if="attempt.grading_evidence?.assisted" class="tag tag--muted">提交前已查看解析</span>
                 <span class="tag tag--muted">{{ formatTime(attempt.submitted_at) }}</span>
                 <span class="tag tag--muted">{{ reasonCodeLabel(attempt.reason_code) }}</span>
                 <p v-if="attempt.raw_answer" class="hint">我的作答：{{ attempt.raw_answer }}</p>

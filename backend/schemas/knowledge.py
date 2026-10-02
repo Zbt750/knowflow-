@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from pydantic import BaseModel
+from backend.schemas.capability import CapabilityProfile
 
 
 class GapItemView(BaseModel):
@@ -30,6 +31,8 @@ class KnowledgeNodeView(BaseModel):
     learning_goal: str | None = None
     # 只有可考核叶子才有状态；父节点的汇总由页面数 children 得到，不存第二份统计真相。
     state: str | None = None
+    assessment_basis: str | None = None
+    pending_review_count: int = 0
     next_review_at: str | None = None
     mastered_at: str | None = None
     node_self_grade: str | None = None
@@ -102,12 +105,13 @@ class NodeAttemptView(BaseModel):
     question_id: UUID | None = None
     exam_reference_id: UUID | None = None
     question_stem: str
-    self_grade: str
+    self_grade: str | None
     objective_result: str
     result_state: str
     reason_code: str
     submitted_at: str
     raw_answer: str | None = None
+    grading_evidence: dict | None = None
 
 
 class KnowledgeNodeDetail(BaseModel):
@@ -118,6 +122,7 @@ class KnowledgeNodeDetail(BaseModel):
     lesson_available: bool = False
     # 关联资料在阶段 C 接入检索后填充；现在明确返回空列表而不是伪造数据。
     materials_ready: bool = False
+    capability_profile: CapabilityProfile | None = None
 
 
 class NodeSelfAssessmentRequest(BaseModel):

@@ -209,6 +209,7 @@ class ChromaVectorStore:
             # 否则症状是「后端跑着跑着整个进程消失」，完全看不出与索引有关。
             self._collection.count()
         except Exception as error:  # noqa: BLE001 - 底层是 Rust 绑定，异常类型不稳定
+            self.close()
             raise VectorStoreError(
                 "向量索引无法打开（可能已损坏）。"
                 "删除 storage/chroma 目录后重建索引即可恢复："
@@ -373,22 +374,23 @@ class ChromaVectorStore:
         return len(ids)
 
     def close(self) -> None:
-        """释放底层文件句柄。
+        """释放本客户端的资源，绝不清空持久化索引。
 
         Chroma 的持久客户端持有 sqlite3 连接与 mmap 文件；在 Windows 上
         只要不释放，包含它的临时目录就无法删除（WinError 32）。
         评估脚本与测试用临时目录建库，因此必须能显式关闭。
         """
-        collection = getattr(self, "_collection", None)
         client = getattr(self, "_client", None)
-        # 先断开引用，再触发一次回收，让底层连接随对象一起释放。
+        # Client.close() 按共享 System 的引用计数释放资源；reset() 是数据操作，
+        # 不能当 close 使用，也不能直接停止其他客户端正在使用的共享 System。
         self._collection = None  # type: ignore[assignment]
         self._client = None  # type: ignore[assignment]
-        for target in (collection, client):
-            reset = getattr(target, "reset", None)
-            if callable(reset):
-                try:
-                    reset()
-                except Exception:  # noqa: BLE001 - 释放失败不能影响调用方
-                    pass
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # noqa: BLE001 - 收尾失败不能掩盖调用方的原始异常
+                pass
+        # 旧版本没有公开 close 时只释放引用，不用 reset 或共享全局缓存清理
+        # 模拟关闭；这类版本的文件句柄仍可能需要等进程结束才彻底释放。
         gc.collect()

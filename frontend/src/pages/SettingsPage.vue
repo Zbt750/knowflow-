@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from "vue";
 import { ApiError } from "../api/client";
 import { fetchHealth, type HealthResponse } from "../api/health";
 import { fetchModelSettings, saveModelSettings, type ModelSettings } from "../api/settings";
+import VisionSettings from "../components/VisionSettings.vue";
 
 const health = ref<HealthResponse | null>(null);
 const loading = ref(false);
@@ -137,6 +138,7 @@ onMounted(() => void refresh());
         <p v-if="notice" class="settings-note" role="status">{{ notice }}</p>
       </section>
 
+      <VisionSettings />
       <section class="settings-section">
         <h2>本地服务</h2>
         <dl>

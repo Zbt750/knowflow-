@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, onUpdated, ref } from "vue";
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import { markdownWithMath } from "../lib/markdownMath";
 
 const props = defineProps<{ text: string }>();
 const container = ref<HTMLElement | null>(null);
@@ -11,7 +11,7 @@ let lastMathText: string | null = null;
 
 // 问答和资料均来自可变文本；解析 Markdown 后先净化，再插入页面。
 const html = computed(() => DOMPurify.sanitize(
-  marked.parse(props.text, { gfm: true, breaks: true, async: false }) as string,
+  markdownWithMath(props.text),
   { USE_PROFILES: { html: true }, FORBID_TAGS: ["img", "iframe", "style"] },
 ));
 

@@ -36,7 +36,7 @@ def _cleanup_orphaned_eval_schemas(connection) -> list[str]:
     local_host = socket.gethostname()
     rows = connection.exec_driver_sql(
         "SELECT n.nspname, obj_description(n.oid, 'pg_namespace') "
-        "FROM pg_namespace AS n WHERE n.nspname LIKE 'ragas_chat_%'"
+        "FROM pg_namespace AS n WHERE starts_with(n.nspname, 'ragas_chat_')"
     ).all()
     removed: list[str] = []
     for schema, comment in rows:
@@ -56,21 +56,73 @@ def _cleanup_orphaned_eval_schemas(connection) -> list[str]:
     return removed
 
 
+def _case_selection(*, cross_file_budget: int | None, file_focus_v4: bool, stage_scope_p6: bool = False, knowledge_followup_p6: bool = False, context_screening_p6: str | None = None) -> tuple[tuple[str, ...] | None, int | None]:
+    if context_screening_p6 is not None:
+        if context_screening_p6 not in {"off", "filter"} or cross_file_budget is not None or file_focus_v4 or stage_scope_p6 or knowledge_followup_p6:
+            raise ValueError("P6 筛选对照不得与其他范围混用，只允许off/filter")
+        return ("math-followup", "408-page"), 3
+    if stage_scope_p6 or knowledge_followup_p6:
+        if cross_file_budget is not None or file_focus_v4 or (stage_scope_p6 and knowledge_followup_p6):
+            raise ValueError("P6 单例范围不得与其他付费范围混用")
+        return (("file-alias",) if stage_scope_p6 else ("math-followup",)), 2
+    if cross_file_budget is not None:
+        return ("cross-file",), 1
+    if file_focus_v4:
+        return ("file-exact", "file-alias", "cross-file"), 4
+    return None, None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="隔离数据库、向量索引与上传目录运行四项问答评测")
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--baseline-v3", action="store_true", help="仅使用新增获准合成资料建立v3基线")
+    parser.add_argument("--baseline-v3-1", action="store_true", help="使用独立修订样例，不覆盖v3基线；真实调用需另行授权")
+    parser.add_argument("--file-focus-v4", action="store_true", help="仅复测三条文件坏例，含铺垫最多4次问答；须另行授权")
+    parser.add_argument("--stage-scope-p6", action="store_true", help="仅阶段指代单例，含铺垫最多2次问题请求；真实调用须另行授权")
+    parser.add_argument("--knowledge-followup-p6", action="store_true", help="仅数学反例追问，含铺垫最多2次问题请求；真实调用须另行授权")
+    parser.add_argument("--context-screening-p6", choices=("off", "filter"), help="仅数学追问及408缺页，两目标加一铺垫最多3请求；一条命令只运行一个对照分支，需独立授权")
+    parser.add_argument("--cross-file-budget", type=int, choices=(4000, 6000), help="仅对跨文件合成场景设置隔离后端首轮输出预算；每次只发1个问题，须另行授权")
     parser.add_argument("--serve-ui", action="store_true", help="仅启动获准资料的隔离 API 与 5176 前端，供真实浏览器测试；不运行裁判")
     parser.add_argument("--multifile-browser", action="store_true", help="运行获准验收文件及合成多文件的真实前端评测；不调用外部裁判")
     parser.add_argument("--ui-seconds", type=int, default=900, help="隔离前端最多运行秒数，到时清理并退出")
     args = parser.parse_args()
-    if not 1 <= args.limit <= 9:
-        parser.error("--limit 必须在 1–9 之间")
+    if args.context_screening_p6 is not None:
+        if (not args.baseline_v3_1 or args.limit != 2 or args.output is None
+                or args.file_focus_v4 or args.stage_scope_p6 or args.knowledge_followup_p6
+                or args.cross_file_budget is not None or args.serve_ui or args.multifile_browser):
+            parser.error("P6 筛选对照必须单独搭配 --baseline-v3-1 --limit 2 --output 新文件")
+        if args.output.exists():
+            parser.error("P6 筛选对照报告已存在，拒绝覆盖或自动重跑")
+    p6_single = args.stage_scope_p6 or args.knowledge_followup_p6
+    if p6_single and (
+        not args.baseline_v3_1 or args.limit != 1 or args.file_focus_v4
+        or args.cross_file_budget is not None or args.serve_ui or args.multifile_browser
+        or (args.stage_scope_p6 and args.knowledge_followup_p6)
+    ):
+        parser.error("P6 单例必须单独搭配 --baseline-v3-1 --limit 1")
+    if p6_single and args.output is not None and args.output.exists():
+        parser.error("P6 报告已存在，拒绝覆盖或自动重跑")
+    if args.file_focus_v4 and (not args.baseline_v3_1 or args.limit != 3):
+        parser.error("--file-focus-v4 必须同时指定 --baseline-v3-1 --limit 3")
+    if args.cross_file_budget is not None and (
+        not args.baseline_v3_1 or args.limit != 1 or args.file_focus_v4
+        or args.serve_ui or args.multifile_browser
+    ):
+        parser.error("--cross-file-budget 必须单独搭配 --baseline-v3-1 --limit 1")
+    if args.baseline_v3_1:
+        args.baseline_v3 = True
+    if args.baseline_v3 and (args.serve_ui or args.multifile_browser):
+        parser.error("合成基线不得与其他浏览器资料模式混用")
+    if not 1 <= args.limit <= (16 if args.baseline_v3 else 9):
+        parser.error("--limit 超出本轮数据集范围")
 
     os.environ["APP_ENV"] = "test"
     from backend.config import get_settings
     get_settings.cache_clear()
     settings = get_settings()
+    if args.context_screening_p6 is not None and settings.reranker_model:
+        parser.error("当前重排配置会绕过实验筛选；请先单独设计对应对照，本入口不改配置或调用模型")
     from backend.db import create_db_engine
     from backend.models import import_models
     from backend.models.base import Base
@@ -113,6 +165,7 @@ def main() -> int:
             port = reservation.getsockname()[1]
         environment = os.environ.copy()
         environment.update(
+            CAPTURE_TEST_EVIDENCE="1",
             UPLOAD_DIR=str(scratch / "uploads"),
             CHROMA_DIR=str(scratch / "chroma"),
             MODEL_CACHE_DIR=str((ROOT / settings.model_cache_dir).resolve()),
@@ -122,7 +175,13 @@ def main() -> int:
         # Test the model currently selected by the user, including local overrides.
         from backend.services.model_settings_service import load_local_settings
         effective = load_local_settings(settings.model_copy(update={"app_env": "dev"}))
-        for field in ("llm_base_url", "llm_model", "llm_timeout_seconds", "llm_max_output_tokens", "llm_retry_max_output_tokens"):
+        if args.context_screening_p6 is not None:
+            effective = effective.model_copy(update={"chat_context_screening": args.context_screening_p6})
+        # Explicitly synchronize server and scorer provenance, not the parent's .env.
+        environment["CHAT_CONTEXT_SCREENING"] = effective.chat_context_screening
+        if args.cross_file_budget is not None:
+            effective = effective.model_copy(update={"llm_max_output_tokens": args.cross_file_budget})
+        for field in ("llm_base_url", "llm_model", "llm_timeout_seconds", "llm_max_output_tokens", "llm_retry_max_output_tokens", "llm_stream_include_usage"):
             value = getattr(effective, field)
             environment[field.upper()] = str(value) if value is not None else ""
         environment["LLM_API_KEY"] = effective.llm_api_key.get_secret_value() if effective.llm_api_key else ""
@@ -157,6 +216,13 @@ def main() -> int:
                 ("builtin", "高等数学核心考点讲义", ROOT / "eval/fixtures/math_core.md"),
                 ("user", "阶段A验收笔记", ROOT / "eval/fixtures/stage_a.md"),
             )
+            if args.baseline_v3:
+                fixtures = tuple((mode, title, ROOT / "eval/fixtures" / filename) for mode, title, filename in [
+                    ("builtin", "合成数学条件讲义", "baseline_math_v3.md"),
+                    ("builtin", "合成408机制讲义", "baseline_408_v3.md"),
+                    ("user", "合成项目阶段说明", "baseline_user_v3.md"),
+                    ("user", "合成部署边界补充", "baseline_compare_v3.md"),
+                ])
             if args.multifile_browser:
                 benchmark = json.loads((ROOT / "eval/dataset/multifile_benchmark.json").read_text(encoding="utf-8"))
                 original = client.get("http://127.0.0.1:8000/api/materials/1326d8f8-223d-40b2-827e-9c830e80aa50/content")
@@ -221,8 +287,20 @@ def main() -> int:
                 if process.poll() is not None or frontend.poll() is not None:
                     raise RuntimeError("隔离 UI/API 意外停止")
             return 0
+        output = args.output or ROOT / "eval/reports" / f"chat_ragas_four_metrics_{time.strftime('%Y%m%d_%H%M%S')}.json"
+        selected_case_ids, max_question_requests = _case_selection(
+            cross_file_budget=args.cross_file_budget, file_focus_v4=args.file_focus_v4,
+            stage_scope_p6=args.stage_scope_p6,
+            knowledge_followup_p6=args.knowledge_followup_p6,
+            context_screening_p6=args.context_screening_p6,
+        )
         report = asyncio.run(run(argparse.Namespace(
-            api_base=base, dataset=str(DEFAULT_DATASET), limit=args.limit,
+            api_base=base, dataset=str(ROOT / ("eval/dataset/chat_baseline_v3_1.jsonl" if args.baseline_v3_1 else "eval/dataset/chat_baseline_v3.jsonl") if args.baseline_v3 else DEFAULT_DATASET), limit=args.limit,
+            baseline_v3=args.baseline_v3,
+            selected_case_ids=selected_case_ids,
+            max_question_requests=max_question_requests,
+            expected_context_screening=args.context_screening_p6,
+            evaluation_settings=effective.model_copy(update={"app_env": "test"}), checkpoint=output,
             judge_model=None, judge_max_tokens=8000, metric_timeout=120,
         )))
         output = args.output or ROOT / "eval/reports" / f"chat_ragas_four_metrics_{time.strftime('%Y%m%d_%H%M%S')}.json"

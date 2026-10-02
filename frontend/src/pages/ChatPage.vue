@@ -23,6 +23,7 @@ import { isTodayActive, type TodayActive } from "../types/practice";
 import { useAsyncTask } from "../composables/useAsyncTask";
 import MarkdownContent from "../components/MarkdownContent.vue";
 import AppIcon from "../components/AppIcon.vue";
+import LearningTaskPanel from "../components/LearningTaskPanel.vue";
 
 defineOptions({ name: "ChatPage" });
 
@@ -719,6 +720,8 @@ onBeforeUnmount(() => {
       <header class="chat-header">
         <p class="chat-source" data-testid="chat-source">资料来源：{{ currentModeLabel }}</p>
       </header>
+
+      <LearningTaskPanel v-if="selectedMode === 'builtin'" :session-id="sessionId" />
 
       <p v-if="error" class="chat-notice chat-notice--error" role="alert">{{ error }} <RouterLink v-if="error.includes('尚未配置问答模型')" to="/settings">查看设置</RouterLink></p>
       <p v-if="feedbackNotice" class="chat-notice chat-notice--success">{{ feedbackNotice }}</p>

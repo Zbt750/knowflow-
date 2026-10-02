@@ -1,0 +1,25 @@
+{
+  "version": "context-relevance-p6-v1",
+  "review_status": "agent_reviewed_synthetic_not_independent_subject_review",
+  "purpose": "Offline calibration only; labels must never enter production selection.",
+  "baseline_labels": {
+    "math-continuity": ["第一章 极限与连续"],
+    "math-lhopital": ["第二章 洛必达条件与反例"],
+    "math-cancellation": ["第三章 等价无穷小的抵消"],
+    "math-implicit": ["第四章 隐函数条件"],
+    "math-integral": ["第六章 积分推导"],
+    "408-stack": ["第一章 栈与队列"],
+    "408-bfs": ["第二章 图遍历"],
+    "408-thread": ["第三章 进程与线程"],
+    "408-page": ["第四章 虚拟内存与缺页"],
+    "408-tcp": ["第五章 TCP可靠性与流控"],
+    "math-followup": ["第一章 极限与连续"]
+  },
+  "additional_cases": [
+    {"id": "multi-math", "question": "分别解释可导和连续的关系、洛必达的条件及反例，不能遗漏任何一项。", "required_headings": ["第一章 极限与连续", "第二章 洛必达条件与反例"]},
+    {"id": "multi-408", "question": "比较线程独立的栈、BFS和DFS使用的栈队列，说明各自作用。", "required_headings": ["第三章 进程与线程", "第二章 图遍历", "第一章 栈与队列"]},
+    {"id": "cross-domain", "question": "分别解释可导必连续的反例和TCP接收窗口与拥塞窗口，两个问题都要回答。", "required_headings": ["第一章 极限与连续", "第五章 TCP可靠性与流控"]},
+    {"id": "paraphrase-continuity", "question": "函数图像不断开，是否一定能求出切线斜率？用绝对值函数在原点说明。", "required_headings": ["第一章 极限与连续"]},
+    {"id": "absent-topic", "question": "这些讲义有红黑树删除修复的完整算法吗？", "required_headings": []}
+  ]
+}

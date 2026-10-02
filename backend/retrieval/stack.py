@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from backend.retrieval.embedding import SentenceTransformerEmbedder
 from backend.retrieval.keyword import KeywordIndex
-from backend.retrieval.protocols import Embedder, VectorStore
+from backend.retrieval.protocols import Embedder, VectorStore, VectorStoreError
 from backend.retrieval.rerank import Reranker, build_reranker
 from backend.retrieval.vector_store import ChromaVectorStore
 

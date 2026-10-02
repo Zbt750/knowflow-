@@ -1,0 +1,13 @@
+{
+  "schema_version": "golden-grading-proposal-v1",
+  "source_asset": "eval/golden/integral_binary_tree_v1.json",
+  "source_asset_sha256": "23afaed03155afdf20bd792c21c311ba9b2ace52cf2b3124bd9d200703f3b575",
+  "source_id": "M07",
+  "candidate_answer": "ln(2)",
+  "proposed_method": "logarithm_final",
+  "review_status": "UNVERIFIED",
+  "content_promoted": false,
+  "development_database_imported": false,
+  "scope": "Only ln of a positive rational literal; numeric approximation and arbitrary symbolic equivalence are unsupported.",
+  "note": "P1 original asset and review hashes remain unchanged. Changing its proposed grader requires a new content hash and real human grading review before reviewed-pack export. Isolated simulated verification is not human approval."
+}

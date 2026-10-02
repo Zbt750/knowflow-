@@ -1,6 +1,24 @@
 import { api } from "./client";
+import type { components } from "./types";
+export type ProcessReview = components["schemas"]["ProcessReviewResponse"];
+export interface ProcessReviewState {
+  result: ProcessReview | null; busy: boolean; error: string; kind: string;
+  loaded: boolean; previous: string; requestKey: string;
+}
+export function createProcessReviewState(): ProcessReviewState {
+  return { result: null, busy: false, error: "", kind: "concept", loaded: false, previous: "", requestKey: "" };
+}
+export function fetchLatestProcessReview(itemId: string): Promise<ProcessReview | null> {
+  return api.get(`/api/practice-items/${itemId}/process-reviews/latest`);
+}
+export function reviewProcess(itemId: string, text: string, key: string, kind?: string): Promise<ProcessReview> {
+  return api.post(`/api/practice-items/${itemId}/process-reviews`, {
+    work_text: text, idempotency_key: key, subjective_kind: kind ?? null,
+  });
+}
 import type {
   AssessmentResponse,
+  AnswerSubmissionResponse,
   KnowledgeLessonResponse,
   KnowledgeNodeDetail,
   KnowledgeTreeResponse,
@@ -40,6 +58,22 @@ export function appendExamReferencesToday(referenceIds: string[]): Promise<Today
 export function fetchAnswer(itemId: string): Promise<PracticeItemAnswer> {
   // 纯读取：做题前后都可以调用，不影响掌握度与毕业。
   return api.get<PracticeItemAnswer>(`/api/practice-items/${itemId}/answer`);
+}
+
+export function revealAnswer(itemId: string): Promise<PracticeItemAnswer> {
+  return api.post<PracticeItemAnswer>(`/api/practice-items/${itemId}/answer-reveal`, {});
+}
+
+export function fetchAnswerHistory(itemId: string): Promise<components["schemas"]["AnswerSubmissionHistory"]> {
+  return api.get(`/api/practice-items/${itemId}/answer-submissions`);
+}
+
+export function submitAnswer(itemId: string, key: string, rawAnswer?: string, selectedOption?: string, confidence?: string, previousAttemptId?: string): Promise<AnswerSubmissionResponse> {
+  return api.post<AnswerSubmissionResponse>(`/api/practice-items/${itemId}/answer-submissions`, {
+    idempotency_key: key, raw_answer: rawAnswer ?? null, selected_option: selectedOption ?? null,
+    confidence: confidence || null,
+    expected_previous_attempt_id: previousAttemptId ?? null,
+  });
 }
 
 export function submitSelfAssessment(

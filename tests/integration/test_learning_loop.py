@@ -249,7 +249,7 @@ def test_annual_exam_question_is_bound_to_assessable_source_reference_node(
     assert str(kp_id) not in {item["kp_id"] for item in today.get("recommendations", [])}
 
 
-def test_external_exam_reference_can_be_scheduled_self_assessed_and_graduate(
+def test_external_exam_reference_can_be_scheduled_and_reported_without_graduation(
     client: TestClient, session_factory
 ) -> None:
     with session_factory() as db:
@@ -298,11 +298,11 @@ def test_external_exam_reference_can_be_scheduled_self_assessed_and_graduate(
         json={"self_grade": "mastered", "idempotency_key": "exam-mastered-01"},
     )
     assert assessed.status_code == 200, assessed.text
-    assert assessed.json()["state"] == "mastered"
-    assert assessed.json()["reason_code"] == "graduated"
+    assert assessed.json()["state"] == "unseen"
+    assert assessed.json()["reason_code"] == "self_feedback_only"
     detail = client.get(f"/api/knowledge/{kp_id}").json()
-    assert detail["node"]["state"] == "mastered"
-    assert all(row["satisfied"] for row in detail["node"]["gap_items"])
+    assert detail["node"]["state"] == "unseen"
+    assert detail["node"]["effective_confirmation_count"] == 0
     assert len(detail["attempts"]) == 1
     assert detail["attempts"][0]["question_id"] is None
     assert detail["attempts"][0]["exam_reference_id"] == str(reference_id)
@@ -337,7 +337,7 @@ def test_reference_only_node_can_generate_an_external_task_from_scope(
     assert all(item["question_id"] is None and item["stem"] is None for item in payload["items"])
 
 
-def test_three_distinct_external_exams_graduate_only_after_cross_day_confirmation(
+def test_cross_day_external_self_reports_never_become_confirmations(
     client: TestClient, session_factory, clock: FakeClock
 ) -> None:
     with session_factory() as db:
@@ -369,11 +369,11 @@ def test_three_distinct_external_exams_graduate_only_after_cross_day_confirmatio
             assert final_assessment.json()["state"] != "mastered"
 
     assert final_assessment is not None
-    assert final_assessment.json()["state"] == "mastered"
-    assert final_assessment.json()["reason_code"] == "graduated"
+    assert final_assessment.json()["state"] == "unseen"
+    assert final_assessment.json()["reason_code"] == "self_feedback_only"
     detail = client.get(f"/api/knowledge/{kp_id}").json()
-    assert detail["node"]["day_span"] == 2
-    assert all(row["satisfied"] for row in detail["node"]["gap_items"])
+    assert detail["node"]["day_span"] is None
+    assert detail["node"]["effective_confirmation_count"] == 0
 
 
 def test_bound_exam_reference_can_be_added_from_an_existing_assessable_node(
@@ -657,7 +657,7 @@ def test_partial_keeps_history_but_does_not_enter_window(
     assert response.status_code == 200
     payload = response.json()
     assert payload["state"] == "unseen"
-    assert payload["reason_code"] == "no_confirmed_evidence"
+    assert payload["reason_code"] == "self_feedback_only"
     assert payload["effective_confirmation_count"] == 0
 
     with session_factory() as db:
@@ -682,13 +682,13 @@ def test_not_mastered_clears_window_but_keeps_history(
     # 先积累一条已掌握确认。
     first = assess(client, ordered[1]["id"], "mastered", "nm-key-0001")
     assert first.status_code == 200
-    assert first.json()["effective_confirmation_count"] == 1
+    assert first.json()["effective_confirmation_count"] == 0
 
     # 明确未掌握：清空窗口、状态转 stuck、历史保留。
     second = assess(client, ordered[2]["id"], "not_mastered", "nm-key-0002")
     assert second.status_code == 200
-    assert second.json()["state"] == "stuck"
-    assert second.json()["reason_code"] == "not_mastered"
+    assert second.json()["state"] == "unseen"
+    assert second.json()["reason_code"] == "self_feedback_only"
     assert second.json()["effective_confirmation_count"] == 0
 
     with session_factory() as db:
@@ -697,7 +697,7 @@ def test_not_mastered_clears_window_but_keeps_history(
         assert {attempt.self_grade for attempt in attempts} == {"mastered", "not_mastered"}
         state = db.get(KpState, kp_id)
         assert state is not None
-        assert state.state == "stuck"
+        assert state.state == "unseen"
         assert state.evidence_window == []
 
 
@@ -713,7 +713,7 @@ def test_self_assessment_is_idempotent_by_key(client: TestClient, session_factor
     assert second.status_code == 200
     # 同一 key 重放：原因码与有效确认数完全一致，不重复累计。
     assert first.json()["reason_code"] == second.json()["reason_code"]
-    assert first.json()["effective_confirmation_count"] == second.json()["effective_confirmation_count"] == 1
+    assert first.json()["effective_confirmation_count"] == second.json()["effective_confirmation_count"] == 0
 
     with session_factory() as db:
         assert len(db.scalars(select(QuestionAttempt)).all()) == 1
@@ -886,14 +886,14 @@ def test_append_to_completed_plan_reactivates_it(client: TestClient, session_fac
 
 
 # --------------------------------------------------------------------------- #
-# 毕业规则：跨天、变式题、基础确认
+# 自述记录边界：跨天、变式题和节点自述均不产生确认
 # --------------------------------------------------------------------------- #
 
 
-def test_all_requirements_met_in_one_day_still_cannot_graduate(
+def test_completing_all_items_by_self_report_does_not_confirm_mastery(
     client: TestClient, session_factory, clock
 ) -> None:
-    """数量、题型、考法、变式题都达标，只要跨天不足就不能毕业。"""
+    """自述完成可以记录练习进度，但不是可靠独立作答证据。"""
     leaves = leaf_codes(session_factory)
     kp_id = leaves["math.calculus.limit.lhopital"]
     body = generate_plan(client, [kp_id]).json()
@@ -906,73 +906,65 @@ def test_all_requirements_met_in_one_day_still_cannot_graduate(
         assert last.status_code == 200
     assert last is not None
     payload = last.json()
-    assert payload["state"] == "consolidating"
-    # 唯一没满足的是跨天确认。
-    assert payload["reason_code"] == "insufficient_day_span"
+    assert payload["state"] == "unseen"
+    assert payload["reason_code"] == "self_feedback_only"
 
     with session_factory() as db:
         state = db.get(KpState, kp_id)
-        assert state is not None and state.state == "consolidating"
+        assert state is not None and state.state == "unseen"
 
 
-def test_graduation_succeeds_after_cross_day_confirmation(
+def test_self_reports_across_three_days_do_not_graduate(
     client: TestClient, session_factory, clock
 ) -> None:
-    """第一天补齐数量与题型，之后隔天再确认一次即跨天毕业。
-
-    第一天做满「3 个确认 + 含变式题」的最低门槛，此时唯一未满足的就是跨天门；
-    之后每天只需再做一道题（缺口补齐时系统只给少量巩固题），
-    首尾确认跨到 01-03 就毕业。
-    """
+    """连续三天自行对照仍不形成客观确认、跨天证据或复测日期。"""
     leaves = leaf_codes(session_factory)
     kp_id = leaves["math.calculus.limit.lhopital"]
     body = generate_plan(client, [kp_id]).json()
     ordered = items_by_ordinal(body)
 
-    # 第一天做满门槛：1 道变式题 + 2 道其他题。显式挑出变式题，避免依赖组卷顺序。
+    # 第一天自述完成变式题和其他题，避免依赖组卷顺序。
     variant_id = next(item["id"] for item in body["items"] if item["is_variant"])
     others = [item["id"] for item in body["items"] if item["id"] != variant_id]
     first_day_ids = [variant_id, *others[:2]]
     for index, item_id in enumerate(first_day_ids, start=1):
         assert assess(client, item_id, "mastered", f"grad-key-{index:04d}").status_code == 200
 
-    # 第二天：再确认一次，但 01-01 到 01-02 只差 1 天，仍不能毕业。
+    # 第二天继续自述完成，不产生确认。
     clock.now = DAY2
     generate_plan(client, [kp_id])
     second_day_item = redo_item(client, session_factory, position=1)
     still = assess(client, second_day_item, "mastered", "grad-key-9001")
     assert still.status_code == 200
-    assert still.json()["state"] == "consolidating"
-    # 到这一步只剩跨天门未满足（数量与题型已在第一天补齐）。
-    assert still.json()["reason_code"] == "insufficient_day_span"
+    assert still.json()["state"] == "unseen"
+    # 跨日期不会提升自述记录的证据强度。
+    assert still.json()["reason_code"] == "self_feedback_only"
 
-    # 第三天：再做一道题，首尾确认跨到 01-03，满足跨天要求后毕业。
+    # 第三天继续自述；仍不毕业。
     clock.now = DAY3
     generate_plan(client, [kp_id])
     third_day_item = redo_item(client, session_factory, position=1)
     final = assess(client, third_day_item, "mastered", "grad-key-9002")
     assert final.status_code == 200
     payload = final.json()
-    assert payload["state"] == "mastered"
-    assert payload["reason_code"] == "graduated"
+    assert payload["state"] == "unseen"
+    assert payload["reason_code"] == "self_feedback_only"
 
     with session_factory() as db:
         state = db.get(KpState, kp_id)
         assert state is not None
-        assert state.state == "mastered"
-        assert state.mastered_at is not None
-        assert state.next_review_at is not None
-        # 复测间隔第一档是 7 天。
-        assert (state.next_review_at - state.mastered_at) == timedelta(days=7)
+        assert state.state == "unseen"
+        assert state.mastered_at is None
+        assert state.next_review_at is None
 
     # 知识树详情反映同一结果。
     detail = client.get(f"/api/knowledge/{kp_id}").json()["node"]
-    assert detail["state"] == "mastered"
-    assert detail["has_real_variant"] is True
-    assert detail["day_span"] == 2
+    assert detail["state"] == "unseen"
+    assert detail["has_real_variant"] is False
+    assert detail["day_span"] is None
 
 
-def test_node_self_assessment_adds_exactly_two_base_credits(
+def test_node_self_report_adds_no_base_credits(
     client: TestClient, session_factory
 ) -> None:
     leaves = leaf_codes(session_factory)
@@ -984,24 +976,24 @@ def test_node_self_assessment_adds_exactly_two_base_credits(
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["manual_credit_count"] == 2
-    assert payload["effective_confirmation_count"] == 2
-    # 2 < 3，先卡在“确认数不足”这一道门（与页面文案“基础确认 2 / 3”一致）。
-    assert payload["reason_code"] == "insufficient_confirmed_evidence"
-    assert payload["state"] == "consolidating"
+    assert payload["manual_credit_count"] == 0
+    assert payload["effective_confirmation_count"] == 0
+    # 节点自述只更新辅助反馈，不进入毕业计数。
+    assert payload["reason_code"] == "self_feedback_only"
+    assert payload["state"] == "unseen"
 
     with session_factory() as db:
         # 绝不伪造 QuestionAttempt。
         assert db.scalar(select(QuestionAttempt)) is None
         state = db.get(KpState, kp_id)
         assert state is not None
-        assert state.manual_credit_count == 2
+        assert state.manual_credit_count == 0
         assert state.node_self_grade == "mastered"
         assert state.evidence_window == []
         # 审计事件只有一条，且没有 evidence_level（基础证据不进窗口）。
         events = db.scalars(select(LearningEvent)).all()
         assert len(events) == 1
-        assert events[0].event_type == "node_self_assessed"
+        assert events[0].event_type == "node_self_reported"
         assert events[0].source_id is None
         assert events[0].evidence_level is None
 
@@ -1009,18 +1001,18 @@ def test_node_self_assessment_adds_exactly_two_base_credits(
 def test_node_self_assessment_route_still_needs_real_questions(
     client: TestClient, session_factory, clock
 ) -> None:
-    """节点自评只贡献基础确认；真实题量、题型与变式要求仍须自己满足。"""
+    """节点与练习自述都不能替代可靠的独立正确作答。"""
     leaves = leaf_codes(session_factory)
     kp_id = leaves["math.calculus.limit.lhopital"]
 
-    # 第一天节点整体自评「我已掌握」：只写 2 个透明基础确认。
+    # 第一天节点整体自述熟悉，不写基础确认。
     first = client.post(
         f"/api/knowledge/{kp_id}/self-assessment",
         json={"self_grade": "mastered", "idempotency_key": "node-grad-0001"},
     )
     assert first.status_code == 200
-    assert first.json()["manual_credit_count"] == 2
-    assert first.json()["effective_confirmation_count"] == 2
+    assert first.json()["manual_credit_count"] == 0
+    assert first.json()["effective_confirmation_count"] == 0
 
     # 第三天生成练习卷；一道变式题远远不够（策略要求 4 个确认 + 4 道真实题 + 题型覆盖）。
     clock.now = DAY3
@@ -1029,49 +1021,49 @@ def test_node_self_assessment_route_still_needs_real_questions(
     partial = assess(client, variant_item["id"], "mastered", "node-grad-0002")
     assert partial.status_code == 200
     # 只做一道真实变式题时不能毕业。
-    assert partial.json()["state"] == "consolidating"
-    assert partial.json()["manual_credit_count"] == 2
+    assert partial.json()["state"] == "unseen"
+    assert partial.json()["manual_credit_count"] == 0
 
-    # 把卷内**尚未完成**的题目做完后，毕业条件才成立。
+    # 自述完成其余题也不改变证据性质。
     last = partial
     remaining = [item for item in body["items"] if item["id"] != variant_item["id"]]
     for index, item in enumerate(remaining, start=10):
         last = assess(client, item["id"], "mastered", f"node-grad-{index:04d}")
         assert last.status_code == 200
-    assert last.json()["state"] == "mastered"
-    assert last.json()["reason_code"] == "graduated"
-    assert last.json()["manual_credit_count"] == 2
+    assert last.json()["state"] == "unseen"
+    assert last.json()["reason_code"] == "self_feedback_only"
+    assert last.json()["manual_credit_count"] == 0
 
 
-def test_node_route_day_span_uses_same_calendar_as_state_machine(
+def test_self_reports_do_not_create_confirmation_dates_or_day_span(
     client: TestClient, session_factory, clock
 ) -> None:
-    """页面 day_span 必须与毕业判定用同一套日期，否则用户会看到自相矛盾的数据。"""
+    """自述时间不能伪装成有效确认日期。"""
     leaves = leaf_codes(session_factory)
     kp_id = leaves["math.calculus.limit.lhopital"]
 
-    # 第一天节点自评「我已掌握」：基础确认日期 = 01-01。
+    # 第一天记录节点自述。
     assert client.post(
         f"/api/knowledge/{kp_id}/self-assessment",
         json={"self_grade": "mastered", "idempotency_key": "span-cal-0001"},
     ).status_code == 200
 
-    # 第三天把卷内题目做完，此时毕业成立。
+    # 第三天自述完成卷内题目。
     clock.now = DAY3
     body = generate_plan(client, [kp_id]).json()
     for index, item in enumerate(items_by_ordinal(body).values(), start=1):
         assert assess(client, item["id"], "mastered", f"span-cal-{index:04d}").status_code == 200
 
     node = client.get(f"/api/knowledge/{kp_id}").json()["node"]
-    assert node["state"] == "mastered"
-    # 01-01（基础确认）到 01-03（真实确认）相差 2 天，与状态机一致。
-    assert node["first_confirmed_on"] == "2026-01-01"
-    assert node["last_confirmed_on"] == "2026-01-03"
-    assert node["day_span"] == 2
-    assert node["manual_credit_count"] == 2
+    assert node["state"] == "unseen"
+    # 两天跨度不是客观作答证据，因此确认日期仍为空。
+    assert node["first_confirmed_on"] is None
+    assert node["last_confirmed_on"] is None
+    assert node["day_span"] is None
+    assert node["manual_credit_count"] == 0
 
 
-def test_node_partial_clears_base_credits_but_keeps_real_window(
+def test_node_partial_feedback_preserves_practice_history(
     client: TestClient, session_factory, clock
 ) -> None:
     leaves = leaf_codes(session_factory)
@@ -1093,21 +1085,21 @@ def test_node_partial_clears_base_credits_but_keeps_real_window(
     assert partial.status_code == 200
     payload = partial.json()
     assert payload["manual_credit_count"] == 0
-    # 真实题目的确认窗口保留：1 条真实确认 + 0 基础确认。
-    assert payload["effective_confirmation_count"] == 1
-    assert payload["state"] == "consolidating"
+    # 练习自述记录不进入确认窗口。
+    assert payload["effective_confirmation_count"] == 0
+    assert payload["state"] == "unseen"
 
     with session_factory() as db:
         state = db.get(KpState, kp_id)
         assert state is not None
         assert state.manual_credit_count == 0
         assert state.manual_confirmed_at is None
-        assert len(state.evidence_window) == 1
+        assert len(state.evidence_window) == 0
         # 其余练习历史不受影响。
         assert len(db.scalars(select(QuestionAttempt)).all()) == 1
 
 
-def test_node_not_mastered_clears_both_and_enters_stuck(
+def test_node_not_mastered_feedback_does_not_reset_mastery(
     client: TestClient, session_factory
 ) -> None:
     leaves = leaf_codes(session_factory)
@@ -1127,15 +1119,15 @@ def test_node_not_mastered_clears_both_and_enters_stuck(
     )
     assert stuck.status_code == 200
     payload = stuck.json()
-    assert payload["state"] == "stuck"
-    assert payload["reason_code"] == "node_not_mastered"
+    assert payload["state"] == "unseen"
+    assert payload["reason_code"] == "self_feedback_only"
     assert payload["manual_credit_count"] == 0
     assert payload["effective_confirmation_count"] == 0
 
     with session_factory() as db:
         state = db.get(KpState, kp_id)
         assert state is not None
-        assert state.state == "stuck"
+        assert state.state == "unseen"
         assert state.evidence_window == []
         # 既往练习历史保留。
         assert len(db.scalars(select(QuestionAttempt)).all()) == 1
@@ -1151,8 +1143,8 @@ def test_node_self_assessment_is_idempotent_by_key(
     first = client.post(f"/api/knowledge/{kp_id}/self-assessment", json=payload)
     second = client.post(f"/api/knowledge/{kp_id}/self-assessment", json=payload)
     assert first.status_code == second.status_code == 200
-    # 重放不会把基础确认叠加成 4。
-    assert second.json()["manual_credit_count"] == 2
+    # 重放不增加自述事件或基础确认。
+    assert second.json()["manual_credit_count"] == 0
 
     with session_factory() as db:
         assert len(db.scalars(select(LearningEvent)).all()) == 1
@@ -1172,20 +1164,20 @@ def test_recommendation_reason_becomes_stuck_after_not_mastered(
     assert today["status"] == "setup"
     target = next(item for item in today["recommendations"] if item["kp_id"] == str(kp_id))
     assert target["reason"] == "not_mastered"
-    assert target["state"] == "stuck"
+    assert target["state"] == "unseen"
     # 明确未掌握的优先级高于纯未学习。
     assert today["recommendations"][0]["reason"] in {"not_mastered", "overdue_review"}
 
 
 # --------------------------------------------------------------------------- #
-# 客观判分（只是复盘参考，绝不参与掌握度与毕业）
+# 旧自评入口不得冒充经过核验的机器判分
 # --------------------------------------------------------------------------- #
 
 
-def test_single_choice_records_objective_result_but_grades_by_self_grade(
+def test_self_report_endpoint_does_not_grade_selected_options(
     client: TestClient, session_factory, clock
 ) -> None:
-    """选择题：选项可比对时记录 right/wrong，但状态仍只由 self_grade 决定。"""
+    """旧入口即使附带选项也只记录自述；可靠判题走答案提交服务。"""
     leaves = leaf_codes(session_factory)
     kp_id = leaves["math.calculus.limit.lhopital"]
     body = generate_plan(client, [kp_id]).json()
@@ -1199,16 +1191,16 @@ def test_single_choice_records_objective_result_but_grades_by_self_grade(
     wrong_option = next(key for key in choice["options"] if key != correct)
     response = assess(client, choice["id"], "mastered", "obj-key-0001", selected_option=wrong_option)
     assert response.status_code == 200
-    # 自评说了算：客观判错不会把状态压回去。
-    assert response.json()["effective_confirmation_count"] == 1
+    # 自述不会产生客观确认，也不会凭选项改掌握状态。
+    assert response.json()["effective_confirmation_count"] == 0
 
     with session_factory() as db:
         attempt = db.scalar(select(QuestionAttempt))
         assert attempt is not None
-        assert attempt.objective_result == "wrong"
+        assert attempt.objective_result == "unknown"
         assert attempt.self_grade == "mastered"
 
-    # 换一天、换一个叶子生成新卷，并在它的选择题上选对，记录 right。
+    # 换一天选对也仍为 unknown，不能绕过可靠判题入口。
     clock.now = DAY2
     other_kp = leaves["math.linear-algebra.determinant.properties"]
     other_body = generate_plan(client, [other_kp]).json()
@@ -1227,7 +1219,7 @@ def test_single_choice_records_objective_result_but_grades_by_self_grade(
             attempt.question_id: attempt.objective_result
             for attempt in db.scalars(select(QuestionAttempt)).all()
         }
-    assert sorted(results.values()) == ["right", "wrong"]
+    assert sorted(results.values()) == ["unknown", "unknown"]
 
 
 def test_non_choice_question_keeps_objective_result_unknown(

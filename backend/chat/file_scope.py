@@ -26,7 +26,15 @@ def mention_groups(materials, question: str) -> list[list]:
     query = normalized_name(question)
     occurrences = []
     for material in materials:
-        for name in aliases(material):
+        names = aliases(material)
+        # Only accept literal trailing shorthand when the user explicitly names
+        # a document. Keep all matching versions so ambiguity is not hidden.
+        title = normalized_name(material.title.rsplit('.', 1)[0] if re.search(r'\.(md|txt|pdf|docx)$', material.title, re.I) else material.title)
+        for length in range(4, len(title)):
+            suffix = title[-length:]
+            if re.search(re.escape(suffix) + r'(?:这份|这个|那份|那个)?(?:文件|资料|文档)', query):
+                names.add(suffix)
+        for name in names:
             for match in re.finditer(re.escape(name), query):
                 prefix = query[max(0, match.start()-12):match.start()]
                 if re.search(r"(?:不要|不必|禁止)(?:读取|阅读|使用|参考|读|看)$", prefix):

@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from copy import copy
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import BoundedSemaphore
 from collections.abc import AsyncIterator, Sequence
@@ -21,6 +22,10 @@ from backend.models.rag import ChunkKnowledgePoint, DocumentChunk, Material
 from backend.retrieval.protocols import RetrievalHit, RetrievalRequest, SearchFilters
 from backend.services.retrieval_service import search_chunks
 from backend.chat.file_scope import matching_materials, ambiguous_mentions, filename_suggestion, aliases, normalized_name
+from backend.chat.evidence import build_evidence_blocks
+from backend.chat.query_context import RetrievalQueryContext, contextualize_retrieval_query, is_knowledge_followup
+from backend.chat.context_screening import screen_context
+from backend.chat.call_trace import CallTrace, clean_usage, observe_payload, safe_failure_reason
 
 logger = logging.getLogger(__name__)
 
@@ -136,12 +141,17 @@ class PreparedAnswer:
     preparation_duration_ms: int = 0
     model_first_delta_ms: int | None = None
     model_duration_ms: int | None = None
+    evidence_blocks: tuple[dict[str, object], ...] = ()
+    generation_profile: str = "normal"
+    retrieval_query_context: dict[str, object] | None = None
+    context_screening: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
 class OverviewResolution:
     hits: list[RetrievalHit]
     direct_response: str | None = None
+    full_document: bool = True
 
 
 @dataclass(frozen=True)
@@ -585,6 +595,8 @@ GENERAL_SYSTEM_PROMPT = (
     "系统会标明这是通用知识参考，直接输出参考内容即可。"
     "数学结论必须区分必要条件与充分条件，并明确可导、内点、区间等前提；"
     "不能无条件称极值点一定是驻点，|x|在0处极小但不可导就是反例。"
+    "算法结论也须限定对象与条件：从源点可达负环，并不意味着所有目标的最短距离都无定义；"
+    "只有还能从该负环到达的目标受影响。不要添加与本题无关的算法清单。"
 )
 
 
@@ -593,8 +605,23 @@ def general_reference_offset(text: str) -> int | None:
     return marker.start() if marker else None
 
 
+def _direction_instruction(question: str) -> str:
+    if not re.search(r"反过来|逆命题|逆推|反推|必要条件|充分条件|必要充分|充分必要|充要", question):
+        return ""
+    return (
+        "\n【命题方向】讨论反过来、逆命题或必要充分条件时，分别写明原命题 P⇒Q 与逆命题 Q⇒P，"
+        "按原命题、逆命题、反例否定的对象这个顺序说明，明确哪一个成立、哪一个被反例否定。"
+        "反例若满足 Q 且不满足 P，它否定的是 Q⇒P，不是否定 P⇒Q。"
+        "表述用‘原命题 P⇒Q 成立，但其逆命题 Q⇒P 不成立’，"
+        "不要写‘Q⇒P 这个方向不能反过来成立’：把 Q⇒P 再反过来是 P⇒Q，容易把成立方向说成不成立。"
+        "不要只写‘不能反过来’而省略对象，也不要在表格前后添加与上述方向矛盾的概括。"
+        "P⇒Q 成立时，P 是 Q 的充分条件，Q 是 P 的必要条件；是否为充要条件还须核对 Q⇒P。"
+        "引用要支持对应方向，不因同段其他结论正确而掩盖方向矛盾。"
+    )
+
+
 def _general_prompt(question: str, history: Sequence[ChatMessage]) -> list[dict[str, str]]:
-    messages = [{"role": "system", "content": GENERAL_SYSTEM_PROMPT + "\n" + _answer_style_instruction(question)}]
+    messages = [{"role": "system", "content": GENERAL_SYSTEM_PROMPT + "\n" + _answer_style_instruction(question) + _direction_instruction(question)}]
     messages.extend({"role": row.role, "content": row.content} for row in history if row.status == "completed")
     if not history or history[-1].role != "user" or history[-1].content != question:
         messages.append({"role": "user", "content": question})
@@ -607,6 +634,7 @@ def _prompt(
     *,
     mode: str = "builtin",
     full_document: bool = False,
+    evidence_blocks=None,
 ) -> tuple[list[dict[str, str]], dict[str, UUID]]:
     mapping = {f"C{i}": hit.chunk_id for i, hit in enumerate(hits, 1)}
     base_system_prompt = USER_MATERIALS_SYSTEM_PROMPT if mode == "user" else SYSTEM_PROMPT
@@ -614,9 +642,25 @@ def _prompt(
         f"{base_system_prompt}\n\n{_answer_style_instruction(question)}\n\n"
         f"{_evidence_answer_instruction(question, full_document=full_document)}"
     )
+    system_prompt += _direction_instruction(question)
+    system_prompt += (
+        "\n【引用的支持边界】引用支持的是相邻的具体事实，不是整段话的主题。"
+        "可以忠实改述资料，或说明由资料明确前提推出的结论及推导，不能仅因主题相关就给补充定义、机制或条件附 [C数字]。"
+        "逐项核对本轮证据是否真的包含所述定义、条件和步骤；不要把‘资料提到了某术语’当作‘资料解释了该术语的全部含义’。"
+        "资料能回答的部分先直接回答并引用；仅在理解本题确有必要时补充未被资料支持的背景，"
+        "把补充放在答案末尾独立的‘## 通用知识参考’段，说明它不是文件内容，不附任何 [C数字]。"
+        "若无需补充即可完整作答，就不要添加这个段落。不得把通用参考用来猜测未读到的文件内容。"
+        "\n【资料与背景分句】同一句、同一列表项或同一表格单元不能混合有资料支持的事实与未获支持的背景后统一附引用。"
+        "例如资料只给出‘事件A后仍可能出现B’，只能引用这一关系，不能在同一句补出‘A的定义是D’并共用引用。"
+        "若定义D是回答所必需而证据未提供，把它移到末尾通用知识参考；不必解释D就能回答时直接省略，不因此拒答有证据的部分。"
+        "原文直接给出步骤时，保留原步骤和必要条件即可，不再加重复的‘核心是’总结来引入未说明的优先级或评价。"
+        "不为几何直觉、类比、自拟例子沿用旁边结论的引用；只有本轮资料明确支持这些解释时才附来源。"
+        "最终输出前逐句核对：每个引用只覆盖该句实际受支持的断言；发现混合句先拆句并分别归属，再输出。"
+    )
     system_prompt += (
         "\n【本轮证据优先】历史回答可能遗漏、出错或基于旧检索范围，不能作为资料证据。"
         "历史里出现的‘只找到某一部分’不能限制本轮范围；按当前问题和本轮资料证据重新判断。"
+        "历史用于解析指代，不扩大当前任务；用户只追问某几个阶段或章节时只展开这些部分。"
         "本轮 [C数字] 只对应本轮证据，不沿用历史回答中的引用编号。"
         "引用格式只允许 [C1]、[C2] 这样的形式，禁止使用 [citation:1] 或自定义引用格式。"
         "保持原文对象、单位与统计口径：样本数不能擅自改成人数，未给出的作者、年份、单位不要补出。"
@@ -625,17 +669,36 @@ def _prompt(
     )
     if full_document:
         file_names = list(dict.fromkeys(getattr(hit, "material_title", "") for hit in hits if getattr(hit, "material_title", "")))
+        fact_comparison = len(file_names) > 1 and bool(re.search(r"共同|共有|相同", question)) and bool(re.search(r"独有|特有|各自", question))
         if len(file_names) > 1:
             system_prompt += (
                 "\n【多文件任务】本轮已提供这些文件的完整可读索引正文：" + "、".join(file_names) + "。"
                 "逐份核对，不能把其中一份丢掉、只回答最长标题，或声称另一份没有资料。"
                 "比较时先用简洁对照说明各自主题，再按用户要求各举文件中的例子并分别引用。"
+                "区分共同内容与独有内容：同一事实若两份都有，只列为共同点，不再列入独有项；"
+                "章节名称不同不代表内容独有，结尾总结也必须保持这一分类。"
                 "不要把每份原文逐段复述，未要求的背景或重复总结不要添加。"
             )
+            if fact_comparison:
+                system_prompt += (
+                    "\n【事实分类输出】按共同事实、各文件特有事实组织回答，比较单位是具体事实，不是整章或整阶段。"
+                    "同一阶段既有共同事实又有特有事实时，只把确实不同的部分列为特有；"
+                    "不能把包含共同内容的整段或整阶段统称为独有。"
+                    "每项附对应来源；另一份未提及不等于现实中不存在，只说明本次文件内容的差异。"
+                    "共同事实必须分别给出每份文件的支持引用，不能仅凭一份文件的陈述确认两份共有。"
+                    "若用户没有明确要求结尾总结，分类完即可结束，不再追加总括句重新合并分类。"
+                )
+                if classify_answer_style(question) != "detailed":
+                    system_prompt += (
+                        "\n【紧凑比较格式】用一张表列出‘具体事实／归属（共同或文件名）／支持引用’，"
+                        "一行只表达一个可核验事实，覆盖用户要求的共同点和各文件差异。"
+                        "表前不重复介绍文件主题，表后不重复总结；必要限制另用一句说明。"
+                        "紧凑只减少重复表达，不省略必要条件、请求的事实或来源。"
+                    )
         chapters = list(dict.fromkeys(
             str(hit.heading_path[0]) for hit in hits if getattr(hit, "heading_path", ())
         ))
-        if chapters:
+        if chapters and not fact_comparison:
             system_prompt += (
                 "\n【全文覆盖清单】本轮实际提供的顶层章节：" + "；".join(chapters) + "。"
                 "概述也要简要覆盖每个相关顶层章节，不能只讲第一个章节。"
@@ -643,12 +706,9 @@ def _prompt(
             )
             if classify_answer_style(question) != "detailed":
                 system_prompt += "本次是概述，不是全文复述；每个相关章节用一句话说明用途与主要点，不逐条复制操作细则，也不在开头或结尾重复同一份总结。"
-    evidence = "\n\n".join(
-        f"[C{i}] 【资料：{getattr(hit, 'material_title', '') or '未命名资料'}"
-        f"{'｜章节：' + ' › '.join(getattr(hit, 'heading_path', ()) or ()) if getattr(hit, 'heading_path', ()) else ''}】\n"
-        f"{hit.content}"
-        for i, hit in enumerate(hits, 1)
-    )
+    evidence = "\n\n".join(block["context"] for block in (
+        build_evidence_blocks(hits) if evidence_blocks is None else evidence_blocks
+    ))
     messages = [{"role": "system", "content": system_prompt}]
     previous = [row for row in history if row.status == "completed"]
     if previous and previous[-1].role == "user" and previous[-1].content == question:
@@ -709,6 +769,8 @@ def _evidence_answer_instruction(question: str, *, full_document: bool = False) 
         "样本不一定是人，不要为资料擅加对象类型或单位。"
         "通用知识补充同样必须保留成立前提，必要与充分不可混用；"
         "驻点不是任意极值点的必要条件，须限定可导的内点极值。"
+        "算法性质须限定具体对象；例如负环影响某目标的最短距离，须源点可达负环且负环可达该目标，"
+        "不能说只要源点可达负环所有目标都没有最短路。不要额外展开无关算法。"
         "只有缺失信息确实影响回答时才说明限制；不要主动断言资料没有进一步说明、"
         "没有其它章节或没有某项内容，除非正文明确这样说或用户正在询问该项内容。"
     )
@@ -793,8 +855,13 @@ def _recent_user_context(
 def _is_file_reference_question(question: str) -> bool:
     return (
         any(phrase in question for phrase in FILE_REFERENCE_PHRASES)
+        or bool(re.search(r"(?:它|这份|那份|该文档)(?:的)?(?:前半部分|后半部分|第[一二三四五六七八九十\d]+章|[A-G](?:、[A-G])*(?:阶段)?)", question))
         or bool(re.search(r"\.(?:md|txt|pdf|docx)(?![A-Za-z0-9_])", question, flags=re.IGNORECASE))
     )
+
+
+def _is_singular_document_reference(question: str) -> bool:
+    return bool(re.search(r"它|这份|那份|该文件|该资料|该文档|这个文件|那个文件|这个资料|那个资料", question)) and not re.search(r"这两份|那两份|两份文件|两份文档|两版|这些文件", question)
 
 
 def _ready_materials(db: Session, mode: str) -> list[Material]:
@@ -896,6 +963,8 @@ def _detail_material_scope(
             matches = _matching_materials(materials, previous)
             if matches:
                 resolved_question = previous
+                if len(matches) > 1 and _is_singular_document_reference(question):
+                    return None, "刚才涉及多份资料，无法确定‘它’指哪一份。请确认完整资料名，我会只读取指定文件。"
                 break
         if not matches and len(materials) == 1:
             matches = materials
@@ -904,6 +973,31 @@ def _detail_material_scope(
     if len(matches) > 1 and ambiguous_mentions(materials, resolved_question):
         return None, "当前资料范围里有多份名称相同或相近的文件，请先确认要阅读哪份资料。"
     return (tuple(material.id for material in matches) if matches else None), None
+
+
+def _requested_stage_scope(question: str) -> tuple[str, ...]:
+    """Only explicit A–G section requests; filenames and implicit halves are not scopes.
+
+    Fail open to the existing path for exclusions, ranges or whole-document requests:
+    these need richer scope parsing rather than silently dropping requested evidence.
+    """
+    text = re.sub(r"《[^》]+》|\S+\.(?:md|txt|pdf|docx)(?![A-Za-z0-9_])", "", question, flags=re.I)
+    if _is_full_coverage_question(text) or re.search(r"不要|除外|除了|不讲|不看|到|至|[-–—]", text):
+        return ()
+    values = re.findall(r"阶段\s*([A-G])(?=\s|[，,。？?：:、)）]|$)", text)
+    for group in re.findall(r"(?<![A-Za-z])([A-G](?:\s*[、，,和及]\s*[A-G])+)(?![A-Za-z])", text):
+        values.extend(re.findall(r"[A-G]", group))
+    return tuple(sorted(set(values)))
+
+
+def _stage_heading(path: Sequence[str]) -> str | None:
+    for heading in reversed(path):
+        if re.search(r"[A-G]\s*[-–—到至]\s*[A-G]", heading):
+            continue
+        match = re.match(r"^\s*(?:阶段\s*)?([A-G])(?:\s|[·.：:、)）-]|$)", heading)
+        if match:
+            return match.group(1)
+    return None
 
 
 def _overview_hits(
@@ -915,7 +1009,8 @@ def _overview_hits(
     多份资料无法消歧时询问文件名，绝不把普通 top-k 命中伪装成整份概览。
     """
     comparison = _is_document_comparison(question)
-    if not _is_overview_question(question) and not comparison:
+    requested_stages = _requested_stage_scope(question)
+    if not _is_overview_question(question) and not comparison and not requested_stages:
         return None
     document_reference = _is_file_reference_question(question) or any(
         marker in question for marker in ("资料", "文件", "文档", "笔记", "讲义", "章节", "阶段", "知识库")
@@ -932,6 +1027,8 @@ def _overview_hits(
 
     name_matches = _matching_materials(materials, question)
     resolved_question = question
+    if requested_stages and not name_matches and not _is_file_reference_question(question):
+        return None
     if comparison and not document_reference and len(name_matches) < 2 and not _is_overview_question(question):
         return None
     if comparison and not name_matches and not document_reference:
@@ -943,6 +1040,8 @@ def _overview_hits(
         for previous_question in reference_context:
             contextual_matches = _matching_materials(materials, previous_question)
             if contextual_matches:
+                if len(contextual_matches) > 1 and _is_singular_document_reference(question):
+                    return OverviewResolution(hits=[], direct_response="刚才涉及多份资料，无法确定‘它’指哪一份。请确认完整资料名，我会只概述指定文件。")
                 name_matches = contextual_matches
                 resolved_question = previous_question
                 break
@@ -991,6 +1090,21 @@ def _overview_hits(
         for chunk, material in rows
         if active_versions.get(material.id) == chunk.index_version
     ]
+    # Do not filter a truncated scan: a requested later chapter could be outside it.
+    if requested_stages and len(rows) <= OVERVIEW_MAX_CHUNKS:
+        scoped_rows = [(chunk, material) for chunk, material in rows
+                       if _stage_heading(chunk.heading_path or ()) in requested_stages]
+        if scoped_rows:
+            missing = [(material.title, stage) for material in selected for stage in requested_stages
+                       if not any(m.id == material.id and _stage_heading(c.heading_path or ()) == stage
+                                  for c, m in scoped_rows)]
+            if missing:
+                labels = "、".join(f"《{title}》阶段 {stage}" for title, stage in missing)
+                return OverviewResolution(hits=[], direct_response=f"当前活动索引中没有找到这些指定章节：{labels}。请确认章节名称或重新索引；我没有拿其他章节代替。", full_document=False)
+            rows = scoped_rows
+        else:
+            # Heading conventions are unknown; never claim this is a scoped scan.
+            return None
     if not rows:
         return OverviewResolution(
             hits=[],
@@ -1012,7 +1126,7 @@ def _overview_hits(
                 "请指定章节或缩小范围，我可以先概述那一部分。"
             ),
         )
-    return OverviewResolution(hits=[
+    return OverviewResolution(full_document=not bool(requested_stages), hits=[
         RetrievalHit(
             chunk_id=chunk.id,
             material_id=material.id,
@@ -1059,6 +1173,8 @@ def _search_pending(
     history_token_budget: int | None = None,
 ) -> PreparedAnswer:
     preparation_started = time.perf_counter()
+    retrieval_query = RetrievalQueryContext(question)
+    screening_diagnostic = None
     # 未显式指定时用配置值。**语义放在这里而不是各调用点**：
     # 三个调用点（prepare_answer / _prepare_from_factory / answer）任何一处忘传，
     # 多轮上下文都会被静默关掉 —— 那是能力缺失，不会报错，最难发现。
@@ -1086,7 +1202,7 @@ def _search_pending(
             mode=mode,
             reference_context=(
                 _recent_user_context(db, session_id=session_id, question=question)
-                if _is_overview_question(question) or _is_document_comparison(question)
+                if _is_overview_question(question) or _is_document_comparison(question) or _requested_stage_scope(question)
                 else ()
             ),
         )
@@ -1119,7 +1235,13 @@ def _search_pending(
                 )
             # Named documents already resolve the scope locally. No extra model call
             # just to size their evidence; unknown phrasing uses bounded explain size.
-            plan = build_chat_retrieval_plan(question, provider=None if material_ids else provider)
+            if not material_ids and history_token_budget > 0 and is_knowledge_followup(question):
+                retrieval_query = contextualize_retrieval_query(
+                    question, _recent_user_context(db, session_id=session_id, question=question, limit=1)
+                )
+            plan = build_chat_retrieval_plan(
+                question, provider=None if material_ids or retrieval_query.previous_user_turns else provider
+            )
             logger.info(
                 "聊天检索策略 mode=%s intent=%s classified_by=%s top_k=%d candidate_k=%d diversify=%s",
                 mode,
@@ -1133,7 +1255,7 @@ def _search_pending(
                 result = search_chunks(
                     db,
                     request=RetrievalRequest(
-                        query=question,
+                        query=retrieval_query.query,
                         top_k=plan.top_k,
                         candidate_k=plan.candidate_k,
                         filters=SearchFilters(source_types=(mode,), material_ids=material_ids),
@@ -1147,6 +1269,17 @@ def _search_pending(
             except Exception as exc:
                 raise AppError("retrieval_failed", detail=type(exc).__name__) from exc
             hits = result.hits
+            from backend.config import get_settings
+            bypass_reason = (
+                "file_scope" if material_ids else
+                "document_request" if _is_overview_question(question) or _is_document_comparison(question) else
+                "comprehensive" if plan.diversify else
+                "degraded_retrieval" if getattr(result, "degraded", False) else
+                "reranked_unvalidated" if getattr(result, "reranked", False) else None
+            )
+            screened = screen_context(hits, mode=get_settings().chat_context_screening,
+                                      bypass_reason=bypass_reason)
+            hits, screening_diagnostic = screened.hits, screened.diagnostic
     # 历史消息按 seq 排序：user 与 assistant 在同一事务写入、created_at 相同，
     # 只按时间排序会让 prompt 里的问答顺序随机颠倒（见 seq 字段的说明）。
     #
@@ -1170,8 +1303,11 @@ def _search_pending(
     history = select_history_within_budget(
         recent, max_tokens=min(history_token_budget, 1200) if overview else history_token_budget
     )
+    evidence_blocks = build_evidence_blocks(hits)
     if hits:
-        prompt, citation_map = _prompt(question, hits, history, mode=mode, full_document=overview)
+        prompt, citation_map = _prompt(question, hits, history, mode=mode,
+                                      full_document=overview and overview_result.full_document,
+                                      evidence_blocks=evidence_blocks)
     elif _is_standalone_greeting(question):
         prompt, citation_map = [], {}
     else:
@@ -1192,6 +1328,16 @@ def _search_pending(
         retrieval_mode="hybrid" if hits or _is_standalone_greeting(question) else "general",
         attribution=attribution,
         preparation_duration_ms=_response_duration_ms(preparation_started),
+        evidence_blocks=evidence_blocks,
+        retrieval_query_context=retrieval_query.diagnostic(),
+        context_screening=screening_diagnostic,
+        generation_profile=(
+            "multi_file_comparison"
+            if overview and len({hit.material_id for hit in hits}) > 1
+            and re.search(r"共同|共有|相同", question)
+            and re.search(r"独有|特有|各自", question)
+            else "normal"
+        ),
     )
 
 def _history_budget() -> int:
@@ -1311,6 +1457,7 @@ def _persist_failed_stream_answer(
     parts: list[str],
     code: str,
     started_at: float,
+    call_trace: CallTrace | None = None,
 ) -> list[tuple[str, UUID]]:
     """Persist partial text and citations before an SSE error terminates the stream."""
     if target_id is None:
@@ -1349,7 +1496,14 @@ def _persist_failed_stream_answer(
             "error_code": code,
             "response_duration_ms": _response_duration_ms(started_at),
             "unknown_citations": unknown,
+            **({"context_screening": prepared.context_screening}
+               if prepared is not None and prepared.context_screening is not None else {}),
+            **({"generation_trace": call_trace.summary(target_id)} if call_trace else {}),
         }
+        from backend.config import get_settings
+        if prepared is not None and get_settings().app_env == "test" and get_settings().capture_test_evidence:
+            from backend.chat.evidence import evidence_snapshot
+            message.metadata_ = {**message.metadata_, "evaluation_evidence": evidence_snapshot(prepared)}
         for ordinal, (label, chunk_id) in enumerate(valid):
             db.add(MessageCitation(message_id=message.id, chunk_id=chunk_id, label=label, ordinal=ordinal))
     return valid
@@ -1380,7 +1534,7 @@ def _normalize_known_citation_aliases(text: str, mapping: dict[str, UUID]) -> tu
     return "".join(segments), normalized, unknown
 
 
-def finalize_answer(db: Session, *, prepared: PreparedAnswer, text: str, usage: dict[str, object] | None = None, response_duration_ms: int | None = None) -> tuple[ChatMessage, list[tuple[str, UUID]]]:
+def finalize_answer(db: Session, *, prepared: PreparedAnswer, text: str, usage: dict[str, object] | None = None, response_duration_ms: int | None = None, call_trace: CallTrace | None = None) -> tuple[ChatMessage, list[tuple[str, UUID]]]:
     message = db.get(ChatMessage, prepared.assistant_id, with_for_update=True)
     if message is None: raise AppError("generation_failed")
     reference_offset = general_reference_offset(text)
@@ -1435,8 +1589,10 @@ def finalize_answer(db: Session, *, prepared: PreparedAnswer, text: str, usage: 
     )
     message.metadata_ = {
         "usage": usage,
+        **({"generation_trace": call_trace.summary(prepared.assistant_id)} if call_trace else {}),
         "retrieval_mode": prepared.retrieval_mode,
         "retrieved_count": len(prepared.citation_map),
+        **({"context_screening": prepared.context_screening} if prepared.context_screening is not None else {}),
         "response_duration_ms": response_duration_ms,
         "timings": {
             "preparation_duration_ms": prepared.preparation_duration_ms,
@@ -1452,6 +1608,10 @@ def finalize_answer(db: Session, *, prepared: PreparedAnswer, text: str, usage: 
         if prepared.citation_map and not valid and not general_only
         else None,
     }
+    from backend.config import get_settings
+    if get_settings().capture_test_evidence and get_settings().app_env == "test":
+        from backend.chat.evidence import evidence_snapshot
+        message.metadata_["evaluation_evidence"] = evidence_snapshot(prepared)
     for ordinal, (label, chunk_id) in enumerate(valid, 1):
         db.add(MessageCitation(message_id=message.id, chunk_id=chunk_id, label=label, ordinal=ordinal))
     db.commit()
@@ -1475,7 +1635,7 @@ def _provider_error(stage: str, exc: Exception) -> AppError:
         return AppError(
             "generation_failed", detail=f"{stage}:http_{status}", retryable=retryable
         )
-    if isinstance(exc, (TimeoutError, asyncio.TimeoutError, OSError)):
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError, OSError, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError)):
         return AppError(
             "generation_failed", detail=f"{stage}:{type(exc).__name__}", retryable=True
         )
@@ -1492,9 +1652,11 @@ class Provider:
         timeout: float,
         max_tokens: int,
         retry_max_tokens: int | None = None,
+        stream_include_usage: bool = False,
     ):
         self.api_key, self.base_url, self.model = api_key, base_url.rstrip("/"), model
         self.timeout, self.max_tokens = timeout, max_tokens
+        self.stream_include_usage = stream_include_usage
         # 重试时使用的更大预算；None 表示与原值相同。
         #
         # 为什么重试要加大预算而不是原样重试：
@@ -1518,14 +1680,36 @@ class Provider:
         try:
             response = httpx.post(f"{self.base_url}/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"}, json={"model": self.model, "messages": messages, "max_tokens": budget, **self._request_options()}, timeout=self.timeout)
             response.raise_for_status(); payload = response.json()
+            observe_payload(payload)
             if payload["choices"][0].get("finish_reason") == "length":
                 raise AppError("answer_truncated", detail="complete:finish_reason:length", retryable=True)
-            # 把实际用的预算记进 usage：事后排查「是不是额度不够」时这是唯一线索。
-            usage = dict(payload.get("usage") or {})
-            usage.setdefault("max_tokens_used", budget)
+            # 仅保存上游实际返回的计数；配置预算记录在 generation_trace，不算消耗。
+            usage = clean_usage(payload.get("usage"))
             return (payload["choices"][0]["message"]["content"] or "", usage)
         except AppError: raise
         except Exception as exc: raise _provider_error("complete", exc) from exc
+
+    def tool_turn(self, messages: list[dict], tools: list[dict], *, timeout: float) -> dict:
+        """有界工具调用；不把未知工具或未校验模型方案直接执行。"""
+        try:
+            async def send():
+                async with httpx.AsyncClient(timeout=min(float(self.timeout), timeout)) as client:
+                    return await client.post(f"{self.base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {self.api_key}"},
+                        json={"model": self.model, "messages": messages, **({"tools": tools, "tool_choice": "auto"} if tools else {}),
+                              "max_tokens": min(self.max_tokens, 2000), **self._request_options(classifier=True)})
+            # 除网络静默限时外再设整轮上限，持续心跳不能无限占用任务槽。
+            response = asyncio.run(asyncio.wait_for(send(), timeout=timeout))
+            response.raise_for_status()
+            payload = response.json()
+            if payload["choices"][0].get("finish_reason") == "length":
+                raise AppError("answer_truncated", retryable=False)
+            return {"message": payload["choices"][0]["message"], "usage": payload.get("usage"), "model": self.model,
+                    "finish_reason": payload["choices"][0].get("finish_reason")}
+        except AppError:
+            raise
+        except Exception as exc:
+            raise _provider_error("learning_task", exc) from exc
 
     def classify_retrieval_intent(self, question: str) -> str | None:
         """轻量意图兜底；最多等待 6 秒，失败时由上层使用解释型默认值。"""
@@ -1570,7 +1754,7 @@ class Provider:
         content_chars = reasoning_chars = 0
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                async with client.stream("POST", f"{self.base_url}/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"}, json={"model": self.model, "messages": messages, "max_tokens": budget, "stream": True, **self._request_options()}) as response:
+                async with client.stream("POST", f"{self.base_url}/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"}, json={"model": self.model, "messages": messages, "max_tokens": budget, "stream": True, **({"stream_options": {"include_usage": True}} if self.stream_include_usage else {}), **self._request_options()}) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
                         if not line.startswith("data: "): continue
@@ -1578,7 +1762,9 @@ class Provider:
                         if raw == "[DONE]": break
                         # 只取正文 content。推理模型的 reasoning_content（思考过程）
                         # **不能**当作回答正文发给用户 —— 那是草稿，不是结论。
-                        choice = (json.loads(raw).get("choices") or [{}])[0]
+                        payload = json.loads(raw)
+                        observe_payload(payload)
+                        choice = (payload.get("choices") or [{}])[0]
                         reasoning_chars += len(str((choice.get("delta") or {}).get("reasoning_content") or ""))
                         text = (choice.get("delta") or {}).get("content")
                         if text:
@@ -1599,33 +1785,62 @@ def provider_from_settings(settings) -> Provider:
         timeout=settings.llm_timeout_seconds,
         max_tokens=settings.llm_max_output_tokens,
         retry_max_tokens=settings.llm_retry_max_output_tokens,
+        stream_include_usage=getattr(settings, "llm_stream_include_usage", False),
     )
 
 
+def _provider_for_answer(provider: Provider, prepared: PreparedAnswer) -> Provider:
+    """Give evidenced cross-file comparisons bounded headroom, request-locally.
+
+    Reasoning output counts toward the upstream limit even for short final text.
+    Never change shared settings/provider or exceed its existing retry ceiling.
+    This is a targeted retry-avoidance policy, not a quality/speed guarantee.
+    """
+    if not isinstance(provider, Provider) or prepared.generation_profile != "multi_file_comparison":
+        return provider
+    budget = max(provider.max_tokens, min(6000, provider.retry_max_tokens))
+    if budget == provider.max_tokens:
+        return provider
+    scoped = copy(provider)
+    scoped.max_tokens = budget
+    return scoped
+
+
 def _complete_with_retry(
-    provider: Provider, prompt: list[dict[str, str]], question: str
+    provider: Provider, prompt: list[dict[str, str]], question: str, *, call_trace: CallTrace | None = None
 ) -> tuple[str, dict[str, object] | None]:
     """非流式：空回答与可重试的上游故障都原样再试一次。
 
     与流式路径保持同一套判据（见 `_stream_deltas`），
     否则「流式能用、非流式偶尔报错」会变成一类很难解释的现象。
     """
+    trace = call_trace or CallTrace(provider, transport="complete")
     for attempt in (1, 2):
+        record, trace_token, trace_started = trace.begin(attempt, provider)
         try:
             text, usage = provider.complete(prompt, attempt=attempt)
+            record["usage"] = clean_usage(usage)
+            record["status"] = "completed" if text.strip() else "failed"
+            if not text.strip(): record["error_code"] = "empty_answer"
         except AppError as exc:
+            record.update(status="failed", error_code=exc.code)
+            record["failure_reason"] = safe_failure_reason(exc.detail)
             if attempt == 1 and exc.retryable:
                 logger.warning(
-                    "模型首轮失败，以更大预算重试一次 question=%s detail=%s",
-                    question[:40],
+                    "模型首轮失败，以更大预算重试一次 detail=%s",
                     exc.detail or "",
                 )
                 continue
             raise
+        except Exception:
+            record.update(status="failed", error_code="internal_error")
+            raise
+        finally:
+            trace.end(record, trace_token, trace_started)
         if text.strip():
             return text, usage
         if attempt == 1:
-            logger.warning("模型返回空回答，以更大预算重试一次 question=%s", question[:40])
+            logger.warning("模型返回空回答，以更大预算重试一次")
             continue
         # 重试也拿不到正文：如实失败，但**标记为可重试**。
         # 这与流式路径的同一处判断保持一致 —— 否则同样的原因
@@ -1640,6 +1855,7 @@ def _complete_with_retry(
 
 def answer(factory: sessionmaker, *, session_id: UUID, question: str, stack, provider: Provider):
     started_at = time.perf_counter()
+    call_trace = CallTrace(provider, transport="complete")
     prepared = None; assistant_id: UUID | None = None
     try:
         with factory() as db:
@@ -1656,19 +1872,21 @@ def answer(factory: sessionmaker, *, session_id: UUID, question: str, stack, pro
             )
         if not prepared.prompt:
             text = prepared.direct_response or insufficient_evidence_message(mode)
-            with factory() as db: return (*finalize_answer(db, prepared=prepared, text=text, response_duration_ms=_response_duration_ms(started_at)), prepared.retrieval_mode)
+            with factory() as db: return (*finalize_answer(db, prepared=prepared, text=text, response_duration_ms=_response_duration_ms(started_at), call_trace=call_trace), prepared.retrieval_mode)
         model_started = time.perf_counter()
-        text, usage = _complete_with_retry(provider, prepared.prompt, question)
+        text, usage = _complete_with_retry(_provider_for_answer(provider, prepared), prepared.prompt, question, call_trace=call_trace)
         prepared = replace(prepared, model_duration_ms=_response_duration_ms(model_started))
         if prepared.retrieval_mode == "general":
             text = GENERAL_REFERENCE_PREFIX + text
-        with factory() as db: return (*finalize_answer(db, prepared=prepared, text=text, usage=usage, response_duration_ms=_response_duration_ms(started_at)), prepared.retrieval_mode)
+        with factory() as db: return (*finalize_answer(db, prepared=prepared, text=text, usage=usage, response_duration_ms=_response_duration_ms(started_at), call_trace=call_trace), prepared.retrieval_mode)
     except Exception:
         target_id = prepared.assistant_id if prepared is not None else assistant_id
         if target_id is not None:
             with factory.begin() as db:
                 message = db.get(ChatMessage, target_id, with_for_update=True)
-                if message and message.status == "generating": message.status = "failed"
+                if message and message.status == "generating":
+                    message.status = "failed"
+                    message.metadata_ = {**(message.metadata_ or {}), "generation_trace": call_trace.summary(target_id)}
         raise
 
 async def _wait_disconnected(request) -> None:
@@ -1698,6 +1916,7 @@ async def _stream_deltas(
     request,
     flags: dict[str, bool],
     question: str,
+    call_trace: CallTrace | None = None,
 ) -> AsyncIterator[bytes]:
     """把模型流读进 `parts`，逐块产出 SSE delta 帧；首轮失败会重试一次。
 
@@ -1720,6 +1939,7 @@ async def _stream_deltas(
     """
     prefix = list(parts)
     sequence = len(parts)
+    trace = call_trace or CallTrace(provider, transport="stream")
     for attempt in (1, 2):
         before = len(parts)
         stream = provider.stream(prompt, attempt=attempt).__aiter__()
@@ -1733,6 +1953,7 @@ async def _stream_deltas(
         if attempt == 2 or classify_answer_style(question) == "detailed":
             round_timeout = min(round_timeout * 2, 180.0)
         deadline = asyncio.get_running_loop().time() + round_timeout
+        record, trace_token, trace_started = trace.begin(attempt, provider)
         try:
             while True:
                 next_delta = asyncio.create_task(anext(stream))
@@ -1765,10 +1986,20 @@ async def _stream_deltas(
                 parts.append(delta)
                 sequence += 1
                 yield encode_sse("delta", {"seq": sequence, "text": delta})
+        except asyncio.CancelledError:
+            record["status"] = "cancelled"
+            raise
+        except Exception:
+            record.update(status="failed", error_code="internal_error")
+            raise
         finally:
             disconnected_task.cancel()
             await asyncio.gather(disconnected_task, return_exceptions=True)
-            await stream.aclose()
+            try:
+                await stream.aclose()
+            finally:
+                if flags["disconnected"]: record["status"] = "cancelled"
+                trace.end(record, trace_token, trace_started)
 
         if flags["disconnected"]:
             return
@@ -1783,6 +2014,10 @@ async def _stream_deltas(
             failure = failure or AppError(
                 "generation_failed", detail="provider returned an empty answer", retryable=True
             )
+        record["status"] = "failed" if failure else "completed"
+        record["error_code"] = failure.code if failure else None
+        if failure:
+            record["failure_reason"] = safe_failure_reason(failure.detail)
         if failure is None:
             return
         # 输出上限允许一次完整重生成；显式替换旧正文，不能拼接两个回答。
@@ -1796,8 +2031,7 @@ async def _stream_deltas(
         # 只有「本轮一块都没产出」且「错误被标记为可重试」时才重试一次。
         if attempt == 1 and not produced_this_round and failure.retryable:
             logger.warning(
-                "模型首轮失败，重试一次 question=%s detail=%s",
-                question[:40],
+                "模型首轮失败，重试一次 detail=%s",
                 failure.detail or "",
             )
             continue
@@ -1806,6 +2040,7 @@ async def _stream_deltas(
 
 async def stream_answer(factory: sessionmaker, *, request, session_id: UUID, question: str, stack, provider: Provider) -> AsyncIterator[bytes]:
     started_at = time.perf_counter()
+    call_trace = CallTrace(provider, transport="stream")
     prepared = None; assistant_id: UUID | None = None; parts: list[str] = []; completed = False
     # 断开事实由检索阶段与两个流式轮次共同写入，所以用共享字典而不是普通变量
     # （普通变量在嵌套函数里赋值不会传播到外层）。
@@ -1864,7 +2099,7 @@ async def stream_answer(factory: sessionmaker, *, request, session_id: UUID, que
             model_started = time.perf_counter()
             first_delta_ms = None
             async for frame in _stream_deltas(
-                provider, prepared.prompt, parts, request, flags, question
+                _provider_for_answer(provider, prepared), prepared.prompt, parts, request, flags, question, call_trace=call_trace
             ):
                 if first_delta_ms is None:
                     first_delta_ms = _response_duration_ms(model_started)
@@ -1872,7 +2107,7 @@ async def stream_answer(factory: sessionmaker, *, request, session_id: UUID, que
             prepared = replace(prepared, model_first_delta_ms=first_delta_ms, model_duration_ms=_response_duration_ms(model_started))
         if flags["disconnected"]:
             return
-        with factory() as db: message, valid = finalize_answer(db, prepared=prepared, text="".join(parts), response_duration_ms=_response_duration_ms(started_at))
+        with factory() as db: message, valid = finalize_answer(db, prepared=prepared, text="".join(parts), usage=call_trace.final_usage(), response_duration_ms=_response_duration_ms(started_at), call_trace=call_trace)
         completed = True
         # done 帧带上归因依据，前端流式回答才能与刷新后的历史显示一致。
         # 名称要一起带上：只给 uuid 的话，用户看到「归到 3f2a…」等于没解释。
@@ -1905,7 +2140,7 @@ async def stream_answer(factory: sessionmaker, *, request, session_id: UUID, que
         try:
             _persist_failed_stream_answer(
                 factory, target_id=target_id, prepared=prepared, parts=parts,
-                code=exc.code, started_at=started_at,
+                code=exc.code, started_at=started_at, call_trace=call_trace,
             )
         except Exception:
             logger.exception("无法保存失败的流式回答 session=%s", session_id)
@@ -1918,7 +2153,7 @@ async def stream_answer(factory: sessionmaker, *, request, session_id: UUID, que
         try:
             _persist_failed_stream_answer(
                 factory, target_id=target_id, prepared=prepared, parts=parts,
-                code="internal_error", started_at=started_at,
+                code="internal_error", started_at=started_at, call_trace=call_trace,
             )
         except Exception:
             logger.exception("无法保存意外失败的流式回答 session=%s", session_id)
@@ -1942,6 +2177,6 @@ async def stream_answer(factory: sessionmaker, *, request, session_id: UUID, que
                     if received.strip():
                         message.content = received
                         message.status = "cancelled"
-                        message.metadata_ = {"cancelled": True, "partial": True}
+                        message.metadata_ = {"cancelled": True, "partial": True, "generation_trace": call_trace.summary(target_id)}
                     else:
                         db.delete(message)

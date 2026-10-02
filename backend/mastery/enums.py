@@ -29,6 +29,10 @@ class EventType(str, Enum):
     """写入 learning_events 的领域事件类型。"""
 
     QUESTION_SELF_ASSESSED = "question_self_assessed"
+    PRACTICE_SELF_REPORTED = "practice_self_reported"
+    NODE_SELF_REPORTED = "node_self_reported"
+    ANSWER_SUBMITTED = "answer_submitted"
+    AI_PROCESS_REVIEWED = "ai_process_reviewed"
     NODE_SELF_ASSESSED = "node_self_assessed"
     CONTENT_VIEWED = "content_viewed"
     FOLLOWUP_ASKED = "followup_asked"

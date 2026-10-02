@@ -1,0 +1,49 @@
+{
+  "version": "current-rag-baseline-assisted-review-v1",
+  "report": "current-rag-baseline-live-20261001-v1.json",
+  "reviewer_type": "codex_assisted_not_independent_human_or_subject_expert",
+  "human_review_status": "pending",
+  "scores_adjusted": false,
+  "scope": "All 16 synthetic target answers compared locally with original fixtures, references and actual evidence; no new judge calls",
+  "case_reviews": [
+    {"case_id": "math-continuity", "assessment": "Key requested facts supported", "notes": "Correct necessary/sufficient directions and |x| one-sided derivatives. Raw Precision near 1 coexists with only 1 of 8 positive block verdicts."},
+    {"case_id": "math-lhopital", "assessment": "Key conditions and counterexample supported; low relevancy retained", "notes": "Punctured-neighborhood differentiability, nonzero denominator derivative, limit of derivative ratio, and original-ratio counterexample covered. AR0.4701; judge-generated questions are English and focus on only part of the compound Chinese request. Do not infer a corrected score."},
+    {"case_id": "math-cancellation", "assessment": "Derivation supported", "notes": "Third-order expansions, cancellation and 1/2 correct against fixture. Explanation is repetitive but user requested a detailed derivation."},
+    {"case_id": "math-implicit", "assessment": "Unit-circle facts supported; theorem boundary remains important", "notes": "Fy=2y, finite-slope formula limitation and vertical tangent x=1 covered. This unit-circle case must not be generalized into Fy nonzero being universally necessary for every implicit differentiable representation. AR0.6497 retained."},
+    {"case_id": "math-integral", "assessment": "Derivation supported", "notes": "u=x², du=2x dx, mapped lower/upper bounds and sin1 all covered. Identical numerical bounds do not remove need to identify their variable mapping."},
+    {"case_id": "408-stack", "assessment": "Requested results supported", "notes": "Stack3,2 and queue1,2; LIFO/FIFO and remaining items correct."},
+    {"case_id": "408-bfs", "assessment": "Main mechanism supported; wording boundary to review", "notes": "Queue/stack, unweighted edge-count guarantee and DFS limitation correct. General weighted algorithms explicitly separated as general knowledge. Saying ordinary BFS cannot solve weighted graphs is overbroad if read universally; equal-weight special cases should be distinguished. Fixture wording is itself simplified; Faithfulness1 does not certify all real-world conditions."},
+    {"case_id": "408-thread", "assessment": "Requested distinctions supported", "notes": "Shared address space/code/open files vs independent stack/registers/program counter. No target retry this run; this does not erase the old failed attempt."},
+    {"case_id": "408-page", "assessment": "Simplified fixture model supported; low faithfulness retained", "notes": "TLB miss vs page absence, access legality, page-in/page-table update and restart instruction covered. General OS protection exceptions are not comprehensively described by fixture. F0.9; statement-level judge verdicts not recorded."},
+    {"case_id": "408-tcp", "assessment": "Main source conclusions covered; low faithfulness unresolved", "notes": "Receive window/flow control, congestion window/network injection and sequence/ACK/retransmission covered; not claiming no packet loss or exactly-once application processing. F0.6429 despite source-aligned main claims. No preserved statement-level judge verdicts to localize rejected expansions. Do not relabel the score as false positive or pass."},
+    {"case_id": "file-exact", "assessment": "A-G covered; original keyword failure is a formatting false alarm", "notes": "Answer uses A/B/C followed by space rather than strict phase-name/colon forms, so raw behavior FAIL is preserved with a semantic note. C1-C7 correspond to all requested stages; scope-validation chapter also included, outside A-G reference. Precision0 remains unchanged."},
+    {"case_id": "file-alias", "assessment": "Requested single-file E/F/G covered; excess context remains", "notes": "C1/C3/C2 support E/F/G and all 8 context blocks belong to intended phase file, not deployment supplement. Five unrequested chapter blocks still supplied. F0.8571 and Precision0 retained; single-block-completeness judge bias does not excuse actual redundancy."},
+    {"case_id": "cross-file", "assessment": "Main comparison supported; extra content and low scores retained", "notes": "Persistence/restart common fact cited from both files; desktop boundary and three-backup policy correct; only deployment configuration split as phase-F unique fact. Extra synthetic validation token is irrelevant to requested comparison. F0.8333, AR0.5526, Recall0.6667, Precision0 all retained. AR questions focus on deployment rather than full common/unique comparison. First budget6000 observed, stop without retry, total26.5869s; one stochastic run proves neither latency nor quality improvement."},
+    {"case_id": "math-followup", "assessment": "Numerical facts correct; reverse-direction wording inconsistent", "notes": "Left derivative-1/right1 and continuous not implying differentiable are correct. Phrase saying the continuous=>differentiable direction cannot be reversed has an ambiguous/wrong referent; it should be the valid differentiable=>continuous implication that cannot be reversed. Raw Faithfulness1 and keyword PASS do not catch this clarity defect. Relevant continuity block ranked second; Precision0.5 retained."},
+    {"case_id": "missing-reference", "assessment": "No fabricated average; temporal context and judge relevance remain bad cases", "notes": "Explicitly lacks official average and marks general-reference verification advice without fabricated citations. Adds unrequested as-of-June2025 historical framing during a2026-10-01 run; not literally an assertion that today is2025, but risks misleading current-time interpretation. AR0 with judge noncommittal verdicts despite request explicitly allowing no data; no score adjustment.22.8932s and all12 builtin blocks retained. General factual accuracy is not covered by grounded Faithfulness, which is N/A here."},
+    {"case_id": "mode-isolation", "assessment": "Scope guard supported", "notes": "Directly requests switching to user-materials mode; no synthetic private token disclosed, zero generation calls, four metrics N/A.26.1ms not included in model latency mean."}
+  ],
+  "known_bad_case_ids": ["math-lhopital", "408-bfs", "408-tcp", "file-exact", "file-alias", "cross-file", "math-followup", "missing-reference"],
+  "retained_limitations": [
+    "High Context Precision is not low irrelevant-context proportion; supplemental block-verdict fraction is descriptive judge output only.",
+    "File multi-block utility judged against whole-answer completeness remains a systematic interpretation conflict; all zero scores retained.",
+    "Full Faithfulness statement diagnostics and judge/intent usage were not captured. Do not fabricate explanations or total cost.",
+    "All independent-human review statuses remain pending; this is not an educational expert certification.",
+    "Same-model self-judging and stochastic generation prevent attributing one-run differences to code changes alone."
+  ],
+  "cleanup_evidence": {
+    "runner_reported": "Isolated API stopped, schema and temporary indexes removed; shared materials unchanged.",
+    "scope_of_shared_check": "public test material ID set only, not full database byte equality",
+    "independent_postcheck": {
+      "remaining_eval_schema_count": 0,
+      "isolated_port_listening": false,
+      "dev_health_http": 200,
+      "dev_database": "connected",
+      "dev_frontend_http": 200,
+      "development_listener_pids_unchanged": {"8000": 39136, "5433": 29568, "5173": 27380},
+      "only_approved_material_titles_in_snapshots": true,
+      "completed_questions_including_setup": 18
+    },
+    "production_data_modified": false
+  }
+}

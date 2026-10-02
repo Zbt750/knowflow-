@@ -32,10 +32,25 @@ class ErrorResponse(BaseModel):
 # 唯一错误响应契约：{"error": {"code": ..., "message": ...}}
 # 前端按 code 分支，不解析 message 的自然语言文案。
 SAFE_MESSAGES: dict[str, str] = {
+    "vision_not_configured": "请在设置中配置视觉模型或启用复用问答配置",
+    "vision_image_invalid": "请使用5MB以内、边长不超过4096像素的有效静态JPEG、PNG或WebP图片",
+    "vision_consent_required": "请确认将这张图片发送到所配置的视觉模型",
+    "vision_busy": "图片识别正在进行，请稍后重试",
+    "vision_output_incomplete": "识别未完整返回，请换用更清晰或范围更小的图片；未自动重试",
+    "answer_attempt_conflict": "作答记录已更新，请刷新后再试",
+    "answer_retry_not_allowed": "这次作答已判对，请在后续练习中复测",
+    "answer_question_changed": "题目或标准答案已更新，请重新安排这道题",
+    "answer_attempt_limit": "本题本次练习的尝试次数已达上限，请稍后另行复测",
+    "process_review_busy": "过程审阅正在进行，请稍后查看结果或重试",
+    "learning_task_not_found": "学习任务不存在",
+    "learning_task_conflict": "任务状态或题库已变化，请刷新检查，或重新安排学习",
+    "learning_task_busy": "已有学习任务正在执行，请稍后重试",
+    "learning_task_failed": "学习安排未完成，可修改目标后重试",
     "database_unavailable": "database unavailable",
     "not_found": "resource not found",
     "validation_failed": "validation failed",
     "conflict": "conflicting state",
+    "idempotency_key_conflict": "submission key is already used for a different request",
     "invalid_request": "invalid request",
     "llm_not_configured": "language model is not configured",
     "index_not_ready": "index not ready",
@@ -145,6 +160,7 @@ STATUS_BY_CODE: dict[str, int] = {
     "retrieval_failed": 503,
     "retrieval_timeout": 504,
     "retrieval_busy": 503,
+    "process_review_busy": 503,
     "instance_lock_lost": 503,
     "generation_failed": 503,
     "answer_truncated": 503,
@@ -155,6 +171,11 @@ STATUS_BY_CODE: dict[str, int] = {
     "settings_local_only": 403,
     "settings_token_invalid": 403,
     "settings_storage_failed": 503,
+    "vision_not_configured": 503,
+    "vision_image_invalid": 422,
+    "vision_consent_required": 403,
+    "vision_busy": 503,
+    "vision_output_incomplete": 503,
 }
 
 

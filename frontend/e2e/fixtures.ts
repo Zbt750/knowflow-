@@ -47,7 +47,7 @@ export interface MaterialRecord {
  *
  * 只对网络层错误重试（不对 4xx/5xx 重试），因此不会掩盖真实的接口问题。
  */
-async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   headers.set("Connection", "close");
 

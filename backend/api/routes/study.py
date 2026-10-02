@@ -12,9 +12,10 @@ from collections.abc import Callable
 from datetime import date, datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, UploadFile, File, Form
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from backend.api.deps import get_db, get_time_provider
 from backend.errors import AppError
@@ -55,6 +56,11 @@ from backend.schemas.knowledge import (
 from backend.schemas.practice import (
     AppendExamReferencesRequest,
     AppendQuestionsRequest,
+    AnswerSubmissionResponse,
+    AnswerSubmissionHistory,
+    ProcessReviewRequest,
+    ProcessReviewResponse,
+    SubmitAnswerRequest,
     AssessmentResponse,
     GeneratePlanRequest,
     PlanItemView,
@@ -66,6 +72,12 @@ from backend.schemas.practice import (
     TodaySummaryKp,
 )
 from backend.services.attempt_service import assess_practice_item
+from backend.services.answer_submission_service import (submit_answer, record_answer_reveal,
+    submission_response, read_answer_history, attempt_sort_key)
+from backend.services.process_review_service import latest_text_process_review, review_text_process
+from backend.chat.service import provider_from_settings
+from backend.services.answer_grading import available_grading_method
+from backend.services.capability_service import read_capability_profile
 from backend.services.node_assessment_service import assess_knowledge_node
 from backend.services.planning_service import GoalCandidate, select_daily_goals
 from backend.services.practice_service import (
@@ -76,6 +88,27 @@ from backend.services.practice_service import (
 from backend.services.lesson_service import read_lesson
 
 router = APIRouter(tags=["study"])
+
+from backend.services.vision_recognition_service import MAX_IMAGE_BYTES, RecognitionResponse, recognize_work
+
+
+@router.post("/practice-items/{item_id}/recognize-work", response_model=RecognitionResponse)
+async def recognize_practice_work(request: Request, item_id: UUID, file: UploadFile = File(...),
+                                  consent: bool = Form(False)):
+    """Explicit upload consent; transcription is not an assistance/mastery event."""
+    try:
+        if not consent:
+            raise AppError("vision_consent_required")
+        with request.app.state.session_factory() as db:
+            item = db.get(PracticeItem, item_id)
+            if item is None:
+                raise AppError("practice_item_not_found")
+            if item.question is None or item.question.question_type not in {"calculation", "proof", "subjective"}:
+                raise AppError("process_review_not_supported")
+        data = await file.read(MAX_IMAGE_BYTES + 1)
+        return await recognize_work(request.app.state.settings, data)
+    finally:
+        await file.close()
 
 # 业务码 → HTTP 状态码。服务层不认识 FastAPI，翻译只发生在这里。
 _ERROR_STATUS: dict[str, int] = {
@@ -91,6 +124,15 @@ _ERROR_STATUS: dict[str, int] = {
     "no_assessable_leaf_selected": 422,
     "question_not_found": 404,
     "exam_reference_not_found": 404,
+    "idempotency_key_conflict": 409,
+    "external_exam_has_no_embedded_answer": 409,
+    "process_review_not_supported": 409,
+    "process_review_kind_mismatch": 422,
+    "process_review_text_too_short": 422,
+    "answer_attempt_conflict": 409,
+    "answer_retry_not_allowed": 409,
+    "answer_question_changed": 409,
+    "answer_attempt_limit": 409,
 }
 
 
@@ -169,6 +211,7 @@ def _recommendations(db: Session, now: datetime) -> list[RecommendationItem]:
                 has_evidence=bool(
                     snapshot.evidence_window or snapshot.manual_credit_count
                 ),
+                has_pending_objective_review=bool(snapshot.pending_review_question_ids),
             )
         )
 
@@ -192,6 +235,8 @@ def _last_reason_codes(db: Session) -> dict[UUID, str]:
     ).all()
     latest: dict[UUID, str] = {}
     for event in events:
+        if event.event_type == "ai_process_reviewed":
+            continue  # AI 辅助审阅不更新状态，也不能遮住最近一次真实状态原因。
         if event.kp_id in latest:
             continue
         reason = event.payload.get("reason_code") if isinstance(event.payload, dict) else None
@@ -225,6 +270,13 @@ def _build_today_active(db: Session, plan: DailyPlan) -> TodayActive:
         ).all()
     )
     items: list[PlanItemView] = []
+    submissions = {
+        attempt.practice_item_id: attempt
+        for attempt in sorted(db.scalars(select(QuestionAttempt).where(
+            QuestionAttempt.practice_item_id.in_([row.id for row in rows]),
+            QuestionAttempt.grading_evidence.is_not(None),
+        )).all(), key=attempt_sort_key)
+    }
     for item in rows:
         question = item.question
         reference = item.exam_reference
@@ -246,6 +298,11 @@ def _build_today_active(db: Session, plan: DailyPlan) -> TodayActive:
                 completed=item.completed_at is not None,
                 completed_at=_iso(item.completed_at),
                 latest_self_grade=item.latest_self_grade,
+                answer_submission=submission_response(submissions[item.id]) if item.id in submissions else None,
+                answer_grading_method=available_grading_method(
+                    question_type=question.question_type, config=question.grading_config,
+                    expected=question.correct_answer, options=question.options,
+                ) if question is not None else None,
                 is_review=(
                     item.question_id in attempted_ids
                     if item.question_id is not None
@@ -444,6 +501,77 @@ def read_practice_item_answer(
 # --------------------------------------------------------------------------- #
 
 
+@router.post("/practice-items/{item_id}/answer-submissions", response_model=AnswerSubmissionResponse)
+def submit_practice_answer(
+    item_id: UUID, body: SubmitAnswerRequest, db: Session = Depends(get_db),
+    time_provider: Callable[[], datetime] = Depends(get_time_provider),
+) -> AnswerSubmissionResponse:
+    try:
+        result = submit_answer(db, item_id=item_id, raw_answer=body.raw_answer,
+                               selected_option=body.selected_option,
+                               idempotency_key=body.idempotency_key, now=time_provider(), confidence=body.confidence,
+                               expected_previous_attempt_id=body.expected_previous_attempt_id)
+        db.commit()
+        return result
+    except ValueError as exc:
+        db.rollback()
+        raise _http_error(exc) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        raise AppError("idempotency_key_conflict", status_code=409) from exc
+
+
+@router.get("/practice-items/{item_id}/answer-submissions", response_model=AnswerSubmissionHistory)
+def read_practice_answer_history(item_id: UUID, db: Session = Depends(get_db)) -> AnswerSubmissionHistory:
+    """Read immutable observed submissions; never grades/replays or updates state."""
+    try:
+        return read_answer_history(db, item_id=item_id)
+    except ValueError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/practice-items/{item_id}/process-reviews", response_model=ProcessReviewResponse)
+def review_practice_process(
+    request: Request, item_id: UUID, body: ProcessReviewRequest,
+    time_provider: Callable[[], datetime] = Depends(get_time_provider),
+) -> ProcessReviewResponse:
+    """按需审阅文字过程；不判分、不完成题目、不改变掌握度。"""
+    try:
+        return review_text_process(
+            request.app.state.session_factory, item_id=item_id,
+            work_text=body.work_text, subjective_kind=body.subjective_kind,
+            idempotency_key=body.idempotency_key, now=time_provider(),
+            provider=provider_from_settings(request.app.state.settings),
+        )
+    except ValueError as exc:
+        raise _http_error(exc) from exc
+    except IntegrityError as exc:
+        raise AppError("idempotency_key_conflict", status_code=409) from exc
+
+
+@router.get("/practice-items/{item_id}/process-reviews/latest", response_model=ProcessReviewResponse | None)
+def read_latest_process_review(request: Request, item_id: UUID) -> ProcessReviewResponse | None:
+    try:
+        return latest_text_process_review(request.app.state.session_factory, item_id=item_id)
+    except ValueError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/practice-items/{item_id}/answer-reveal", response_model=PracticeItemAnswer)
+def reveal_practice_answer(
+    item_id: UUID, db: Session = Depends(get_db),
+    time_provider: Callable[[], datetime] = Depends(get_time_provider),
+) -> PracticeItemAnswer:
+    try:
+        record_answer_reveal(db, item_id=item_id, now=time_provider())
+        result = read_practice_item_answer(item_id, db)
+        db.commit()
+        return result
+    except ValueError as exc:
+        db.rollback()
+        raise _http_error(exc) from exc
+
+
 @router.post("/practice-items/{item_id}/self-assessments", response_model=AssessmentResponse)
 def submit_self_assessment(
     item_id: UUID,
@@ -629,6 +757,7 @@ def read_knowledge_node(kp_id: UUID, db: Session = Depends(get_db)) -> Knowledge
             reason_code=attempt.reason_code,
             submitted_at=attempt.submitted_at.isoformat(),
             raw_answer=attempt.raw_answer,
+            grading_evidence=attempt.grading_evidence,
         )
         for attempt, stem, reference_id, subject, year, question_number, topic_label in attempts
     ]
@@ -661,6 +790,7 @@ def read_knowledge_node(kp_id: UUID, db: Session = Depends(get_db)) -> Knowledge
         exam_references=exam_reference_views,
         lesson_available=read_lesson(node.code) is not None,
         materials_ready=False,
+        capability_profile=read_capability_profile(db, node, questions=questions),
     )
 
 
@@ -743,6 +873,8 @@ def _node_view(
         summary=node.summary,
         learning_goal=node.learning_goal,
         state=snapshot.state.value,
+        assessment_basis=snapshot.assessment_basis,
+        pending_review_count=len(snapshot.pending_review_question_ids),
         next_review_at=_iso(snapshot.next_review_at),
         mastered_at=_iso(snapshot.mastered_at),
         node_self_grade=snapshot.node_self_grade.value if snapshot.node_self_grade else None,
@@ -757,7 +889,7 @@ def _node_view(
         first_confirmed_on=dates[0].isoformat() if dates else None,
         last_confirmed_on=dates[-1].isoformat() if dates else None,
         day_span=(dates[-1] - dates[0]).days if dates else None,
-        gap_items=[
+        gap_items=([
             GapItemView(
                 key=item.key,
                 label=item.label,
@@ -766,8 +898,10 @@ def _node_view(
                 satisfied=item.satisfied,
             )
             for item in report.items
-        ],
-        next_step=report.next_step,
+        ] + ([GapItemView(key="objective_review", label="最近错题复测", current=0,
+                          required=len(snapshot.pending_review_question_ids), satisfied=False)]
+              if snapshot.pending_review_question_ids else [])),
+        next_step=f"复测 {len(snapshot.pending_review_question_ids)} 道最近答错的题" if snapshot.pending_review_question_ids else report.next_step,
         required_question_types=dict(active_policy.required_question_types),
         excluded_question_types=sorted(active_policy.excluded_question_types),
         required_skill_tags=sorted(active_policy.required_skill_tags),

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from uuid import UUID
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from backend.schemas.knowledge import ExamQuestionReferenceView
+from backend.mastery.attempt_sequence import AttemptCategory, AssistanceLevel
 
 
 class RecommendationItem(BaseModel):
@@ -20,6 +22,62 @@ class RecommendationItem(BaseModel):
     next_step: str = ""
     # 还缺哪些题型；页面可以据此提示「预计加入」。
     missing_types: list[str] = []
+
+
+class SubmitAnswerRequest(BaseModel):
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    raw_answer: str | None = Field(default=None, max_length=4000)
+    selected_option: str | None = Field(default=None, max_length=8)
+    confidence: str | None = Field(default=None, pattern="^(certain|uncertain|guess|no_idea)$")
+    # Explicit correction against the last saved result; stale retries are rejected.
+    expected_previous_attempt_id: UUID | None = None
+
+
+class AnswerSubmissionResponse(BaseModel):
+    attempt_id: UUID
+    practice_item_id: UUID
+    result: str
+    reason: str
+    method: str
+    assisted: bool
+    submitted_at: str
+    raw_answer: str | None = None
+    selected_option: str | None = None
+    confidence: str | None = None
+    assessment_basis: str = "legacy_self_reported"
+    state: str = "unseen"
+    mastery_reason: str = "answer_recorded_only"
+    effective_confirmation_count: int = 0
+    basis_changed: bool = False
+    attempt_number: int | None = None
+    previous_attempt_id: UUID | None = None
+    sequence_category: AttemptCategory | None = None
+    assistance_level: AssistanceLevel | None = None
+    can_retry: bool = False
+
+
+class AnswerSubmissionHistory(BaseModel):
+    practice_item_id: UUID
+    items: list[AnswerSubmissionResponse]
+    # Older self-report records are not relabeled as objective submissions.
+    legacy_self_report_count: int = 0
+
+
+class ProcessReviewRequest(BaseModel):
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    work_text: str = Field(min_length=10, max_length=4000)
+    # 计算题和证明题由题型决定；主观题可指定概念简答或408算法/伪代码。
+    subjective_kind: Literal["concept", "algorithm"] | None = None
+
+
+class ProcessReviewResponse(BaseModel):
+    review_id: UUID
+    practice_item_id: UUID
+    review_kind: Literal["calculation", "proof", "concept", "algorithm"]
+    feedback: str
+    reviewed_at: str
+    changes_mastery: bool = False
+    is_final_grade: bool = False
 
 
 class PlanItemView(BaseModel):
@@ -51,6 +109,8 @@ class PlanItemView(BaseModel):
     is_review: bool = False
     is_external_reference: bool = False
     exam_reference: ExamQuestionReferenceView | None = None
+    answer_submission: AnswerSubmissionResponse | None = None
+    answer_grading_method: str | None = None
 
 
 class TodaySummaryKp(BaseModel):

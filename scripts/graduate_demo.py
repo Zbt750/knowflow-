@@ -1,4 +1,6 @@
-"""毕业演示脚本：把学习状态准备成「今天就能毕业」。
+"""旧毕业演示存档：first/retest 已停用，show 保留只读查询。
+
+下文是旧自评规则的历史说明，不是当前可执行操作指引。
 
 为什么需要它
 ------------
@@ -366,16 +368,21 @@ def cmd_retest(db, args) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="把学习状态准备成「今天就能毕业」，用于验证跨天毕业规则",
+        description="只读查看毕业缺口；旧自评毕业写入演示已停用",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "action",
         choices=("first", "retest", "show"),
-        help="first=准备第一天；retest=准备复测日；show=只看当前缺口",
+        help="show=只看当前缺口；first/retest=旧入口，拒绝执行",
     )
     parser.add_argument("--kp", default="洛必达", help="知识点名称关键词（默认：洛必达）")
     args = parser.parse_args()
+
+    # 旧演示以自评冒充确认，已不符合新的客观证据规则。
+    # 必须在创建连接或清理记录之前拒绝，保留 show 的只读诊断。
+    if args.action != "show":
+        parser.error("旧自评毕业演示已停用，不会修改学习数据；请使用隔离客观证据测试，或执行 show 只读查看缺口。")
 
     engine = create_db_engine(str(get_settings().active_database_url))
     session_factory = create_session_factory(engine)

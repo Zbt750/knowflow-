@@ -1,0 +1,75 @@
+{
+  "version": "photo-handwriting-v1",
+  "origin": "AI_GENERATED_SYNTHETIC_PHOTOS",
+  "image_sha256": {
+    "math": "19773be4cd488ca6b4c381beeb1c5db2826a80b8acc2d3772a0cedf6131ab9b8",
+    "proof": "dc0f98f685e2ce822b45b6d0194fcea47608d4f5ec89a5e836d53e736fa5dfbd",
+    "code": "bb7d80f8720a870061baa176ce69946edac2904d651c3a33cd3c0e96d9ca9b6d",
+    "symbols": "97f92bb2eb3aa3ee059b6b8e11e3c45be675ff5e492a939827c12b79da855de9",
+    "discussion": "2da149c50cb20f15e383b36d349188e17386a41f64e550b3faf8aedd32bb545e",
+    "blur": "ace5610c46ed76a3174b22cdd2f2f99641b5b0450550251c1ff450ebbde81e86"
+  },
+  "prompts": {
+    "math": "Use case: photorealistic-natural. Create ONE realistic smartphone photo of a student's handwritten maths work on off-white lined notebook paper, slightly uneven blue ballpoint ink, large readable handwriting, normal desk light, no people or private information. Not typeset and not calligraphy. All these five lines in order, in Chinese and conventional drawn mathematical notation (render integrals, superscripts and fractions naturally, not raw LaTeX): '计算 ∫₀¹ 2x dx', '我写：2x 的原函数是 x', '代入上下限：1 − 0 = 1', '所以结果为 1', '我不确定原函数是否写对。' Important: preserve the deliberate mathematical error exactly; do NOT correct x to x². Notebook fills the frame with slight perspective, no extra text or watermark.",
+    "proof": "Use case: photorealistic-natural. ONE realistic phone photograph of off-white lined paper, black slightly messy student handwriting, mild 12 degree tilt, daylight, all text clear. Chinese lines exactly: '证明：绝对收敛推出收敛。' '我先假定 ∑aₙ 收敛，' '于是 ∑|aₙ| 收敛，' '所以原命题成立。' '这里的前提能这样用吗？' Draw conventional summation and subscripts, not raw LaTeX. Preserve the student's deliberate reversed implication without correcting or adding a proof. No extra text, no watermark, entire writing visible.",
+    "code": "Use case: photorealistic-natural. ONE realistic phone photo of squared notebook paper with student handwritten blue ink pseudocode, legible natural handwriting, slight perspective shadow but no blur. Exactly these lines with indentation: '二分查找：' 'l = 0; r = n - 1' 'while l <= r:' '    mid = (l + r) // 2' '    if a[mid] == x: return mid' '    if a[mid] < x: l = mid' '    else: r = mid' 'return -1' '我认为一定会结束。' Do not fix the deliberate l=mid / r=mid bug. Preserve <, <=, ==, minus and array brackets. No extra code or annotation, no people, no watermark.",
+    "symbols": "Use case: photorealistic-natural. ONE close smartphone photo of handwritten student maths notes on plain notebook paper. Blue pen, slightly irregular handwriting, clear top-down photo, no printed typography. Write only these four lines, using conventional drawn fractions, radicals, subscripts, superscripts and matrix brackets: '符号核对' 'f(x) = (√(1+x²) − 1) / x², x ≠ 0' 'lim (x→0) f(x) = 1/2' 'A = [[1, −2], [0, 3]], det(A) = 3'. Write A as a real 2 by 2 bracketed matrix, not literal nested brackets. Every minus sign, square, zero, denominator, condition and arrow must be visible. No extra text, no watermark.",
+    "discussion": "Use case: photorealistic-natural. ONE natural smartphone photo of black ballpoint handwritten Chinese mathematics discussion on lined paper, approximately 18 degree camera perspective tilt with a soft shadow along one side, handwriting remains readable. Exactly lines: '讨论：∫₁^∞ 1/xᵖ dx' 'p > 1 时收敛，值为 1/(p−1)。' 'p = 1 时发散。' 'p < 1 时发散。' '条件不能漏掉。' Use standard drawn integral limits and superscript p and fraction. Entire page text visible, no extra text or watermark.",
+    "blur": "Use case: photorealistic-natural. ONE realistic poor smartphone photo of student handwriting on lined notebook paper. Write three lines: '计算：∫₀¹ x² dx' '原函数：x³/3' '结果：1/3'. Make the first two lines readable handwritten blue ink, but the final numeric fraction result deliberately fully obscured by a dense ink scribble and localized motion blur so no number can be determined, not merely faint. Mild whole-camera tilt and shadow, page occupies frame, no added answer labels, no extra text or watermark. This is an OCR uncertainty test: last result must be visually unreadable, while integral limits and exponent2 in first line remain readable."
+  },
+  "cases": [
+    {
+      "id": "math",
+      "type": "calculation",
+      "stem": "计算定积分 ∫₀¹ 2x dx，并检查原函数。",
+      "visible_reference": "计算 ∫₀¹ 2x dx\n我写：2x 的原函数是 x\n代入上下限：1 − 0 = 1\n所以结果为 1\n我不确定原函数是否写对。",
+      "review": true,
+      "review_points": [
+        "指出原函数x的导数不是2x",
+        "不能仅因最终数值1正确认定过程正确"
+      ]
+    },
+    {
+      "id": "proof",
+      "type": "proof",
+      "stem": "证明：绝对收敛蕴含收敛。",
+      "visible_reference": "证明：绝对收敛推出收敛。\n我先假定 ∑ₙ aₙ 收敛，\n于是 ∑ₙ |aₙ| 收敛，\n所以原命题成立。\n这里的前提能这样用吗？",
+      "review_points": [
+        "假定了错误方向的前提",
+        "普通收敛不推出绝对收敛"
+      ]
+    },
+    {
+      "id": "code",
+      "type": "subjective",
+      "stem": "审阅升序数组二分查找，未找到返回-1，是否必定终止？",
+      "subjective_kind": "algorithm",
+      "visible_reference": "二分查找：\nl = 0; r = n - 1\nwhile l <= r:\n    mid = (l + r) // 2\n    if a[mid] == x: return mid\n    if a[mid] < x: l = mid\n    else: r = mid\nreturn -1\n我认为一定会结束。",
+      "review": true,
+      "review_points": [
+        "l=mid/r=mid不缩小区间可能不终止",
+        "须跨过mid并核对边界"
+      ]
+    },
+    {
+      "id": "symbols",
+      "type": "calculation",
+      "stem": "核对根号、分母、定义域、极限和矩阵符号。",
+      "visible_reference": "符号核对\nf(x) = (√(1+x²) − 1) / x², x ≠ 0\nlim (x→0) f(x) = 1/2\nA = [[1, −2], [0, 3]], det(A) = 3"
+    },
+    {
+      "id": "discussion",
+      "type": "subjective",
+      "subjective_kind": "concept",
+      "stem": "讨论反常积分 ∫₁^∞ x^(-p) dx 的敛散性。",
+      "visible_reference": "讨论：∫₁^∞ 1/xᵖ dx\np > 1 时收敛，值为 1/(p−1)。\np = 1 时发散。\np < 1 时发散。\n条件不能漏掉。"
+    },
+    {
+      "id": "blur",
+      "type": "calculation",
+      "stem": "转写图片上的定积分计算过程，不要推算被遮住的答案。",
+      "visible_reference": "计算：∫₀¹ x² dx\n原函数：x³/3\n结果：[无法辨认]",
+      "unreadable_region": "最终结果被涂抹，没有可确定的数字；不得根据上文推算1/3"
+    }
+  ]
+}

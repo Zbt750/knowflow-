@@ -55,6 +55,66 @@ def test_duplicates_still_require_confirmation():
     assert ambiguous_mentions([a, b], "验收笔记讲什么？")
 
 
+def test_literal_document_shorthand_requires_explicit_file_and_keeps_ambiguity():
+    a = doc("合成项目阶段说明")
+    assert matching_materials([a], "阶段说明这份文件讲了哪些阶段？") == [a]
+    assert matching_materials([a], "解释阶段说明") == []
+    assert matching_materials([a], "说明这份文件") == []
+    b = doc("另一个项目阶段说明")
+    assert ambiguous_mentions([a, b], "阶段说明这份文件讲什么？")
+    assert matching_materials([a, b], "合成项目阶段说明这份文件讲什么？") == [a]
+    assert matching_materials([a], "不要读取阶段说明这份文件") == []
+
+
+def test_prompt_keeps_cross_file_classification_and_current_followup_scope():
+    hits = [SimpleNamespace(chunk_id=uuid4(), material_title=name, heading_path=("F",), content="持久化") for name in ("阶段说明", "部署补充")]
+    prompt, _ = service._prompt("共同与独有内容是什么", hits, [], mode="user", full_document=True)
+    assert "只列为共同点" in prompt[0]["content"]
+    assert "负环可达该目标" in prompt[0]["content"]
+    assert "历史用于解析指代，不扩大当前任务" in prompt[0]["content"]
+    assert "还能从该负环到达的目标" in service.GENERAL_SYSTEM_PROMPT
+    assert "事实分类输出" in prompt[0]["content"]
+    assert "每份文件的支持引用" in prompt[0]["content"]
+    assert "紧凑比较格式" in prompt[0]["content"]
+    assert "全文覆盖清单" not in prompt[0]["content"]
+    assert "分类完即可结束" in prompt[0]["content"]
+
+
+def test_comparison_does_not_remove_chapter_coverage_from_other_overviews():
+    hits = [SimpleNamespace(chunk_id=uuid4(), material_title=name, heading_path=(name, "章节"), content="内容") for name in ("阶段说明", "部署补充")]
+    prompt, _ = service._prompt("两份资料各讲什么？", hits, [], mode="user", full_document=True)
+    assert "全文覆盖清单" in prompt[0]["content"]
+    assert "事实分类输出" not in prompt[0]["content"]
+
+
+def test_detailed_comparison_keeps_detail_instead_of_forcing_compact_table():
+    hits = [SimpleNamespace(chunk_id=uuid4(), material_title=name, heading_path=("F",), content="持久化") for name in ("阶段说明", "部署补充")]
+    prompt, _ = service._prompt("详细解释共同与独有内容", hits, [], mode="user", full_document=True)
+    assert "每份文件的支持引用" in prompt[0]["content"]
+    assert "紧凑比较格式" not in prompt[0]["content"]
+
+
+@pytest.mark.parametrize("profile,first,retry,expected", [
+    ("multi_file_comparison", 4000, 8000, 6000),
+    ("multi_file_comparison", 2000, 4000, 4000),
+    ("multi_file_comparison", 8000, 16000, 8000),
+    ("normal", 4000, 8000, 4000),
+])
+def test_comparison_budget_is_request_local_and_bounded(profile, first, retry, expected):
+    provider = service.Provider(api_key="test", base_url="https://example.invalid", model="test", timeout=30, max_tokens=first, retry_max_tokens=retry)
+    prepared = service.PreparedAnswer(uuid4(), [], {}, None, "hybrid", generation_profile=profile)
+    scoped = service._provider_for_answer(provider, prepared)
+    assert scoped._token_budget(1) == expected
+    assert scoped._token_budget(2) == retry
+    assert provider.max_tokens == first
+
+
+def test_comparison_budget_preserves_protocol_test_double():
+    provider = SimpleNamespace()
+    prepared = service.PreparedAnswer(uuid4(), [], {}, None, "hybrid", generation_profile="multi_file_comparison")
+    assert service._provider_for_answer(provider, prepared) is provider
+
+
 def test_equal_length_distinct_titles_are_not_ambiguous():
     a, b = doc("蓝杉学习计划-2024旧版"), doc("蓝杉学习计划-2026新版")
     assert not ambiguous_mentions([a, b], "概述《蓝杉学习计划-2024旧版》和《蓝杉学习计划-2026新版》")
@@ -88,6 +148,59 @@ def test_plural_followup_keeps_both_named_files(monkeypatch):
     monkeypatch.setattr(service, "_recent_user_context", lambda *_, **__: ["比较极限与导数讲义和积分专题讲义"])
     ids, notice = service._detail_material_scope(None, session_id=uuid4(), question="这两份文件分别举一个例子", mode="user")
     assert set(ids) == {a.id, b.id} and notice is None
+
+
+@pytest.mark.parametrize("question", ["它后半部分的E、F、G具体要求什么？", "它的后半部分讲什么？", "这份的第七章有什么？"])
+def test_structured_pronoun_followup_inherits_shorthand_file_only(monkeypatch, question):
+    a, b = doc("合成项目阶段说明"), doc("合成部署边界补充")
+    monkeypatch.setattr(service, "_ready_materials", lambda *_: [a, b])
+    monkeypatch.setattr(service, "_recent_user_context", lambda *_, **__: ["阶段说明这份文件讲了哪些阶段？"])
+    ids, notice = service._detail_material_scope(None, session_id=uuid4(), question=question, mode="user")
+    assert ids == (a.id,) and notice is None
+
+
+def test_structured_file_followup_does_not_borrow_ambiguous_or_math_context(monkeypatch):
+    a, b = doc("合成项目阶段说明"), doc("另一项目阶段说明")
+    monkeypatch.setattr(service, "_ready_materials", lambda *_: [a, b])
+    monkeypatch.setattr(service, "_recent_user_context", lambda *_, **__: ["阶段说明这份文件讲什么？"])
+    ids, notice = service._detail_material_scope(None, session_id=uuid4(), question="它后半部分讲什么？", mode="user")
+    assert ids is None and "确认" in notice
+    assert not service._is_file_reference_question("刚才那个反例左右导数各是多少？")
+
+
+@pytest.mark.parametrize("question", ["它后半部分有什么条件？", "它前半部分与后半部分有何不同？"])
+def test_singular_followup_after_two_distinct_files_asks_in_both_paths(monkeypatch, question):
+    a, b = doc("极限与导数讲义"), doc("积分专题讲义")
+    previous = "比较极限与导数讲义和积分专题讲义"
+    monkeypatch.setattr(service, "_ready_materials", lambda *_: [a, b])
+    monkeypatch.setattr(service, "_recent_user_context", lambda *_, **__: [previous])
+    ids, notice = service._detail_material_scope(None, session_id=uuid4(), question=question, mode="user")
+    assert ids is None and "确认" in notice
+    overview = service._overview_hits(None, question="这份文件主要讲什么？", mode="user", reference_context=[previous])
+    assert overview.hits == [] and "确认" in overview.direct_response
+
+
+def test_followup_scope_reaches_retrieval_filters_and_actual_prompt(monkeypatch):
+    a, b = doc("合成项目阶段说明"), doc("合成部署边界补充")
+    monkeypatch.setattr(service, "_ready_materials", lambda *_: [a, b])
+    monkeypatch.setattr(service, "_recent_user_context", lambda *_, **__: ["阶段说明这份文件讲了哪些阶段？"])
+    requests = []
+    hit = SimpleNamespace(chunk_id=uuid4(), material_title=a.title, heading_path=("阶段E",), content="窄屏一致")
+    def search(db, *, request, **kwargs):
+        requests.append(request)
+        assert request.filters.material_ids == (a.id,)
+        assert request.filters.source_types == ("user",)
+        return SimpleNamespace(hits=[hit])
+    monkeypatch.setattr(service, "search_chunks", search)
+    class Classifier:
+        def classify_retrieval_intent(self, question):
+            raise AssertionError("Resolved file must not add a model classifier call")
+    db = SimpleNamespace(scalars=lambda *_: SimpleNamespace(all=lambda: []))
+    prepared = service._search_pending(db, session_id=uuid4(), assistant_id=uuid4(), question="它后半部分具体要求什么？", mode="user",
+                                      stack=SimpleNamespace(embedder=None, vector_store=None, keyword_index=None, reranker=None), provider=Classifier(), history_token_budget=0)
+    assert len(requests) == 1
+    assert prepared.prompt[-2]["content"].endswith("窄屏一致")
+    assert b.title not in prepared.prompt[-2]["content"]
 
 
 def test_prompt_keeps_units_conditions_and_both_file_targets():

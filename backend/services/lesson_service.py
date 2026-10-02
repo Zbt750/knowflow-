@@ -15,6 +15,7 @@ from backend.ingestion.file_storage import save_upload_streaming
 from backend.jobs.worker import enqueue_job
 from backend.models.learning import KnowledgePoint
 from backend.models.rag import Material
+from backend.resources import bundled_path
 
 LESSON_DIR = Path(__file__).resolve().parents[2] / "seed" / "lessons"
 _SAFE_CODE = re.compile(r"[a-z0-9][a-z0-9._-]{0,119}\Z")
@@ -25,7 +26,7 @@ def lesson_file(code: str) -> Path | None:
     """只接受稳定业务编号，不让 URL 参数变成任意文件路径。"""
     if not _SAFE_CODE.fullmatch(code):
         return None
-    return LESSON_DIR / f"{code}.md"
+    return bundled_path(f"seed/lessons/{code}.md")
 
 
 def read_lesson(code: str) -> str | None:

@@ -10,6 +10,7 @@ const STATE_LABELS: Record<MasteryState, string> = {
 };
 
 const REASON_LABELS: Record<RecommendationReason, string> = {
+  objective_review: "最近错题待复测",
   not_mastered: "上次未掌握",
   overdue_review: "复测日已到",
   partial_mastery: "上次部分掌握",
@@ -69,6 +70,14 @@ const REASON_CODE_LABELS: Record<string, string> = {
   node_not_mastered: "已标记为未掌握",
   mastery_already_confirmed: "已毕业，本次只刷新确认时间",
   skipped: "已跳过，未记录",
+  answer_recorded_only: "作答已保存，尚未计入毕业",
+  objective_confirmed: "已记录有效作答确认",
+  objective_needs_review: "最近作答需复习，其他确认保留",
+  objective_graduated: "已满足客观作答毕业条件",
+  objective_review_passed: "复测通过，已安排下次复习",
+  assisted_answer_recorded: "已查看解析，不计独立确认",
+  low_confidence_answer_recorded: "猜答或无思路，不计独立确认",
+  self_feedback_only: "信心已记录，不增加毕业次数",
   node_self_assessment_replayed: "重复提交，采用上次结果",
 };
 

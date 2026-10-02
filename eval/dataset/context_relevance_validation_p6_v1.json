@@ -1,0 +1,25 @@
+{
+  "version": "context-relevance-validation-p6-v1",
+  "review_status": "agent_reviewed_synthetic_not_independent_subject_review",
+  "selection_policy": "same five strategies fixed before this run; no threshold tuning on validation results",
+  "cases": [
+    {"id":"v-continuity","question":"一个函数在某点能求导，那一点还可能不连续吗？连续能保证可导吗？","required_headings":["第一章 极限与连续"]},
+    {"id":"v-lhopital","question":"分子和分母同时趋于零就能直接各自求导求极限吗？如果新的比值振荡，旧的比值是否也必定振荡？","required_headings":["第二章 洛必达条件与反例"]},
+    {"id":"v-cancellation","question":"tan x减sin x后除以x的三次方，直接把两个函数都换成x为什么错？","required_headings":["第三章 等价无穷小的抵消"]},
+    {"id":"v-implicit","question":"在圆的最右端，隐式导数分母为零，能不能说斜率等于零？应该怎么写切线？","required_headings":["第四章 隐函数条件"]},
+    {"id":"v-integral","question":"从0到1对2x乘cos(x平方)积分，换成平方这个变量以后微分与两端怎么变？","required_headings":["第六章 积分推导"]},
+    {"id":"v-thread","question":"两个执行线程在同一进程里，一个局部变量的栈空间就等于另一个的栈吗？它们哪些资源相同？","required_headings":["第三章 进程与线程"]},
+    {"id":"v-page","question":"查快表没有查到地址转换结果就需要去磁盘读页面吗？请区分两种未命中。","required_headings":["第四章 虚拟内存与缺页"]},
+    {"id":"v-tcp","question":"发送端同时受到接收方可用缓冲大小和网络拥堵限制，这两种窗口各保护谁？数据包会永远不丢吗？","required_headings":["第五章 TCP可靠性与流控"]},
+    {"id":"v-multi-math","question":"比较绝对值函数不能求导的例子与洛必达导数比不收敛的例子，分别否定了什么推断？","required_headings":["第一章 极限与连续","第二章 洛必达条件与反例"]},
+    {"id":"v-multi-408","question":"对比图遍历的先进先出容器与线程自己的栈，说明广度遍历为何找到无权最短路，以及线程是否共享栈。","required_headings":["第二章 图遍历","第三章 进程与线程"]},
+    {"id":"v-cross-domain","question":"一并解释积分换元为什么要改上下限、缺页为什么要重启指令，不要只回答其中一个。","required_headings":["第六章 积分推导","第四章 虚拟内存与缺页"]},
+    {"id":"v-followup","setup_questions":["说明可导与连续有什么关系，并用绝对值函数作为例子。"],"question":"刚才那个反例在原点两边的导数是多少？","required_headings":["第一章 极限与连续"]},
+    {"id":"v-long-product","question":"根据长段落讲义，乘积求导要求什么？乘积可导能反推出因子可导吗，给出该讲义的例子。","required_headings":["乘积求导的条件与使用边界"],"required_fragments":["乘积求导法则要求两个因子在所讨论点都可导","取p(x)=q(x)=|x|"]},
+    {"id":"v-long-substitution","question":"长段落中反向换元u等于1减x，要修改哪几项？x从0到1，新变量从哪里到哪里？","required_headings":["换元积分的界限与反向遍历"],"required_fragments":["定积分换元必须同时改变微分和积分界限","取u=1-x，则dx=-du"]},
+    {"id":"v-long-both","question":"分别讲清长段落里的乘积求导充分条件及逆向反例、定积分反向换元规则及具体端点，每一部分都要有例子。","required_headings":["乘积求导的条件与使用边界","换元积分的界限与反向遍历"],"required_fragments":["乘积求导法则要求两个因子在所讨论点都可导","取p(x)=q(x)=|x|","定积分换元必须同时改变微分和积分界限","取u=1-x，则dx=-du"]},
+    {"id":"v-long-cross","question":"解释可导和连续的关系，再解释长段落中乘积可导但两个因子不可导的反例，两部分不能混为同一件事。","required_headings":["第一章 极限与连续","乘积求导的条件与使用边界"],"required_fragments":["可导必连续","取p(x)=q(x)=|x|"]},
+    {"id":"v-absent-algorithm","question":"这些讲义中红黑树删除黑色叶子的修复分了哪几种情况？","required_headings":[]},
+    {"id":"v-absent-statistic","question":"讲义记录的2026年数学二实际平均分和408实际平均分分别多少？","required_headings":[]}
+  ]
+}

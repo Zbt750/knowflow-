@@ -257,6 +257,7 @@ test.describe("十态矩阵 · /study", () => {
 
     await openWith(page, STUDY);
     await expect(page.getByTestId("study-active")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("self-report").locator("summary").click();
     await page.getByTestId("self-grade-mastered").click();
     // 刷新后进度来自服务端：0/1 → 1/1。
     await expect(page.getByTestId("study-status")).toContainText("1 / 1", { timeout: 15_000 });

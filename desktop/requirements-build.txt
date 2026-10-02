@@ -1,0 +1,18 @@
+# Core executable prototype; deliberately no torch/transformers or model weights.
+# These direct versions match the verified development runtime except PyInstaller.
+# A complete transitive snapshot is generated for each actual build.
+pyinstaller==6.22.3
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.5
+pydantic-settings==2.15.0
+SQLAlchemy==2.0.52
+alembic==1.19.2
+psycopg[binary]==3.3.5
+python-multipart==0.0.32
+httpx==0.28.1
+python-docx==1.2.0
+pypdf==6.19.0
+rank-bm25==0.2.2
+jieba==0.42.1
+numpy==2.5.3
