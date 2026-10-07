@@ -1,0 +1,147 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+.venv-ragas/
+.venv-desktop-build/
+venv/
+
+# 环境与密钥：绝不提交；仅保留可公开分享的示例模板
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# 前端
+node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+frontend/blob-report/
+frontend/.vite/
+# TypeScript 增量构建产物（由 vue-tsc --build 生成，不应入库）
+*.tsbuildinfo
+# Playwright 在测试文件旁生成的一次性临时目录
+*.tmpdir/
+
+# 运行期数据
+storage/
+model-settings.bin
+model-settings.bin.*.tmp
+vision-model-settings.bin
+vision-model-settings.bin.*.tmp
+.pgdata/
+*.kaoyan-backup.zip
+desktop-data-backups/
+chroma/
+# 开发启动脚本写出的日志
+.devlogs/
+
+# 真实问答评测、浏览器快照及截图可能含私人资料，仅在本地保留。
+# 可公开复现的评测脚本、固定样例和文档仍正常入库。
+/eval/reports/
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 本地临时测试输出、OCR 中间文件与原卷页面，不进入仓库
+/tmp/
+
+# Playwright 根目录临时结果
+/test-results/
+
+# Public GitHub snapshot: keep licensed exam source files and evaluation corpora local.
+/seed/questions.json
+/seed/question_sources/
+/seed/lessons/*.exam.*.md
+/seed/materials/builtin/exam-*.md
+/seed/materials/builtin/exam_*.md
+/docs/exam-*
+/docs/current-question-counts-*
+/docs/question-bank-expansion-*
+/docs/question-counts-by-node-*
+/docs/question-intake-completion-*
+/docs/real-question-*
+/docs/recent-two-years-question-intake-*
+/docs/*evaluation-*
+/docs/*-eval-*
+/docs/*rag-baseline*
+/docs/*golden*
+/docs/MATERIAL_SEARCH_UX_REFACTOR.md
+/eval/
+
+# Local acceptance transcripts are kept out of the public snapshot.
+/PHASE4C_LEARNING_EXPERIENCE_CLOSEOUT.md
+/REAL_USER_LEARNING_JOURNEY_*.md
+
+# Public-snapshot policy: local evaluation outputs and question-review artifacts stay local.
+/docs/*rag*
+/docs/*eval*
+/docs/*evaluation*
+/docs/*acceptance*
+/docs/*golden*
+/docs/*question*
+/docs/*exam*
+/docs/*slice*
+/docs/*transcription*
+/docs/*photo-*
+/docs/*-review-*
+/docs/*baseline*
+/docs/*evidence*
+/docs/*journey*
+/docs/*grading*
+/docs/*coverage*
+/docs/*count*
+/docs/*audit*
+/docs/*intake*
+/docs/*review*
+/docs/*closeout*
+/docs/*regression*
+/docs/*comparison*
+/docs/phase3*
+/docs/phase4*
+/docs/knowledge-assets-audit*
+/docs/q0*
+/docs/reference-build-changes.md
+
+# Local user content, databases, model caches, and runtime outputs.
+/uploads/
+/user-uploads/
+/local-data/
+/logs/
+/.logs/
+/.cache/
+/models/
+/model_cache/
+*.sqlite
+*.sqlite3
+*.db
+*.log
+*.tmp
+*.jsonl
+*.parquet
+*.npy
+*.npz
+*.pt
+*.pth
+*.safetensors
+/exam-scans/
+/question-bank/
+/source-papers/
+/eval-assets/
+/test-images/
+/ocr-temp/
+
+# 部署用的真实密码配置（模板见 .env.compose.example）
+.env.compose

@@ -1,0 +1,45 @@
+# 前端容器的 Nginx 配置。
+#
+# 为什么用固定 upstream 而不是环境变量替换：
+# Nginx 官方镜像会对 /etc/nginx/templates/*.template 做 envsubst，
+# 而 envsubst 不认识 nginx 自身的变量。若同一个文件里既有 ${BACKEND} 又有 $host，
+# 就必须靠环境变量白名单才能只替换前者；白名单一旦配错，$host 会被替换成空，
+# 表现为「代理能通但 Host 头是空的」这种很难排查的问题。
+# Compose 网络里后端服务名固定是 backend，所以这里直接写死：简单、不会出错。
+# 需要改地址时改下面这一行即可。
+
+upstream kaoyan_backend {
+    server backend:8000;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # 单页应用：直接访问 /study、/materials 等路径时也要回落到 index.html，
+    # 否则刷新页面会 404。
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 前端永远请求相对 /api，由这里代理到后端：这样前端不需要知道后端地址。
+    location /api/ {
+        proxy_pass http://kaoyan_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # 问答走 SSE（阶段 D）：必须关闭缓冲，否则事件会被攒着不下发。
+        proxy_buffering off;
+        proxy_cache off;
+        # 上传 20 MB 文件与长耗时问答都需要更长的超时。
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        client_max_body_size 25m;
+    }
+}

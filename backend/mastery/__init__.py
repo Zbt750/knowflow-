@@ -1,0 +1,1 @@
+"""不依赖 FastAPI / SQLAlchemy 的掌握度领域规则（纯函数）。"""

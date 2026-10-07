@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="考研知识库">
+  <!--
+    项目图标。
+
+    为什么必须有一个：浏览器会自动请求 /favicon.ico，没有它时控制台每个页面
+    都报一条 `Failed to load resource: 404`。阶段 E 要求「控制台无未处理异常」，
+    而那条 404 会把它淹掉 —— 于是真正的问题反而被噪声盖住。
+    这里补的是**缺失的资源**本身，而不是把检查放宽：放了水就再也发现不了真异常。
+  -->
+  <rect width="32" height="32" rx="7" fill="#315baf" />
+  <path d="M8 21.5 16 8l8 13.5h-4.6L16 15.2l-3.4 6.3z" fill="#ffffff" />
+  <rect x="10" y="23" width="12" height="2.4" rx="1.2" fill="#9db6e4" />
+</svg>
