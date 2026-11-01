@@ -88,3 +88,21 @@ def test_single_choice_only_policy_needs_no_calculation_pool() -> None:
     )
     # 可用题型只剩选择题。
     assert policy.available_question_types == ("single_choice",)
+
+
+def test_unconfigured_frozen_set_is_representable_but_not_a_graduation() -> None:
+    policy = MasteryPolicy(policy_version=3, graduation_question_ids=(), graduation_set_version=0)
+    assert policy.graduation_question_ids == ()
+    assert policy.graduation_set_version == 0
+
+
+def test_frozen_graduation_set_rejects_unreasonably_large_sets() -> None:
+    with pytest.raises(ValueError, match="不能超过"):
+        MasteryPolicy(policy_version=3,
+            graduation_question_ids=tuple(f"00000000-0000-0000-0000-{i:012d}" for i in range(1, 202)),
+            graduation_set_version=1)
+
+
+def test_frozen_graduation_set_requires_canonical_question_uuids() -> None:
+    with pytest.raises(ValueError, match="UUID"):
+        MasteryPolicy(policy_version=3, graduation_question_ids=("q1",), graduation_set_version=1)

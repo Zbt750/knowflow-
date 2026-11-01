@@ -4,11 +4,14 @@ import type { KnowledgeNodeView } from "../types/practice";
 const props = defineProps<{
   nodes: KnowledgeNodeView[];
   selectedIds: readonly string[];
+  lockedIds?: readonly string[];
   selectedCounts: ReadonlyMap<string, number>;
   expandedIds: ReadonlySet<string>;
   collapsedIds: ReadonlySet<string>;
   autoExpand: boolean;
   level: number;
+  checkboxSelection?: boolean;
+  showAvailability?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -47,11 +50,14 @@ function isExpanded(node: KnowledgeNodeView): boolean {
           <KnowledgeScopeTree
             :nodes="children(node)"
             :selected-ids="selectedIds"
+            :locked-ids="lockedIds"
             :selected-counts="selectedCounts"
             :expanded-ids="expandedIds"
             :collapsed-ids="collapsedIds"
             :auto-expand="autoExpand"
             :level="level + 1"
+            :checkbox-selection="checkboxSelection"
+            :show-availability="showAvailability"
             @toggle-branch="emit('toggle-branch', $event)"
             @toggle-selection="emit('toggle-selection', $event)"
           />
@@ -60,15 +66,18 @@ function isExpanded(node: KnowledgeNodeView): boolean {
       <div v-else-if="node.is_assessable" class="study-range-row" :class="{ 'study-range-row--selected': selectedIds.includes(node.id) }">
         <span class="scope-tree__leaf-marker" aria-hidden="true"></span>
         <span class="scope-tree__name">{{ node.name }}</span>
-        <button
+        <small v-if="showAvailability && (node.home_allocatable_question_count??node.practice_eligible_question_count)===0">暂无可分配题目，保存时仍会核验</small>
+        <input v-if="checkboxSelection" type="checkbox" :checked="selectedIds.includes(node.id)" :disabled="lockedIds?.includes(node.id)" :aria-label="node.name" @change="emit('toggle-selection',node.id)"/>
+        <button v-else
           type="button"
           class="study-range-row__toggle"
           :id="`scope-leaf-${node.id}`"
           :aria-pressed="selectedIds.includes(node.id)"
+          :disabled="lockedIds?.includes(node.id)"
           :aria-label="(selectedIds.includes(node.id) ? '移出' : '加入') + node.name"
           :data-testid="`pick-node-${node.code}`"
           @click="emit('toggle-selection', node.id)"
-        >{{ selectedIds.includes(node.id) ? "移出" : "加入" }}</button>
+        >{{ lockedIds?.includes(node.id) ? "卷内已有" : selectedIds.includes(node.id) ? "移出" : "加入" }}</button>
       </div>
       <span v-else class="scope-tree__empty">{{ node.name }} · 暂无知识点</span>
     </li>

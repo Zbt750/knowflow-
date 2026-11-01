@@ -53,7 +53,7 @@ def confirm(client, tid, result):
 
 
 @pytest.mark.parametrize("subject", ["math2", "408"])
-@pytest.mark.parametrize("outcome", ["independent", "wrong", "corrected", "solution", "guess", "unknown"])
+@pytest.mark.parametrize("outcome", ["independent", "wrong", "blocked_correction", "solution", "guess", "unknown"])
 def test_second_agent_run_reads_new_evidence_and_adapts(adaptive, session_factory, client, clock, subject, outcome):
     asset, ids = adaptive
     topic = next(t for t in asset.topics if t.subject == subject)
@@ -69,13 +69,14 @@ def test_second_agent_run_reads_new_evidence_and_adapts(adaptive, session_factor
     with session_factory() as db: expected = db.get(Question, UUID(item["question_id"])).correct_answer
     if outcome == "solution":
         assert client.post(f"/api/practice-items/{item['id']}/answer-reveal").status_code == 200
-    payload = {"raw_answer": "999" if outcome in {"wrong", "corrected"} else "sqrt(1)" if outcome == "unknown" else expected,
+    payload = {"raw_answer": "999" if outcome in {"wrong", "blocked_correction"} else "sqrt(1)" if outcome == "unknown" else expected,
                "confidence": "guess" if outcome == "guess" else "certain", "idempotency_key": "p5-first"}
     answer = client.post(f"/api/practice-items/{item['id']}/answer-submissions", json=payload).json()
-    if outcome == "corrected":
-        answer = client.post(f"/api/practice-items/{item['id']}/answer-submissions", json={
-            **payload, "raw_answer": expected, "idempotency_key": "p5-corrected", "expected_previous_attempt_id": answer["attempt_id"]}).json()
-        assert answer["sequence_category"] == "self_corrected"
+    if outcome == "blocked_correction":
+        rejected = client.post(f"/api/practice-items/{item['id']}/answer-submissions", json={
+            **payload, "raw_answer": expected, "idempotency_key": "p5-corrected", "expected_previous_attempt_id": answer["attempt_id"]})
+        assert rejected.status_code == 409
+        assert rejected.json()["error"]["code"] == "practice_item_already_assessed"
     old = client.get("/api/plans/today").json()
     clock.now += timedelta(days=1)
     tid2, second = arrange(client, session_factory, topic.name)
@@ -83,18 +84,18 @@ def test_second_agent_run_reads_new_evidence_and_adapts(adaptive, session_factor
     prior_candidate = next(q for t in second["trace"] if t["tool"] == "find_questions"
                            for q in t["result"]["questions"] if q["question_id"] == item["question_id"])
     assert prior_candidate["can_repractice_in_new_item"] and not prior_candidate["in_today_plan"]
-    assert prior_candidate["pending_review"] == (outcome in {"wrong", "corrected"})
+    assert prior_candidate["pending_review"] == (outcome in {"wrong", "blocked_correction"})
     chosen = second["draft"]["questions"][0]["question_id"]
     assert (chosen != item["question_id"]) == (outcome == "independent")
     state = next(t["result"]["states"][0] for t in second["trace"] if t["tool"] == "get_learning_state")
     assert state["recent_attempts"][0]["sequence_category"] == answer["sequence_category"]
     dim = next(d for d in state["capability_profile"]["dimensions"] if d["key"] == "final_result")
     assert dim["independent_question_count"] == (1 if outcome == "independent" else 0)
-    assert bool(state["pending_review_question_ids"]) == (outcome in {"wrong", "corrected"})
+    assert bool(state["pending_review_question_ids"]) == (outcome in {"wrong", "blocked_correction"})
     assert "raw_answer" not in json.dumps(state)
     assert all(d["independent_question_count"] == 0 for d in state["capability_profile"]["dimensions"] if d["key"] in {"reasoning_process", "algorithm_process"})
     retest = confirm(client, tid2, second)
-    if outcome in {"wrong", "corrected"}:
+    if outcome in {"wrong", "blocked_correction"}:
         passed = client.post(f"/api/practice-items/{retest['id']}/answer-submissions", json={
             "raw_answer": expected, "confidence": "certain", "idempotency_key": "p5-independent-retest"}).json()
         assert passed["result"] == "right" and not passed["assisted"]

@@ -58,6 +58,8 @@ class QuestionType(StrEnum):
     FILL_BLANK = "fill_blank"
     CALCULATION = "calculation"
     PROOF = "proof"
+    DISCUSSION = "discussion"
+    PROGRAM = "program"
     SUBJECTIVE = "subjective"
     # 用户打开原卷练习的题号引用；不含题干或答案，由用户对照原卷自评。
     EXTERNAL_EXAM = "external_exam"

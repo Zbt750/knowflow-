@@ -912,6 +912,35 @@ def test_partial_output_limit_recovers_or_persists_failed_body(session_factory, 
         assert not any(event == "citations" for event, _ in frames)
 
 
+def test_truncation_recovery_budget_stop_keeps_explicit_incomplete_status(session_factory, stack) -> None:
+    seed_material(session_factory, stack)
+    session_id = make_session(session_factory)
+
+    class TruncateThenBudgetStopProvider(Provider):
+        def __init__(self): self.calls = 0
+
+        async def stream(self, messages, *, attempt=1):
+            self.calls += 1
+            if attempt == 1:
+                yield "IEEE754回答未完"
+                raise AppError("answer_truncated", detail="stream:finish_reason:length", retryable=True)
+            raise AppError("generation_failed", detail="evaluation_budget_stop", retryable=False)
+
+    provider=TruncateThenBudgetStopProvider()
+    frames=collect_frames(session_factory,session_id=session_id,
+        question="请解释该IEEE754编码的符号位、阶码和真值。",stack=stack,
+        provider=provider,request=AlwaysAliveRequest())
+    row=assistant_rows(session_factory,session_id)[0]
+    assert provider.calls==2
+    assert frames[-1][0]=="error" and frames[-1][1]["code"]=="answer_truncated"
+    assert row.status=="failed" and row.metadata_["error_code"]=="answer_truncated"
+    calls=row.metadata_["generation_trace"]["calls"]
+    assert calls[0]["failure_reason"]=="output_limit"
+    assert calls[1]["recovery_failure_code"]=="generation_failed"
+    assert calls[1]["completion_reason"]=="truncation_recovery_failed"
+    assert not any(event=="done" for event,_ in frames)
+
+
 def test_provider_citation_alias_is_canonical_and_unknown_never_creates_card(session_factory, stack) -> None:
     seed_material(session_factory, stack)
     session_id = make_session(session_factory)

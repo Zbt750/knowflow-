@@ -11,13 +11,21 @@ from backend.services.question_attestation import (
     assess_source_attestation,
     has_current_source_attestation,
     question_content_sha256,
+    _subject,
 )
+from backend.services.question_production_pipeline import _norm_subject
 from backend.services.question_pack import PackQuestion, fingerprint
 
 
 ARCHIVE_SHA = "a" * 64
 PACK_ID = "synthetic-phase3b"
 PACK_VERSION = "test-v1"
+
+
+def test_official_408_paper_title_with_parenthesized_code_maps_to_408():
+    title = "计算机学科专业基础（408）"
+    assert _subject(title) == "408"
+    assert _norm_subject(title) == "408"
 
 
 def attested_fixture():

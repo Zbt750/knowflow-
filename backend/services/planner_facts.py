@@ -146,6 +146,8 @@ def build_planner_factual_summary(
             "effective_confirmation_count": effective_confirmations if state_covered else None,
             "verified_objective_confirmation_count": verified_objective_confirmations if state_covered else None,
         },
+        "learning_progress": {node: state_by_node[node]["learning_progress"] for node in plan_nodes
+            if state_by_node.get(node, {}).get("learning_progress") is not None},
         "answer_reliability": {
             "current_plan_question_count_observed": len(observed_plan_question_ids),
             "counts": dict(sorted(reliability_counts.items())),
@@ -188,7 +190,7 @@ def validate_planner_factual_summary(summary: dict[str, Any]) -> list[str]:
     return errors
 
 
-def render_pending_plan_recommendation(summary: dict[str, Any]) -> str | None:
+def render_pending_plan_recommendation(summary: dict[str, Any], *, budget_minutes: int | None = None) -> str | None:
     """Safely answer a replan when the current plan has work but no new inventory."""
     if summary.get("consistency", {}).get("valid") is not True:
         return None
@@ -266,5 +268,17 @@ def render_pending_plan_recommendation(summary: dict[str, Any]) -> str | None:
             "因此不能据此判定已掌握。"
         )
 
+    for progress in summary.get("learning_progress", {}).values():
+        lines.append(f"学习进展：{progress['label']}。{progress['reason']}{progress['next_step']}")
+        lines.append(progress["reliability_note"])
     lines.append("今日卷涉及范围内没有额外可追加的合格在线题（0道）；这是新增题库存为空，当前卷仍有待完成题目。建议先完成上面列出的题，再根据新的作答记录调整。")
+    if type(budget_minutes) is int and budget_minutes >= 5:
+        review = max(1, budget_minutes // 5)
+        practice = min(max(1, budget_minutes - review - 1), remaining) if type(remaining) is int and remaining > 0 else max(1, budget_minutes * 3 // 5)
+        reflection = budget_minutes - review - practice
+        lines.append(f'本次{budget_minutes}分钟建议预览：先用{review}分钟复核上述知识点条件及例题，'
+            f'再用{practice}分钟按今日卷原顺序独立练习，最后{reflection}分钟对照解析、复盘不确定步骤。'
+            f'合计{review + practice + reflection}分钟；时段结束仍未完成的题保留。'
+            '这里包含复习与总结，是整个学习预算；今日卷预计耗时只统计题目，二者不应混用。'
+            '这是建议预览，原计划保留，没有创建或覆盖正式计划。')
     return "".join(lines)

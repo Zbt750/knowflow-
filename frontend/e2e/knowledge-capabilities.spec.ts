@@ -26,6 +26,8 @@ test("可靠最终答案形成独立证据，证明能力不被连带确认，�
   });
   expect(response.ok).toBeTruthy();
   await page.goto(`/knowledge?node=${encodeURIComponent(node.code)}`);
+  await expect(page.getByTestId("learning-progress")).toHaveAttribute("data-status", "PRACTICING");
+  await expect(page.getByTestId("detail-state")).not.toBeVisible();
   const result = page.getByTestId("capability-final_result");
   await expect(result).toContainText("已有独立证据");
   await expect(result).not.toHaveAttribute("open", "");
@@ -40,7 +42,7 @@ test("可靠最终答案形成独立证据，证明能力不被连带确认，�
   const requirements = page.getByTestId("knowledge-advanced");
   await expect(page.getByTestId("graduation-evidence-boundary")).not.toBeVisible();
   await requirements.locator(":scope > summary").click();
-  await expect(page.getByTestId("graduation-evidence-boundary")).toContainText("自行对照与 AI 辅助审阅只作学习反馈");
+  await expect(page.getByTestId("graduation-evidence-boundary")).toContainText("毕业只看本节点冻结题目是否逐题真正完成");
 });
 
 test("答错自行改正仍显示待复测，不把重复记录变成多份证据", async ({ page }) => {
@@ -53,8 +55,10 @@ test("答错自行改正仍显示待复测，不把重复记录变成多份证�
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ idempotency_key: `cap-e2e-retry-${item.id}`, raw_answer: "1", expected_previous_attempt_id: first.attempt_id }),
   });
-  expect(second.ok).toBeTruthy();
+  expect(second.status).toBe(409);
+  expect((await second.json()).error.code).toBe('practice_item_already_assessed');
   await page.goto(`/knowledge?node=${encodeURIComponent(node.code)}`);
+  await expect(page.getByTestId("learning-progress")).toHaveAttribute("data-status", "NEEDS_CONSOLIDATION");
   const result = page.getByTestId("capability-final_result");
   await expect(result).toContainText("待复测");
   await result.locator("summary").click();

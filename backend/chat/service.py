@@ -10,10 +10,11 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from threading import BoundedSemaphore
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 from urllib.parse import urlsplit
 import httpx
+from backend.chat import http_clients as model_http
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from backend.errors import AppError
@@ -549,7 +550,14 @@ def insufficient_evidence_message(mode: str) -> str:
     scope = "我的资料" if mode == "user" else "内置资料"
     return f"当前「{scope}」中没有找到足以回答这个问题的资料片段。请切换资料范围，或确认相关文档已完成索引。"
 
-SYSTEM_PROMPT = (
+MATH_FORMAT_INSTRUCTION = (
+    "\n【数学排版】行内公式使用\\(...\\)，独立公式使用\\[...\\]；"
+    "使用正确的LaTeX上下标、\\frac与\\sqrt。不要用math/latex代码围栏包公式，"
+    "不要用孤立的[、]、单独反斜杠或连续等号充当公式边界。"
+    "长推导分成数个完整公式和文字段落，不把Markdown标题分隔线写进公式。\n"
+)
+
+SYSTEM_PROMPT = MATH_FORMAT_INSTRUCTION + (
     "你是考研知识库助手。\n"
     "\n"
     "【不可违反】\n"
@@ -570,7 +578,7 @@ SYSTEM_PROMPT = (
     "7. 语言清楚自然、不堆术语；学生问「为什么」时先给直觉，再给结论。"
 )
 
-USER_MATERIALS_SYSTEM_PROMPT = (
+USER_MATERIALS_SYSTEM_PROMPT = MATH_FORMAT_INSTRUCTION + (
     "你是考研知识库助手，负责依据用户上传的资料回答问题。\n"
     "\n"
     "【不可违反】\n"
@@ -595,6 +603,17 @@ def _general_reference_prefix(prepared):
     if (prepared.learning_trace or {}).get("information_route")=="web":
         return "## 网络来源与解释\n\n以下结合实际搜索结果回答；网络内容不是判题或毕业依据。\n\n"
     return GENERAL_REFERENCE_PREFIX
+
+def _dedupe_general_prefix(text):
+    """只处理新回答中连续的已知来源前缀，不重写历史或数学正文。"""
+    pattern = re.compile(r'^\s*## 通用知识参考\s*\n\s*\n(?:以下为模型通用知识回答，本轮未检索系统资料。|知识库中没有找到足够依据。以下是模型基于通用知识给出的参考回答，不是资料中的结论。)\s*\n\s*\n')
+    first = pattern.match(text)
+    if first:
+        rest = text[first.end():]
+        while pattern.match(rest):
+            rest = pattern.sub('', rest, count=1)
+        return first.group() + rest
+    return text
 EVIDENCE_BOUNDARY_INSTRUCTION = (
     "\n【未命中与存在性边界】本次没有检索到、没有收到相关片段或无法核验，"
     "只能说明本次证据不足，不能推出整个文件未记录、资料库没有该内容、现实中不存在或官方未发布。"
@@ -604,7 +623,7 @@ EVIDENCE_BOUNDARY_INSTRUCTION = (
     "结论仍是‘未找到可核验来源’，不能写‘查不到就当不存在’或断言‘没有官方数据’。"
     "没有联网核验工具结果时，不声称已查过官网或确认最新发布状态。\n"
 )
-GENERAL_SYSTEM_PROMPT = (
+GENERAL_SYSTEM_PROMPT = MATH_FORMAT_INSTRUCTION + (
     "你是学习助手。本次知识库没有可用证据，请用可靠的通用知识直接回答用户的问题。"
     "先给结论，再解释必要的条件、理由、步骤或例子，逐一回应用户明确提出的要点。"
     "不能编造事实、数值、文献、链接、资料引用或文件内容；不能使用 [C数字] 引用。"
@@ -649,11 +668,30 @@ def _direction_instruction(question: str) -> str:
 
 
 def _general_prompt(question: str, history: Sequence[ChatMessage]) -> list[dict[str, str]]:
-    messages = [{"role": "system", "content": GENERAL_SYSTEM_PROMPT + EVIDENCE_BOUNDARY_INSTRUCTION + "\n" + _answer_style_instruction(question) + _direction_instruction(question)}]
+    context_text = "\n".join(
+        [row.content for row in history if row.status == "completed"] + [question]
+    )
+    messages = [{"role": "system", "content": GENERAL_SYSTEM_PROMPT + EVIDENCE_BOUNDARY_INSTRUCTION
+        + "\n" + _answer_style_instruction(question) + _direction_instruction(question)
+        + _calculus_boundary_instruction(context_text)}]
     messages.extend({"role": row.role, "content": row.content} for row in history if row.status == "completed")
     if not history or history[-1].role != "user" or history[-1].content != question:
         messages.append({"role": "user", "content": question})
     return messages
+
+
+def _calculus_boundary_instruction(context: str) -> str:
+    """Preserve essential L'Hôpital conditions across concise follow-up explanations."""
+    if not re.search(r"洛必达|罗必达|L['’]?H[oö]pital", context, re.I):
+        return ""
+    return (
+        "\n【洛必达讲解的关键边界】若本轮或上下文讨论洛必达法则，简化讲解也必须保留这些要点："
+        "适用的未定式是0/0或∞/∞；有关去心邻域内分子、分母可导且分母导数不为0；"
+        "并且导数之比的极限存在（可为扩展实数）。其他未定式须先作等价变形，不能直接套用。"
+        "若导数之比极限不存在，只能说该次法则不能给出原极限结论，不能据此断言原极限不存在。"
+        "按学生要求用简单说法时，先给直观解释，再给一个紧凑例子；不重复免责声明或同一结论，"
+        "但不得省略上述适用条件。"
+    )
 
 def _prompt(
     question: str,
@@ -672,6 +710,10 @@ def _prompt(
     )
     system_prompt += EVIDENCE_BOUNDARY_INSTRUCTION
     system_prompt += _direction_instruction(question)
+    context_text = "\n".join(
+        [row.content for row in history if row.status == "completed"] + [question]
+    )
+    system_prompt += _calculus_boundary_instruction(context_text)
     system_prompt += (
         "\n【引用的支持边界】引用支持的是相邻的具体事实，不是整段话的主题。"
         "可以忠实改述资料，或说明由资料明确前提推出的结论及推导，不能仅因主题相关就给补充定义、机制或条件附 [C数字]。"
@@ -852,6 +894,14 @@ def _answer_style_instruction(question: str) -> str:
         return (
             "【本次回答：简洁】先直接回答问题，通常用 1–3 句话；保留必要条件、例外和资料引用，"
             "不要附加用户没问的长篇背景。若用户要的是概述，应简要覆盖可用资料的主要主题。"
+        )
+    if (re.search(r"简单(?:点|一点|些)|换一种(?:简单|直观|容易懂)|换个(?:简单|直观)说法|"
+                  r"还是不懂|不太懂|讲得(?:简单|直白)一点", question)
+            and not _is_full_coverage_question(question)):
+        return (
+            "【本次回答：简化讲解】直接围绕当前疑问，用一个直观解释和一个必要的小例子讲清；"
+            "通常控制在3至6个短句，不重复开场、结论或免责声明。"
+            "数学回答仍保留会改变结论的成立条件、例外和最终结论；不能为变短而漏掉关键前提。"
         )
     return (
         "【本次回答：正常详略】直接回答当前问题，提供足够理解所需的解释和依据；"
@@ -1575,6 +1625,7 @@ def _persist_failed_stream_answer(
     code: str,
     started_at: float,
     call_trace: CallTrace | None = None,
+    retryable: bool = False,
 ) -> list[tuple[str, UUID]]:
     """Persist partial text and citations before an SSE error terminates the stream."""
     if target_id is None:
@@ -1609,6 +1660,8 @@ def _persist_failed_stream_answer(
         message.status = "failed"
         message.metadata_ = {
             **(message.metadata_ or {}),
+            "assistant_error_code": code,
+            "assistant_retryable": retryable,
             "partial": bool(text.strip()),
             "error_code": code,
             "response_duration_ms": _response_duration_ms(started_at),
@@ -1653,6 +1706,7 @@ def _normalize_known_citation_aliases(text: str, mapping: dict[str, UUID]) -> tu
 
 
 def finalize_answer(db: Session, *, prepared: PreparedAnswer, text: str, usage: dict[str, object] | None = None, response_duration_ms: int | None = None, call_trace: CallTrace | None = None) -> tuple[ChatMessage, list[tuple[str, UUID]]]:
+    text = _dedupe_general_prefix(text)
     message = db.get(ChatMessage, prepared.assistant_id, with_for_update=True)
     if message is None: raise AppError("generation_failed")
     session = db.get(ChatSession, message.session_id)
@@ -1778,10 +1832,13 @@ class Provider:
         max_tokens: int,
         retry_max_tokens: int | None = None,
         stream_include_usage: bool = False,
+        structured_generation: bool = False,
     ):
         self.api_key, self.base_url, self.model = api_key, base_url.rstrip("/"), model
         self.timeout, self.max_tokens = timeout, max_tokens
         self.stream_include_usage = stream_include_usage
+        self.structured_generation = structured_generation
+        self.concept_without_thinking = False
         # 重试时使用的更大预算；None 表示与原值相同。
         #
         # 为什么重试要加大预算而不是原样重试：
@@ -1795,17 +1852,32 @@ class Provider:
         # Only the documented official models accept these options. Keep other
         # OpenAI-compatible endpoints unchanged; low retains reasoning.
         if urlsplit(self.base_url).hostname == "api.deepseek.com" and self.model in {"deepseek-flash", "deepseek-v4-pro"}:
-            return {"thinking": {"type": "disabled"}} if classifier else {"reasoning_effort": "low"}
+            if self.structured_generation and not classifier:
+                # Generation already has a bounded JSON contract and a separate
+                # quality gate. Hidden reasoning must not consume its entire
+                # 1800/3000-token delivery allowance. Other QA/Agent calls keep
+                # their existing reasoning policy; no output budget increase.
+                return {"thinking": {"type": "disabled"}, "response_format": {"type": "json_object"}}
+            return {"thinking": {"type": "disabled"}} if classifier or self.concept_without_thinking else {"reasoning_effort": "low"}
         return {}
+    @model_http.call_entry('completion')
     def complete(self, messages: list[dict[str, str]], *, attempt: int = 1) -> tuple[str, dict[str, object] | None]:
         # 这里只负责「调用取回内容」，不在这里判空、也不在这里重试：
         # 空回答的重试与失败判定统一放在 _complete_with_retry，
         # 避免两处都做一遍导致「到底谁在重试」说不清。
         budget = self._token_budget(attempt)
         try:
-            response = httpx.post(f"{self.base_url}/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"}, json={"model": self.model, "messages": messages, "max_tokens": budget, **self._request_options()}, timeout=self.timeout)
+            response = model_http.post(f"{self.base_url}/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"}, json={"model": self.model, "messages": messages, "max_tokens": budget, **self._request_options()}, timeout=self.timeout)
             response.raise_for_status(); payload = response.json()
             observe_payload(payload)
+            # Usage belongs to this physical HTTP request even when its output
+            # is unusable. Only counts/hashes, never the reasoning text.
+            from backend.chat.call_trace import ACTIVE_ATTEMPT
+            record = ACTIVE_ATTEMPT.get()
+            if record is not None:
+                message = payload["choices"][0].get("message") or {}
+                record.update(content_chars=len(str(message.get("content") or "")),
+                              reasoning_chars=len(str(message.get("reasoning_content") or "")))
             if payload["choices"][0].get("finish_reason") == "length":
                 raise AppError("answer_truncated", detail="complete:finish_reason:length", retryable=True)
             # 仅保存上游实际返回的计数；配置预算记录在 generation_trace，不算消耗。
@@ -1814,11 +1886,12 @@ class Provider:
         except AppError: raise
         except Exception as exc: raise _provider_error("complete", exc) from exc
 
+    @model_http.call_entry('agent_text')
     def tool_turn(self, messages: list[dict], tools: list[dict], *, timeout: float) -> dict:
         """有界工具调用；不把未知工具或未校验模型方案直接执行。"""
         try:
             async def send():
-                async with httpx.AsyncClient(timeout=min(float(self.timeout), timeout)) as client:
+                async with model_http.async_client(timeout=min(float(self.timeout), timeout)) as client:
                     return await client.post(f"{self.base_url}/chat/completions",
                         headers={"Authorization": f"Bearer {self.api_key}"},
                         json={"model": self.model, "messages": messages, **({"tools": tools, "tool_choice": "auto"} if tools else {}),
@@ -1830,12 +1903,14 @@ class Provider:
             if payload["choices"][0].get("finish_reason") == "length":
                 raise AppError("answer_truncated", retryable=False)
             return {"message": payload["choices"][0]["message"], "usage": payload.get("usage"), "model": self.model,
-                    "finish_reason": payload["choices"][0].get("finish_reason")}
+                    "finish_reason": payload["choices"][0].get("finish_reason"),
+                    "transport_diagnostic": response.extensions.get('naiwa_transport')}
         except AppError:
             raise
         except Exception as exc:
             raise _provider_error("learning_task", exc) from exc
 
+    @model_http.call_entry('classification')
     def classify_retrieval_intent(self, question: str) -> str | None:
         """轻量意图兜底；最多等待 6 秒，失败时由上层使用解释型默认值。"""
         if not all(getattr(self, name, None) for name in ("api_key", "base_url", "model")):
@@ -1850,7 +1925,7 @@ class Provider:
         )
         try:
             timeout = min(max(float(getattr(self, "timeout", 6.0)), 1.0), 6.0)
-            response = httpx.post(
+            response = model_http.post(
                 f"{self.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={
@@ -1874,11 +1949,12 @@ class Provider:
             logger.debug("检索意图分类请求失败：%s", type(exc).__name__)
         return None
 
+    @model_http.call_entry('text_stream')
     async def stream(self, messages: list[dict[str, str]], *, attempt: int = 1) -> AsyncIterator[str]:
         budget = self._token_budget(attempt)
         content_chars = reasoning_chars = 0
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with model_http.async_client(timeout=self.timeout) as client:
                 async with client.stream("POST", f"{self.base_url}/chat/completions", headers={"Authorization": f"Bearer {self.api_key}"}, json={"model": self.model, "messages": messages, "max_tokens": budget, "stream": True, **({"stream_options": {"include_usage": True}} if self.stream_include_usage else {}), **self._request_options()}) as response:
                     response.raise_for_status()
                     async for line in response.aiter_lines():
@@ -1921,7 +1997,26 @@ def _provider_for_answer(provider: Provider, prepared: PreparedAnswer) -> Provid
     Never change shared settings/provider or exceed its existing retry ceiling.
     This is a targeted retry-avoidance policy, not a quality/speed guarantee.
     """
-    if not isinstance(provider, Provider) or prepared.generation_profile != "multi_file_comparison":
+    if not isinstance(provider, Provider):
+        scoped_factory = getattr(provider, 'for_answer', None)
+        return scoped_factory(prepared) if callable(scoped_factory) else provider
+    questions = [str(m.get('content','')) for m in prepared.prompt if m.get('role')=='user']
+    current = questions[-1] if questions else ''
+    followup_pattern = r'(?:还是|仍然).{0,5}(?:不懂|不明白)|换.{0,8}(?:方式|说法|角度)|^(?:那|那么).{0,8}(?:为什么|为何|什么时候)'
+    followup = bool(re.search(followup_pattern,current))
+    complex_pattern = r'这道题|当前题|原题|求(?:值|和|极限)|计算|证明|解方程|\\(?:sum|int|frac)|\$'
+    previous = next((q for q in reversed(questions[:-1]) if not re.search(followup_pattern,q)), '')
+    # “换一种讲法”继承最近明确问题的性质；不能让证明题的追问因没复述
+    # 公式就被当成普通概念解释。当前请求若自带求值/证明约束也不关闭思考。
+    prior_complex = followup and bool(re.search(complex_pattern,previous))
+    if (prepared.retrieval_mode == 'general' and prepared.generation_profile == 'normal'
+            and (followup or re.search(r'讲清|讲一下|讲解|解释|为什么|为何|什么时候|适用条件|举.{0,12}例子|具体例子',current))
+            and not re.search(complex_pattern,current) and not prior_complex):
+        # 概念解释保留正文额度；仅作用于该请求，不更改解题、资料比较或 Agent。
+        scoped = copy(provider)
+        scoped.concept_without_thinking = True
+        return scoped
+    if prepared.generation_profile != "multi_file_comparison":
         return provider
     budget = max(provider.max_tokens, min(6000, provider.retry_max_tokens))
     # The v9 live trial was faster without thinking but misclassified shared
@@ -2073,6 +2168,7 @@ async def _stream_deltas(
     prefix = list(parts)
     sequence = len(parts)
     trace = call_trace or CallTrace(provider, transport="stream")
+    output_truncated = False
     for attempt in (1, 2):
         before = len(parts)
         stream = provider.stream(prompt, attempt=attempt).__aiter__()
@@ -2087,9 +2183,30 @@ async def _stream_deltas(
             round_timeout = min(round_timeout * 2, 180.0)
         deadline = asyncio.get_running_loop().time() + round_timeout
         record, trace_token, trace_started = trace.begin(attempt, provider)
+        # The iterator (including its context-manager cleanup) must stay in ONE
+        # task. Creating a new anext task per chunk resets Provider ContextVar
+        # tokens in another context after a perfectly valid body was streamed.
+        events: asyncio.Queue = asyncio.Queue(maxsize=1)
+
+        async def read_stream():
+            try:
+                try:
+                    async for delta in stream:
+                        await events.put(("delta", delta))
+                finally:
+                    await stream.aclose()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await events.put(("error", exc))
+            else:
+                await events.put(("end", None))
+
+        producer = asyncio.create_task(read_stream())
+        next_delta = None
         try:
             while True:
-                next_delta = asyncio.create_task(anext(stream))
+                next_delta = asyncio.create_task(events.get())
                 remaining = max(0.0, deadline - asyncio.get_running_loop().time())
                 done, _ = await asyncio.wait(
                     {next_delta, disconnected_task},
@@ -2109,13 +2226,21 @@ async def _stream_deltas(
                     next_delta.cancel()
                     await asyncio.gather(next_delta, return_exceptions=True)
                     return
-                try:
-                    delta = next_delta.result()
-                except StopAsyncIteration:
+                kind, delta = next_delta.result()
+                if kind == "end":
                     break
-                except AppError as exc:
-                    failure = exc
-                    break
+                if kind == "error":
+                    from backend.services.model_failure import classify_model_failure
+                    classified=classify_model_failure(delta)
+                    if classified is not None:
+                        # A known blocked/unknown-delivery transport outcome is
+                        # not an empty answer and must not trigger a paid retry.
+                        failure=AppError(classified.code,detail=classified.reason,retryable=False)
+                        break
+                    if isinstance(delta, AppError):
+                        failure = delta
+                        break
+                    raise delta
                 parts.append(delta)
                 sequence += 1
                 yield encode_sse("delta", {"seq": sequence, "text": delta})
@@ -2127,9 +2252,13 @@ async def _stream_deltas(
             raise
         finally:
             disconnected_task.cancel()
-            await asyncio.gather(disconnected_task, return_exceptions=True)
+            producer.cancel()
+            if next_delta is not None:
+                next_delta.cancel()
             try:
-                await stream.aclose()
+                await asyncio.gather(disconnected_task, producer,
+                                     *([next_delta] if next_delta is not None else []),
+                                     return_exceptions=True)
             finally:
                 if flags["disconnected"]: record["status"] = "cancelled"
                 trace.end(record, trace_token, trace_started)
@@ -2156,7 +2285,8 @@ async def _stream_deltas(
         # 输出上限允许一次完整重生成；显式替换旧正文，不能拼接两个回答。
         # 普通网络错误在已有正文时仍不重试。
         if attempt == 1 and produced_this_round and failure.code == "answer_truncated" and failure.retryable:
-            logger.warning("模型输出达到上限，扩大预算重新生成完整回答 detail=%s", failure.detail or "")
+            output_truncated = True
+            logger.warning("模型输出达到上限，启动一次有界恢复轮次 detail=%s", failure.detail or "")
             parts[:] = prefix
             sequence += 1
             yield encode_sse("delta", {"seq": sequence, "text": "".join(prefix), "replace": True, "recovering": True})
@@ -2168,6 +2298,12 @@ async def _stream_deltas(
                 failure.detail or "",
             )
             continue
+        if output_truncated and attempt == 2 and failure.code != "answer_truncated":
+            # Keep the original truncation visible if the single bounded
+            # recovery is stopped before a complete response is produced.
+            record["recovery_failure_code"] = failure.code
+            record["completion_reason"] = "truncation_recovery_failed"
+            raise AppError("answer_truncated", detail=f"recovery_failed:{failure.code}", retryable=False)
         raise failure
 
 
@@ -2188,6 +2324,68 @@ async def stream_answer(factory: sessionmaker, *, request, session_id: UUID, que
                 assistant_id, mode = pending_assistant_id, require_active_session(db,session_id).mode
             else:
                 assistant_id, mode = _create_pending(db, session_id=session_id, question=question)
+
+        # The main Materials page has its own strict RAG endpoint, separate from
+        # the general learning-assistant endpoint. Explicit questions about the
+        # user's bank/history must therefore be routed before document retrieval;
+        # otherwise an empty document search is incorrectly presented as “cannot
+        # confirm the question-bank count”. The query service is read-only and
+        # records no document citations, so material scope can never masquerade
+        # as evidence for a business-data answer.
+        if material_search:
+            from backend.services.assistant_data_queries import (
+                classify_session_data_query,
+                execute_read_only_data_query,
+            )
+            query_type = classify_session_data_query(factory, session_id=session_id, message=question)
+            from backend.services.assistant_scope_resolution import document_question
+            if query_type and not document_question(question):
+                from backend.schemas.learning_assistant import StudyContext
+
+                query_started = time.perf_counter()
+                context = StudyContext(surface="materials", conversation_id=session_id)
+                result = execute_read_only_data_query(factory, session_id=session_id,
+                    ctx=context, message=question, query_type=query_type,
+                    now=datetime.now(timezone.utc))
+                source_name = {
+                    "inventory": "系统题库",
+                    "find": "系统题库",
+                    "history": "系统作答记录",
+                    "today": "今日学习卷",
+                    "learning_state": "系统学习状态",
+                }.get(query_type, "系统学习数据")
+                text = f"数据来源：{source_name}（不是资料文档检索）。\n\n{result['answer']}"
+                duration_ms = _response_duration_ms(query_started)
+                with factory.begin() as db:
+                    message = db.get(ChatMessage, assistant_id, with_for_update=True)
+                    if message is None or message.status != "generating":
+                        raise AppError("generation_failed", retryable=False)
+                    message.content = text
+                    message.status = "completed"
+                    message.metadata_ = {
+                        **(message.metadata_ or {}),
+                        "answer_source": "business_data",
+                        "qa_information_route": "business_data",
+                        "read_only_data_query": result["evidence"],
+                        "model_called": False,
+                        "writes": False,
+                        "retrieval_mode": "business_data",
+                        "retrieved_count": 0,
+                        "response_duration_ms": duration_ms,
+                    }
+                completed = True
+                yield encode_sse("meta", {"message_id": str(assistant_id),
+                    "retrieval_mode": "business_data", "retrieved_count": 0,
+                    "capability": "data_query", "query_type": query_type,
+                    "model_called": False})
+                yield encode_sse("information_source", {"source": "business_data"})
+                yield encode_sse("delta", {"seq": 1, "text": text})
+                yield encode_sse("citations", {"citations": []})
+                yield encode_sse("done", {"message_id": str(assistant_id),
+                    "answer": text, "answer_source": "business_data", "citations": [],
+                    "usage": None, "response_duration_ms": duration_ms,
+                    "status": "completed", "model_called": False})
+                return
         disconnected_task = asyncio.create_task(_wait_disconnected(request))
         prepare_task = None
         try:
@@ -2288,6 +2486,7 @@ async def stream_answer(factory: sessionmaker, *, request, session_id: UUID, que
             _persist_failed_stream_answer(
                 factory, target_id=target_id, prepared=prepared, parts=parts,
                 code=exc.code, started_at=started_at, call_trace=call_trace,
+                retryable=exc.retryable is not False,
             )
         except Exception:
             logger.exception("无法保存失败的流式回答 session=%s", session_id)

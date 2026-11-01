@@ -22,6 +22,9 @@ class Evidence:
     skill_tags: tuple[str, ...] = ()
     # Only verified_objective may contribute a graduation confirmation.
     reliability: str = "unknown"
+    # Future receipts only. Missing historical facts are never inferred from a
+    # current Question or newly verified answer.
+    confirmation_facts: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)

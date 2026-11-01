@@ -1,5 +1,11 @@
 import { test, expect, apiFetch } from "./fixtures";
 
+async function ensureDetailsOpen(details: any): Promise<void> {
+  const open = await details.evaluate((element: HTMLDetailsElement) => element.open);
+  if (!open) await details.locator(":scope > summary").click();
+  await expect.poll(() => details.evaluate((element: HTMLDetailsElement) => element.open)).toBe(true);
+}
+
 async function prepareProcess(page: any) {
   const tree = await (await apiFetch('/api/knowledge/tree')).json();
   const walk = (nodes: any[]): any[] => nodes.flatMap(n => [n, ...walk(n.children ?? [])]);
@@ -11,8 +17,8 @@ async function prepareProcess(page: any) {
   const item = plan.items.find((row: any) => row.question_type === 'calculation');
   await page.goto('/study'); await page.getByTestId('full-paper').click();
   const row = page.locator('li.paper-item').filter({ has: page.getByTestId(`paper-raw-answer-${item.id}`) });
-  await row.getByText('检查我的过程', { exact:true }).click();
-  await row.getByText('从照片录入过程', { exact:true }).click();
+  await ensureDetailsOpen(row.locator('details.process-review'));
+  await ensureDetailsOpen(row.locator('details.photo-transcription'));
   return row;
 }
 
@@ -40,8 +46,8 @@ test('切换整卷专注保留未确认识别文字，不保留图片或自动�
   for (let i = 0; i < 2; i++) {
     await page.getByTestId('mode-focus').click();
     await page.getByTestId('full-paper').click();
-    await row.getByText('检查我的过程',{exact:true}).click();
-    await row.getByText('从照片录入过程',{exact:true}).click();
+    await ensureDetailsOpen(row.locator('details.process-review'));
+    await ensureDetailsOpen(row.locator('details.photo-transcription'));
     await expect(draft).toHaveValue(edited);
     await expect(row.getByAltText('待识别的过程图片预览')).toHaveCount(0);
     await expect(row.getByLabel('拍照或选择解题过程图片')).toHaveValue('');
@@ -62,8 +68,8 @@ test('保留的识别草稿可清除，离开今日学习不持久保存', async
   await expect(row.getByLabel('识别结果，确认前可修改')).toHaveValue(recognition.text);
   await page.getByTestId('mode-focus').click();
   await page.getByTestId('full-paper').click();
-  await row.getByText('检查我的过程',{exact:true}).click();
-  await row.getByText('从照片录入过程',{exact:true}).click();
+  await ensureDetailsOpen(row.locator('details.process-review'));
+  await ensureDetailsOpen(row.locator('details.photo-transcription'));
   await row.getByRole('button',{name:'清除识别草稿'}).click();
   await expect(row.getByLabel('识别结果，确认前可修改')).toHaveCount(0);
   await row.getByLabel('拍照或选择解题过程图片').setInputFiles(syntheticImage);
@@ -71,10 +77,12 @@ test('保留的识别草稿可清除，离开今日学习不持久保存', async
   await row.getByRole('button',{name:'识别图片',exact:true}).click();
   await expect(row.getByLabel('识别结果，确认前可修改')).toHaveValue(recognition.text);
   await page.getByRole('link',{name:'知识树',exact:true}).click();
+  await expect(page).toHaveURL(/\/knowledge(?:\?|$)/);
   await page.getByRole('link',{name:'今日学习',exact:true}).click();
+  await expect(page).toHaveURL(/\/study(?:\?|$)/);
   await page.getByTestId('full-paper').click();
-  await row.getByText('检查我的过程',{exact:true}).click();
-  await row.getByText('从照片录入过程',{exact:true}).click();
+  await ensureDetailsOpen(row.locator('details.process-review'));
+  await ensureDetailsOpen(row.locator('details.photo-transcription'));
   await expect(row.getByLabel('识别结果，确认前可修改')).toHaveCount(0);
 });
 

@@ -12,6 +12,9 @@ test("题目来源：专注、整卷显示年份但不显示原卷题号，不�
   const plan = await response.json();
   // Only a browser response fixture; no pretend real papers inserted into DB.
   for (const item of plan.items) {
+    // This scenario replaces the source of a synthetic UI response; keep no
+    // incompatible real-fixture trust label that would override that source.
+    item.question_trust = null;
     item.question_source = { source_type: "mock", year: 2025, question_number: 3,
       paper_title: "合成隔离模拟卷", subject: "数学二", content_status: "source_transcribed", edition: "隔离样例" };
     item.stem = "仅用于界面测试的合成题：$x^2+1$。";

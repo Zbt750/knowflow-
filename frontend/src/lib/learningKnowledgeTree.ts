@@ -5,7 +5,10 @@ import type { KnowledgeNodeView } from "../types/practice";
 export function learningKnowledgeTree(nodes: KnowledgeNodeView[]): KnowledgeNodeView[] {
   return nodes.flatMap((node) => {
     const children = learningKnowledgeTree(node.children);
-    if (node.code.includes(".family.") || node.name.startsWith("专题汇总")) return children;
+    const sourceLabelPlaceholder = node.is_reference_only
+      && node.name === "待核对：来源未提供考点标签"
+      && (node.practice_eligible_question_count ?? 0) === 0;
+    if (node.code.includes(".family.") || node.name.startsWith("专题汇总") || sourceLabelPlaceholder) return children;
     return [{ ...node, children }];
   });
 }

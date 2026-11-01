@@ -23,6 +23,10 @@ def prepared(db):
     data["pack_id"] = "SIMULATED-reviewed-upgrade"
     q = data["questions"][0]
     q.update(content_status="reviewed", grading_method="single_choice", answer_reviewed_by="SIMULATED HUMAN ONLY",
+             answer_reviewed_on="2026-10-01",
+             answer_provenance="human_verified", answer_reliability="verified",
+             answer_review_method="isolated simulated review",
+             answer_review_note="SIMULATED isolated fixture, not a real human approval",
              correct_answer="B", explanation="SIMULATED corrected reference; not actual exam certification")
     q["source"]["reviewed_by"] = "SIMULATED HUMAN ONLY"
     pack = QuestionPack.model_validate(data)
@@ -110,14 +114,14 @@ def test_unsafe_upgrade_rejected_without_partial_mutation(session_factory, clean
         db.rollback()
 
 
-def test_old_unknown_receipt_never_becomes_verified_evidence(client, session_factory, clock):
+def test_old_unknown_receipt_stays_bound_to_old_unverified_version_after_upgrade(client, session_factory, clock):
     with session_factory.begin() as db:
         row, pack, targets, reviews = prepared(db)
         plan = DailyPlan(study_date="2026-01-01", status="active")
         db.add(plan); db.flush()
         item = PracticeItem(plan_id=plan.id, question_id=row.id, kp_id=row.kp_id, ordinal=1)
         db.add(item); db.flush()
-        item_id, kp_id = str(item.id), row.kp_id
+        item_id, kp_id, bound_version_id = str(item.id), row.kp_id, item.question_version_id
     body = {"selected_option": "B", "idempotency_key": "unverified-before-upgrade"}
     old = client.post(f"/api/practice-items/{item_id}/answer-submissions", json=body)
     assert old.status_code == 200 and old.json()["result"] == "unknown"
@@ -129,11 +133,16 @@ def test_old_unknown_receipt_never_becomes_verified_evidence(client, session_fac
     retry = client.post(f"/api/practice-items/{item_id}/answer-submissions", json={
         "selected_option": "B", "idempotency_key": "after-upgrade-new-request",
         "expected_previous_attempt_id": old.json()["attempt_id"]})
-    assert retry.status_code == 409 and retry.json()["error"]["code"] == "answer_question_changed"
+    # The old PracticeItem stays on its pre-upgrade version. It must not start
+    # using the newly verified answer merely because Question.current_version
+    # advanced; a fresh item is the only path to the new content version.
+    assert retry.status_code == 409 and retry.json()["error"]["code"] == "practice_item_already_assessed"
     with session_factory() as db:
         attempt = db.get(QuestionAttempt, UUID(old.json()["attempt_id"]))
         assert attempt.objective_result == "unknown"
-        assert db.scalar(select(func.count()).select_from(QuestionAttempt)) == 1
+        attempts = list(db.scalars(select(QuestionAttempt).order_by(QuestionAttempt.submitted_at)))
+        assert len(attempts) == 1
+        assert attempts[0].question_version_id == bound_version_id
         assert db.get(KpState, kp_id).state != "mastered"
     # A fresh practice item may be graded, but old incompatible history cannot
     # be invented into evidence of a known first independent success.

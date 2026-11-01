@@ -20,6 +20,7 @@ from backend.mastery.enums import EventType
 from backend.models.learning import LearningEvent, PracticeItem
 from backend.schemas.practice import ProcessReviewResponse
 from backend.services.practice_lock import lock_practice_item
+from backend.services.question_versions import question_for_practice_item
 
 EVENT_TYPE = EventType.AI_PROCESS_REVIEWED.value
 PROMPT_VERSION = "study-process-review-v1"
@@ -105,7 +106,7 @@ def _review_text_process(
         item = db.get(PracticeItem, item_id)
         if item is None:
             raise ValueError("practice_item_not_found")
-        question = item.question
+        question = question_for_practice_item(db, item)
         if question is None:
             raise ValueError("process_review_not_supported")
         kind = _kind(question.question_type, subjective_kind)

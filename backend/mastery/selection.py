@@ -11,13 +11,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import IntEnum
 
 from backend.mastery.enums import EvidenceLevel, TimeBudget, default_minutes
 from backend.mastery.policy import MasteryPolicy
 from backend.mastery.rules import (
+    GapItem,
     GapReport,
     analyze_gaps,
     confirmation_dates,
@@ -25,6 +26,7 @@ from backend.mastery.rules import (
     type_label,
 )
 from backend.mastery.types import Evidence
+from backend.mastery.origin_evidence import compatible_confirmation
 
 # 三档时间预算的总分钟数；与 enums.BUDGET_MINUTES 保持一致。
 _BUDGET: dict[str, int] = {
@@ -75,6 +77,7 @@ class QuestionCandidate:
     # 距上次练习多少天；复测排序与文案会用到。
     days_since_practiced: int | None = None
     pending_objective_review: bool = False
+    question_provenance: str = "legacy_unknown"
 
     @property
     def minutes(self) -> int:
@@ -136,6 +139,17 @@ def _coverage(
     这样题库耗尽时重做题仍有明确收益，复测日不会无题可选。
     """
     gain = 0
+    if policy.policy_version == 3:
+        if f"graduation-question:{candidate.question_id}" in missing_keys:
+            # Required graduation items outrank optional remediation. Their
+            # completion is the only contribution to node graduation.
+            return 2
+        if (candidate.pending_objective_review
+                or candidate.last_self_grade in {"not_mastered", "partial"}):
+            # Remedial practice is selected from learning signals, not counted
+            # as an extra graduation quota.
+            return 1
+        return 0
     if candidate.confirmed:
         # 重做旧题：只有跨天门还没满足时才有意义（按规则它不增加不同题数）。
         if "day_span" in missing_keys:
@@ -180,7 +194,12 @@ def select_questions(
     而判断重做能否拉开跨度必须知道今天是哪天，因此这个参数是复测日选题的前提。
     """
     total_budget = budget_minutes(budget)
-    usable = [item for item in candidates if item.question_type not in policy.excluded_question_types]
+    if policy.policy_version in {2, 3}:
+        manual_credit_count, manual_confirmed_at = 0, None
+    required_ids = set(policy.graduation_question_ids) if policy.policy_version == 3 else set()
+    usable = [item for item in candidates
+        if item.question_type not in policy.excluded_question_types
+        or item.question_id in required_ids]
     # 模拟重做时用「现在」作为这次确认的时间；没有传入时退回占位时间（不影响新题选题）。
     occurred_at = reference_time or manual_confirmed_at or _epoch()
 
@@ -193,25 +212,30 @@ def select_questions(
     while remaining:
         if limit is not None and len(items) >= limit:
             break
-        gap = analyze_gaps(
+        gap = _selection_gaps(
             simulated,
             manual_credit_count=manual_credit_count,
             manual_confirmed_at=manual_confirmed_at,
             policy=policy,
         )
         missing = _missing_gap_keys(gap)
-        if not missing and not any(item.pending_objective_review for item in remaining):
-            # 缺口补齐就停：再选只是重复劳动。
+        has_adaptive_review = any(
+            item.pending_objective_review or item.last_self_grade in {"not_mastered", "partial"}
+            for item in remaining
+        )
+        if not missing and not has_adaptive_review:
+            # All formal items are complete. Stop unless there is a real
+            # remedial signal; adaptive work does not become a graduation gate.
             break
         covered = covered_skill_tags(simulated)
         span_before = _span_days(simulated, manual_credit_count, manual_confirmed_at)
 
-        best: tuple[tuple[bool, int, int, str], QuestionCandidate] | None = None
+        best: tuple[tuple[bool, int, bool, int, str], QuestionCandidate] | None = None
         for candidate in remaining:
             gain = _coverage(
                 candidate, missing_keys=missing, policy=policy, covered_tags=covered
             )
-            if gain <= 0 and not candidate.pending_objective_review:
+            if gain <= 0:
                 continue
             # 重做旧题时再确认一次「今天是否真的把跨度拉开」，
             # 否则会在同一天反复推荐同一道题却没有实际推进。
@@ -219,13 +243,21 @@ def select_questions(
                 trial = _with_evidence(simulated, candidate, occurred_at)
                 if _span_days(trial, manual_credit_count, manual_confirmed_at) <= span_before:
                     continue
-            # 收益相同时先选更短的题：更容易塞进预算，也更快拿到反馈。
-            key = (candidate.pending_objective_review, gain, -candidate.minutes, candidate.question_id)
+            # 先排除本轮放不下的题，避免一个大题阻断后续可用的小题。
+            if spent + candidate.minutes > total_budget:
+                continue
+            # 只在同等学习收益下兼顾作答形式，不再永远用短题挤掉大题。
+            # 这是选题偏好，不新增题型配额或毕业条件，也不跨出用户范围。
+            unseen_form = candidate.question_type not in {item.question_type for item in items}
+            long_form = candidate.question_type in {"calculation", "proof", "subjective", "discussion", "program"}
+            variety = policy.policy_version == 3 and bool(items) and unseen_form and long_form
+            key = (candidate.pending_objective_review, gain, variety, -candidate.minutes, candidate.question_id)
             if best is None or key > best[0]:
                 best = (key, candidate)
 
         if best is None:
             # 剩下的题都推进不了缺口了，停。
+            skipped = sum(spent + candidate.minutes > total_budget for candidate in remaining)
             break
 
         _, chosen = best
@@ -280,8 +312,39 @@ def _with_evidence(
             source="practice_item",
             question_type=candidate.question_type,
             skill_tags=candidate.skill_tags,
+            confirmation_facts={"selection_projection": True,
+                "question_provenance": candidate.question_provenance},
         ),
     )
+
+
+def _selection_gaps(window, *, manual_credit_count, manual_confirmed_at, policy):
+    if policy.policy_version == 1:
+        return analyze_gaps(window, manual_credit_count=manual_credit_count,
+            manual_confirmed_at=manual_confirmed_at, policy=policy)
+    if policy.policy_version == 3:
+        completed = {str(e.question_id) for e in window if e.level is EvidenceLevel.CONFIRMED
+            and e.question_id and (bool((e.confirmation_facts or {}).get("selection_projection"))
+                or compatible_confirmation(e, policy))}
+        required = tuple(policy.graduation_question_ids)
+        if not required:
+            return GapReport(items=(GapItem("graduation-set-unconfigured", "毕业题目集合待配置", 0, 1, False),),
+                reasons=("该知识点尚未配置正式毕业题目",), missing_types=(),
+                missing_skill_tags=(), missing_origins=())
+        items = tuple(GapItem(f"graduation-question:{qid}", f"规定题目 {index} 已完成",
+            int(qid in completed), 1, qid in completed) for index, qid in enumerate(required, start=1))
+        reasons = tuple(f"完成规定题目 {required.index(qid) + 1}/{len(required)}"
+                        for qid in required if qid not in completed)
+        return GapReport(items=items, reasons=reasons, missing_types=(),
+            missing_skill_tags=(), missing_origins=())
+    # Selection projection models future conditional opportunities, not saved
+    # learner confirmations. It may project a verified candidate as one future
+    # item, but never creates a receipt or reaches the mastery state machine.
+    by_id = {e.question_id: e for e in sorted(window, key=lambda e: e.occurred_at)}
+    projected = tuple(by_id.values())
+    type_policy = replace(policy, policy_version=1, required_question_origins={})
+    return analyze_gaps(projected, manual_credit_count=0,
+        manual_confirmed_at=None, policy=type_policy)
 
 
 def _span_days(

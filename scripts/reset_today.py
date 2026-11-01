@@ -43,6 +43,9 @@ def reset_today(db) -> dict[str, int]:
         state.node_self_grade = None
         state.manual_credit_count = 0
         state.manual_confirmed_at = None
+        state.graduation_set_version = None
+        state.graduation_set_binding_status = "unstarted"
+        state.graduation_set_started_at = None
         reset += 1
     counts["kp_states_reset"] = reset
     counts["leaves"] = len(

@@ -61,6 +61,8 @@ BUILTIN_TITLE = "高等数学核心考点讲义"
 # 「我的资料」用的讲义：内容刻意与内置讲义**不重叠**，
 # 这样模式隔离用例才能断言「在哪个范围里检索、答案就来自哪个范围」。
 USER_NOTE_TITLE = "阶段A验收笔记"
+SECOND_USER_NOTE_TITLE = "合成学习记录笔记"
+SECOND_USER_NOTE_BODY = "# 合成学习记录\n\n这是隔离浏览器测试的第二份个人笔记，用于资料阅读器前进后退验证。\n\n## 学习反馈\n\n未判定结果不等于错误；查看解析后完成可以安排稍后复测。\n"
 USER_NOTE_BODY = """# 阶段A前后端连通性验收笔记
 
 ## 后端连通性
@@ -277,6 +279,13 @@ def main() -> int:
                 vector_store=vector_store,
             )
             print(f"  已摄取「{USER_NOTE_TITLE}」：{user_chunks} 块")
+            # The materials page now correctly excludes builtin documents.
+            # Navigation between two personal documents therefore needs two
+            # actual user fixtures, not one user plus one builtin fixture.
+            second_chunks=ingest_bytes(db,title=SECOND_USER_NOTE_TITLE,filename="合成学习记录笔记.md",
+                data=SECOND_USER_NOTE_BODY.encode(),source_type="user",root=root,
+                embedder=embedder,vector_store=vector_store)
+            print(f"  已摄取「{SECOND_USER_NOTE_TITLE}」：{second_chunks} 块")
 
             keyword_index = KeywordIndex()
             rebuild_keyword_index(db, keyword_index)

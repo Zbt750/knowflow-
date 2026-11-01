@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from uuid import UUID
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -24,12 +24,17 @@ class RecommendationItem(BaseModel):
     next_step: str = ""
     # 还缺哪些题型；页面可以据此提示「预计加入」。
     missing_types: list[str] = []
+    requires_graduation_set_confirmation: bool = False
 
 
 class SubmitAnswerRequest(BaseModel):
     idempotency_key: str = Field(min_length=8, max_length=100)
     raw_answer: str | None = Field(default=None, max_length=4000)
-    selected_option: str | None = Field(default=None, max_length=8)
+    # Keep transport-level JSON types long enough for the business validator to
+    # return the stable selected_option_invalid error instead of Pydantic's
+    # generic body-shape response. Valid option keys are still checked against
+    # the exact bound QuestionVersion before any learning write.
+    selected_option: Any | None = None
     confidence: str | None = Field(default=None, pattern="^(certain|uncertain|guess|no_idea)$")
     # Explicit correction against the last saved result; stale retries are rejected.
     expected_previous_attempt_id: UUID | None = None
@@ -38,6 +43,7 @@ class SubmitAnswerRequest(BaseModel):
 class AnswerSubmissionResponse(BaseModel):
     attempt_id: UUID
     practice_item_id: UUID
+    question_version_id: UUID | None = None
     result: str
     reason: str
     method: str
@@ -58,6 +64,8 @@ class AnswerSubmissionResponse(BaseModel):
     sequence_category: AttemptCategory | None = None
     assistance_level: AssistanceLevel | None = None
     can_retry: bool = False
+    reference_result: Literal["right", "wrong", "unknown"] | None = None
+    feedback_notice: str | None = None
 
 
 class AnswerSubmissionHistory(BaseModel):
@@ -85,6 +93,8 @@ class ProcessReviewResponse(BaseModel):
 
 
 class PlanItemView(BaseModel):
+    retry_source_id: UUID | None = None
+    answer_revealed_at: str | None = None
     """今日练习卷里的一道题或一个外部原卷任务。
 
     普通题这里绝不返回 correct_answer / explanation；外部原卷任务不含题干，
@@ -93,9 +103,11 @@ class PlanItemView(BaseModel):
 
     id: UUID
     ordinal: int
+    display_number: int | None = None
     kp_id: UUID
     kp_name: str
     question_id: UUID | None = None
+    question_version_id: UUID | None = None
     question_source: QuestionSourceView | None = None
     question_trust: QuestionTrustView | None = None
     question_type: str
@@ -143,6 +155,9 @@ class TodayActive(BaseModel):
     completed_count: int
     total_count: int
     items: list[PlanItemView]
+    # The paper remains unchanged; these are standalone retry instances whose
+    # latest saved objective result is wrong, surfaced for review only.
+    retry_wrong_items: list[PlanItemView] = Field(default_factory=list)
     # 专注模式要用的下一个未完成项；全部完成时为 None。
     focus_item_id: UUID | None = None
     summary_kps: list[TodaySummaryKp]
@@ -154,7 +169,11 @@ class TodayActive(BaseModel):
 
 
 class GeneratePlanRequest(BaseModel):
+    extend_existing: bool = False
     selected_kp_ids: list[UUID] = Field(min_length=1)
+    # Explicitly starts the current formal set for legacy-history nodes whose
+    # former finite set cannot be reconstructed. Unlisted nodes are untouched.
+    confirm_legacy_set_transition_ids: list[UUID] = Field(default_factory=list)
     # 时间预算决定卷子总时长上限：轻量 45 / 标准 90 / 深度 120 分钟。
     budget: str = Field(default="standard", pattern="^(light|standard|deep)$")
 
@@ -193,6 +212,7 @@ class PracticeItemAnswer(BaseModel):
 
     practice_item_id: UUID
     question_id: UUID
+    question_version_id: UUID | None = None
     stem: str
     options: dict[str, str] | None = None
     correct_answer: str | None = None

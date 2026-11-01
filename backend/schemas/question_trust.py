@@ -2,22 +2,37 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+QuestionProvenance = Literal["real_exam", "trusted_practice", "ai_generated_practice", "legacy_unknown"]
+
 
 class QuestionTrustView(BaseModel):
-    question_provenance: Literal["real_exam", "trusted_practice", "ai_generated_practice", "legacy_unknown"] = "legacy_unknown"
-    content_trust: Literal["unreviewed", "needs_review", "source_attested", "verified"] = "unreviewed"
+    bank_scope: str = "public"
+    question_provenance: QuestionProvenance = "legacy_unknown"
+    content_trust: Literal["unreviewed", "needs_review", "source_attested", "verified", "auto_verified"] = "unreviewed"
     source_status: Literal["verified", "traceable", "needs_review", "unknown", "not_applicable"] = "unknown"
-    answer_provenance: Literal["verified_reference", "ai_generated", "legacy_transcription", "unknown"] = "unknown"
+    answer_provenance: Literal["verified_reference", "human_verified", "ai_generated", "server_generated", "legacy_transcription", "unknown", "auto_verified"] = "unknown"
     answer_reliability: Literal["verified", "ai_generated_consistent", "ai_disagreement", "model_generated", "unverified", "unknown"] = "unknown"
     mapping_status: str = "unknown"
     source_attestation_current: bool = False
     answer_attestation_current: bool = False
+    answer_verification_current: bool = False
+    answer_verification_type: Literal["verified_reference", "human_verified", "auto_verified"] | None = None
+    answer_verification_event_id: str | None = None
+    auto_review_current: bool = False
+    auto_review_event_id: str | None = None
+    auto_review_version: str | None = None
+    auto_review_snapshot_sha256: str | None = None
     practice_eligible: bool = False
     grading_capability: Literal["deterministic", "final_answer_limited", "process_review_only", "unsupported"] = "unsupported"
     evidence_capability: str = "self_report_only"
     answer_comparison_method: str | None = None
     verified_grading_method: str | None = None
     blocking_reasons: list[str] = []
+    teaching_use: str | None = None
+    objective_feedback_eligible: bool = False
+    presentation_label: str | None = None
+    explanation_label: str | None = None
+    teaching_rule_version: str | None = None
 
 
 class AvailabilityNode(BaseModel):

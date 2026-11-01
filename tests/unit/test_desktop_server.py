@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import subprocess
 import sys
+import tempfile
 
 import pytest
 from fastapi import FastAPI
@@ -154,10 +155,14 @@ def test_managed_cli_preflight_with_real_binaries_remains_readonly(tmp_path):
     pg_bin = os.environ.get("KAOYAN_MANAGED_PG_TEST_BIN")
     if os.name != "nt" or not pg_bin: pytest.skip("explicit Windows PG18 binaries required")
     root = Path(__file__).resolve().parents[2]
-    user = tmp_path / "readonly-user"
-    result = subprocess.run([sys.executable, "scripts/run_desktop_backend.py", "--resources", str(root),
-                             "--local-app-data", str(user), "--managed-postgres", "--pg-bin", pg_bin, "--check"],
-                            cwd=root, env={k: v for k, v in os.environ.items() if k != "DESKTOP_DATABASE_URL"},
-                            capture_output=True, text=True, timeout=15)
-    assert result.returncode == 0 and "desktop_preflight_ok" in result.stdout
-    assert not user.exists()
+    # The resources tree is the checkout and must not overlap mutable user data.
+    # pytest's basetemp may be configured inside the checkout by project runners,
+    # so use an OS-owned temporary root for this desktop-path contract test.
+    with tempfile.TemporaryDirectory(prefix="kaoyan-desktop-preflight-") as temp_root:
+        user = Path(temp_root) / "readonly-user"
+        result = subprocess.run([sys.executable, "scripts/run_desktop_backend.py", "--resources", str(root),
+                                 "--local-app-data", str(user), "--managed-postgres", "--pg-bin", pg_bin, "--check"],
+                                cwd=root, env={k: v for k, v in os.environ.items() if k != "DESKTOP_DATABASE_URL"},
+                                capture_output=True, text=True, timeout=15)
+        assert result.returncode == 0 and "desktop_preflight_ok" in result.stdout
+        assert not user.exists()

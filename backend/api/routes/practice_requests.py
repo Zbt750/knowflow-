@@ -11,7 +11,9 @@ from backend.models.practice_request import PracticeRequest
 from backend.services.practice_request_service import view
 from backend.errors import AppError
 router=APIRouter(tags=["practice-requests"])
-class SendRequest(BaseModel):source_conversation_id:UUID
+class SendRequest(BaseModel):
+    source_conversation_id:UUID
+    target_study_session_id:UUID|None=None
 class PlanRequest(BaseModel):study_session_id:UUID
 class PracticeRequestView(BaseModel):
     id:UUID
@@ -40,7 +42,8 @@ def listing(request:Request,source_conversation_id:UUID|None=None,time_provider=
     return list_requests(request.app.state.session_factory,source_conversation_id=source_conversation_id,now=time_provider())
 @router.post("/practice-requests/{request_id}/send",response_model=PracticeRequestView)
 def send(request:Request,request_id:UUID,body:SendRequest,time_provider=Depends(get_time_provider)):
-    return send_request(request.app.state.session_factory,request_id,source_conversation_id=body.source_conversation_id,now=time_provider())
+    return send_request(request.app.state.session_factory,request_id,source_conversation_id=body.source_conversation_id,
+        target_study_session_id=body.target_study_session_id,now=time_provider())
 @router.post("/practice-requests/{request_id}/decline",response_model=PracticeRequestView)
 def decline(request:Request,request_id:UUID,time_provider=Depends(get_time_provider)):
     return decline_request(request.app.state.session_factory,request_id,now=time_provider())

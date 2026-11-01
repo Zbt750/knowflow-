@@ -3722,6 +3722,145 @@
         }
       }
     },
+    "/api/learning-review-needs": {
+      "get": {
+        "tags": [
+          "study"
+        ],
+        "summary": "Read Learning Review Needs",
+        "operationId": "read_learning_review_needs_api_learning_review_needs_get",
+        "parameters": [
+          {
+            "name": "subject",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 30,
+              "minimum": 1,
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method Not Allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
     "/api/knowledge/lessons/{code}": {
       "get": {
         "tags": [
@@ -6561,6 +6700,682 @@
         }
       }
     },
+    "/api/question-bank": {
+      "get": {
+        "tags": [
+          "personal-questions"
+        ],
+        "summary": "Read Bank",
+        "operationId": "read_bank_api_question_bank_get",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "public",
+                "personal"
+              ],
+              "type": "string",
+              "default": "personal",
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "kp_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kp Id"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Search"
+            }
+          },
+          {
+            "name": "include_hidden",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Hidden"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method Not Allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/personal-questions/generate": {
+      "post": {
+        "tags": [
+          "personal-questions"
+        ],
+        "summary": "Generate Questions",
+        "operationId": "generate_questions_api_personal_questions_generate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonalGenerationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method Not Allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/personal-questions/batches/{request_key}": {
+      "get": {
+        "tags": [
+          "personal-questions"
+        ],
+        "summary": "Batch Status",
+        "operationId": "batch_status_api_personal_questions_batches__request_key__get",
+        "parameters": [
+          {
+            "name": "request_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Request Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method Not Allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/personal-questions/{question_id}/visibility": {
+      "patch": {
+        "tags": [
+          "personal-questions"
+        ],
+        "summary": "Hide",
+        "operationId": "hide_api_personal_questions__question_id__visibility_patch",
+        "parameters": [
+          {
+            "name": "question_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Question Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HiddenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method Not Allowed"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        }
+      }
+    },
+    "/api/personal-questions/append": {
+      "post": {
+        "tags": [
+          "personal-questions"
+        ],
+        "summary": "Append",
+        "operationId": "append_api_personal_questions_append_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonalAppendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method Not Allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/practice-requests/{request_id}": {
       "get": {
         "tags": [
@@ -7249,6 +8064,18 @@
             "format": "uuid",
             "title": "Practice Item Id"
           },
+          "question_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Version Id"
+          },
           "result": {
             "type": "string",
             "title": "Result"
@@ -7404,6 +8231,33 @@
             "type": "boolean",
             "title": "Can Retry",
             "default": false
+          },
+          "reference_result": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "right",
+                  "wrong",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Result"
+          },
+          "feedback_notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Notice"
           }
         },
         "type": "object",
@@ -7585,6 +8439,28 @@
               }
             ],
             "title": "Current Work"
+          },
+          "personal_generation_mode": {
+            "type": "string",
+            "enum": [
+              "ai_generated",
+              "ai_enhanced",
+              "deterministic_fast"
+            ],
+            "title": "Personal Generation Mode",
+            "default": "ai_generated"
+          },
+          "personal_generation_confirmed_kp_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Personal Generation Confirmed Kp Id"
           }
         },
         "additionalProperties": false,
@@ -7928,6 +8804,36 @@
             "type": "integer",
             "title": "Unmapped Pending Review Count",
             "default": 0
+          },
+          "learning_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LearningProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "post_graduation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostGraduationPractice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "graduation_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraduationProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "note": {
             "type": "string",
@@ -8308,6 +9214,14 @@
             "minItems": 1,
             "title": "Selected Kp Ids"
           },
+          "confirm_legacy_set_transition_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Confirm Legacy Set Transition Ids"
+          },
           "budget": {
             "type": "string",
             "pattern": "^(light|standard|deep)$",
@@ -8320,6 +9234,134 @@
           "selected_kp_ids"
         ],
         "title": "GeneratePlanRequest"
+      },
+      "GenerationTarget": {
+        "properties": {
+          "kp_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Kp Id"
+          },
+          "question_type": {
+            "type": "string",
+            "enum": [
+              "single_choice",
+              "fill_blank",
+              "calculation",
+              "proof",
+              "subjective"
+            ],
+            "title": "Question Type",
+            "default": "single_choice"
+          },
+          "count": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "default": 1
+          },
+          "difficulty": {
+            "type": "string",
+            "enum": [
+              "basic",
+              "improved",
+              "comprehensive"
+            ],
+            "title": "Difficulty",
+            "default": "basic"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kp_id"
+        ],
+        "title": "GenerationTarget"
+      },
+      "GraduationProgress": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "frozen_question_set_v1",
+            "title": "Version",
+            "default": "frozen_question_set_v1"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured",
+            "default": false
+          },
+          "graduated": {
+            "type": "boolean",
+            "title": "Graduated",
+            "default": false
+          },
+          "graduated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graduated At"
+          },
+          "completed_question_count": {
+            "type": "integer",
+            "title": "Completed Question Count",
+            "default": 0
+          },
+          "required_question_count": {
+            "type": "integer",
+            "title": "Required Question Count",
+            "default": 0
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/GraduationQuestionStatus"
+            },
+            "type": "array",
+            "title": "Questions"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": "题目进度只汇总该节点冻结的公共正式题；新题和个人 AI 题不会自动加入。"
+          }
+        },
+        "type": "object",
+        "title": "GraduationProgress"
+      },
+      "GraduationQuestionStatus": {
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Question Id"
+          },
+          "ordinal": {
+            "type": "integer",
+            "title": "Ordinal"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "NOT_STARTED",
+              "IN_PROGRESS",
+              "COMPLETED"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question_id",
+          "ordinal",
+          "status"
+        ],
+        "title": "GraduationQuestionStatus"
       },
       "HealthResponse": {
         "properties": {
@@ -8385,6 +9427,20 @@
           "environment"
         ],
         "title": "HealthResponse"
+      },
+      "HiddenRequest": {
+        "properties": {
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "hidden"
+        ],
+        "title": "HiddenRequest"
       },
       "KnowledgeLessonResponse": {
         "properties": {
@@ -8489,6 +9545,12 @@
                 "type": "null"
               }
             ]
+          },
+          "personal_questions": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Personal Questions",
+            "default": {}
           }
         },
         "type": "object",
@@ -8594,6 +9656,21 @@
               }
             ],
             "title": "Summary"
+          },
+          "post_graduation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PostGraduationPractice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "post_graduation_review_count": {
+            "type": "integer",
+            "title": "Post Graduation Review Count",
+            "default": 0
           },
           "learning_goal": {
             "anyOf": [
@@ -8741,6 +9818,29 @@
             "title": "Required Question Types",
             "default": {}
           },
+          "policy_version": {
+            "type": "integer",
+            "title": "Policy Version",
+            "default": 1
+          },
+          "graduation_set_binding_status": {
+            "type": "string",
+            "enum": [
+              "unstarted",
+              "legacy_history_unbound",
+              "bound"
+            ],
+            "title": "Graduation Set Binding Status",
+            "default": "unstarted"
+          },
+          "required_question_origins": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Required Question Origins",
+            "default": {}
+          },
           "excluded_question_types": {
             "items": {
               "type": "string"
@@ -8793,6 +9893,113 @@
           "nodes"
         ],
         "title": "KnowledgeTreeResponse"
+      },
+      "LearningProgress": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "learning_progress_v1",
+            "title": "Version",
+            "default": "learning_progress_v1"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "NOT_STARTED",
+              "PRACTICING",
+              "NEEDS_CONSOLIDATION",
+              "IMPROVING",
+              "RETEST_RECOMMENDED",
+              "STABLE_PRACTICE"
+            ],
+            "title": "Status"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "reliability_note": {
+            "type": "string",
+            "title": "Reliability Note"
+          },
+          "next_action": {
+            "type": "string",
+            "enum": [
+              "read_lesson",
+              "practice",
+              "consolidate",
+              "delayed_retest",
+              "validate_with_other_questions",
+              "spaced_review"
+            ],
+            "title": "Next Action"
+          },
+          "next_step": {
+            "type": "string",
+            "title": "Next Step"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          },
+          "observed_attempt_count": {
+            "type": "integer",
+            "title": "Observed Attempt Count",
+            "default": 0
+          },
+          "distinct_question_count": {
+            "type": "integer",
+            "title": "Distinct Question Count",
+            "default": 0
+          },
+          "assisted_correct_question_count": {
+            "type": "integer",
+            "title": "Assisted Correct Question Count",
+            "default": 0
+          },
+          "reference_wrong_count": {
+            "type": "integer",
+            "title": "Reference Wrong Count",
+            "default": 0
+          },
+          "reliable_wrong_count": {
+            "type": "integer",
+            "title": "Reliable Wrong Count",
+            "default": 0
+          },
+          "unknown_count": {
+            "type": "integer",
+            "title": "Unknown Count",
+            "default": 0
+          },
+          "history_truncated": {
+            "type": "boolean",
+            "title": "History Truncated",
+            "default": false
+          },
+          "strict_graduation_unchanged": {
+            "type": "boolean",
+            "title": "Strict Graduation Unchanged",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "label",
+          "reason",
+          "reliability_note",
+          "next_action",
+          "next_step"
+        ],
+        "title": "LearningProgress"
       },
       "LessonBreadcrumb": {
         "properties": {
@@ -9365,6 +10572,18 @@
             ],
             "title": "Question Id"
           },
+          "question_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Version Id"
+          },
           "exam_reference_id": {
             "anyOf": [
               {
@@ -9452,6 +10671,15 @@
             "format": "uuid",
             "title": "Id"
           },
+          "bank_scope": {
+            "type": "string",
+            "enum": [
+              "public",
+              "personal"
+            ],
+            "title": "Bank Scope",
+            "default": "public"
+          },
           "question_type": {
             "type": "string",
             "title": "Question Type"
@@ -9500,6 +10728,7 @@
           "trust": {
             "$ref": "#/components/schemas/QuestionTrustView",
             "default": {
+              "bank_scope": "public",
               "question_provenance": "legacy_unknown",
               "content_trust": "unreviewed",
               "source_status": "unknown",
@@ -9508,10 +10737,13 @@
               "mapping_status": "unknown",
               "source_attestation_current": false,
               "answer_attestation_current": false,
+              "answer_verification_current": false,
+              "auto_review_current": false,
               "practice_eligible": false,
               "grading_capability": "unsupported",
               "evidence_capability": "self_report_only",
-              "blocking_reasons": []
+              "blocking_reasons": [],
+              "objective_feedback_eligible": false
             }
           }
         },
@@ -9590,6 +10822,112 @@
         ],
         "title": "NodeSelfAssessmentResponse"
       },
+      "PersonalAppendRequest": {
+        "properties": {
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "question_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Question Ids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question_ids"
+        ],
+        "title": "PersonalAppendRequest"
+      },
+      "PersonalGenerationRequest": {
+        "properties": {
+          "request_key": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Request Key"
+          },
+          "generation_mode": {
+            "type": "string",
+            "enum": [
+              "ai_generated",
+              "ai_enhanced",
+              "deterministic_fast"
+            ],
+            "title": "Generation Mode",
+            "default": "ai_generated"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/GenerationTarget"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Targets"
+          },
+          "surface": {
+            "type": "string",
+            "enum": [
+              "study",
+              "chat",
+              "knowledge"
+            ],
+            "title": "Surface",
+            "default": "chat"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "append_to_today": {
+            "type": "boolean",
+            "title": "Append To Today",
+            "default": false
+          },
+          "reference_question_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Question Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_key",
+          "targets"
+        ],
+        "title": "PersonalGenerationRequest"
+      },
       "PlanItemView": {
         "properties": {
           "id": {
@@ -9621,6 +10959,18 @@
               }
             ],
             "title": "Question Id"
+          },
+          "question_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Version Id"
           },
           "question_source": {
             "anyOf": [
@@ -9806,6 +11156,131 @@
         ],
         "title": "PlanRequest"
       },
+      "PostGraduationPractice": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "const": "post-graduation-practice-v1",
+            "title": "Version",
+            "default": "post-graduation-practice-v1"
+          },
+          "applicable": {
+            "type": "boolean",
+            "title": "Applicable",
+            "default": false
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "NOT_APPLICABLE",
+              "INSUFFICIENT",
+              "GOOD",
+              "CONSOLIDATE",
+              "REVIEW"
+            ],
+            "title": "Status"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "next_action": {
+            "type": "string",
+            "title": "Next Action"
+          },
+          "foundation_unchanged": {
+            "type": "boolean",
+            "title": "Foundation Unchanged",
+            "default": true
+          },
+          "graduated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Graduated At"
+          },
+          "last_reliable_practice_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Reliable Practice At"
+          },
+          "observed_attempt_count": {
+            "type": "integer",
+            "title": "Observed Attempt Count",
+            "default": 0
+          },
+          "reliable_attempt_count": {
+            "type": "integer",
+            "title": "Reliable Attempt Count",
+            "default": 0
+          },
+          "distinct_question_count": {
+            "type": "integer",
+            "title": "Distinct Question Count",
+            "default": 0
+          },
+          "independent_correct_count": {
+            "type": "integer",
+            "title": "Independent Correct Count",
+            "default": 0
+          },
+          "independent_wrong_count": {
+            "type": "integer",
+            "title": "Independent Wrong Count",
+            "default": 0
+          },
+          "assisted_correct_count": {
+            "type": "integer",
+            "title": "Assisted Correct Count",
+            "default": 0
+          },
+          "excluded_attempt_count": {
+            "type": "integer",
+            "title": "Excluded Attempt Count",
+            "default": 0
+          },
+          "history_truncated": {
+            "type": "boolean",
+            "title": "History Truncated",
+            "default": false
+          },
+          "evidence_summary": {
+            "type": "string",
+            "title": "Evidence Summary",
+            "default": ""
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "label",
+          "reason",
+          "next_action"
+        ],
+        "title": "PostGraduationPractice"
+      },
       "PracticeItemAnswer": {
         "properties": {
           "practice_item_id": {
@@ -9817,6 +11292,18 @@
             "type": "string",
             "format": "uuid",
             "title": "Question Id"
+          },
+          "question_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Version Id"
           },
           "stem": {
             "type": "string",
@@ -10392,6 +11879,11 @@
       },
       "QuestionTrustView": {
         "properties": {
+          "bank_scope": {
+            "type": "string",
+            "title": "Bank Scope",
+            "default": "public"
+          },
           "question_provenance": {
             "type": "string",
             "enum": [
@@ -10409,7 +11901,8 @@
               "unreviewed",
               "needs_review",
               "source_attested",
-              "verified"
+              "verified",
+              "auto_verified"
             ],
             "title": "Content Trust",
             "default": "unreviewed"
@@ -10430,9 +11923,12 @@
             "type": "string",
             "enum": [
               "verified_reference",
+              "human_verified",
               "ai_generated",
+              "server_generated",
               "legacy_transcription",
-              "unknown"
+              "unknown",
+              "auto_verified"
             ],
             "title": "Answer Provenance",
             "default": "unknown"
@@ -10464,6 +11960,76 @@
             "type": "boolean",
             "title": "Answer Attestation Current",
             "default": false
+          },
+          "answer_verification_current": {
+            "type": "boolean",
+            "title": "Answer Verification Current",
+            "default": false
+          },
+          "answer_verification_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "verified_reference",
+                  "human_verified",
+                  "auto_verified"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Verification Type"
+          },
+          "answer_verification_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Verification Event Id"
+          },
+          "auto_review_current": {
+            "type": "boolean",
+            "title": "Auto Review Current",
+            "default": false
+          },
+          "auto_review_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Review Event Id"
+          },
+          "auto_review_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Review Version"
+          },
+          "auto_review_snapshot_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Review Snapshot Sha256"
           },
           "practice_eligible": {
             "type": "boolean",
@@ -10515,6 +12081,55 @@
             "type": "array",
             "title": "Blocking Reasons",
             "default": []
+          },
+          "teaching_use": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Teaching Use"
+          },
+          "objective_feedback_eligible": {
+            "type": "boolean",
+            "title": "Objective Feedback Eligible",
+            "default": false
+          },
+          "presentation_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Presentation Label"
+          },
+          "explanation_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation Label"
+          },
+          "teaching_rule_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Teaching Rule Version"
           }
         },
         "type": "object",
@@ -10602,6 +12217,11 @@
             "type": "array",
             "title": "Missing Types",
             "default": []
+          },
+          "requires_graduation_set_confirmation": {
+            "type": "boolean",
+            "title": "Requires Graduation Set Confirmation",
+            "default": false
           }
         },
         "type": "object",
@@ -11296,6 +12916,13 @@
             },
             "type": "array",
             "title": "Items"
+          },
+          "retry_wrong_items": {
+            "items": {
+              "$ref": "#/components/schemas/PlanItemView"
+            },
+            "type": "array",
+            "title": "Retry Wrong Items"
           },
           "focus_item_id": {
             "anyOf": [

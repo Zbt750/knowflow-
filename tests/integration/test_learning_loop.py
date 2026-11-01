@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,6 +26,7 @@ from backend.models.learning import (
     PracticeItem,
     Question,
     QuestionAttempt,
+    QuestionAnswerVerificationEvent,
 )
 from scripts.seed import seed_all
 from backend.services.exam_reference_service import sync_exam_reference_index
@@ -89,7 +90,7 @@ def clean_database(session_factory) -> Iterator[None]:
         # in this isolated test database only. The real development database is
         # never backfilled or upgraded to trusted by this helper.
         for question in db.scalars(select(Question)).all():
-            mark_isolated_question_trusted(question)
+            mark_isolated_question_trusted(question, db=db)
         db.flush()
         assert all(q.content_trust == "verified" for q in db.scalars(select(Question)).all()), [
             (q.id, q.content_trust) for q in db.scalars(select(Question)).all()]
@@ -97,16 +98,44 @@ def clean_database(session_factory) -> Iterator[None]:
     yield
 
 
-def mark_isolated_question_trusted(question: Question) -> Question:
+def mark_isolated_question_trusted(question: Question, *, db=None) -> Question:
+    from backend.services.answer_verification import answer_version_sha256
+
     question.question_provenance = "trusted_practice"
     question.content_trust = "verified"
     question.source_status = "not_applicable"
-    question.answer_provenance = "verified_reference"
+    question.answer_provenance = "human_verified"
     question.answer_reliability = "verified"
     question.content_reviewed_by = "isolated-synthetic-test-fixture"
     question.content_reviewed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
     question.answer_reviewed_by = "isolated-synthetic-test-fixture"
     question.answer_reviewed_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    if question.id is None:
+        question.id = uuid4()
+    if db is not None:
+        db.add(question)
+        db.flush()
+    answer_sha=answer_version_sha256(question)
+    fixture_key="test-fixture:"+str(question.id)+":"+answer_sha
+    existing_event=(db.scalar(select(QuestionAnswerVerificationEvent).where(
+        QuestionAnswerVerificationEvent.idempotency_key==fixture_key)) if db is not None else None)
+    event = existing_event or QuestionAnswerVerificationEvent(
+        id=uuid4(), question_id=question.id,
+        event_type="verified", verification_type="human_verified",
+        answer_sha256=answer_sha,
+        verification_method="isolated synthetic test fixture",
+        verifier="isolated-synthetic-test-fixture", source_metadata={"kind": "human_review"},
+        note="Synthetic test-only answer stamp, not a real review.",
+        idempotency_key=fixture_key,
+        created_at=question.answer_reviewed_at,
+    )
+    if db is not None:
+        db.add(event)
+        db.flush()
+    question.current_answer_verification = event
+    question.answer_verification_event_id = event.id
+    if db is not None:
+        db.flush()
     return question
 
 
@@ -176,9 +205,50 @@ def set_plan_active(session_factory) -> None:
 
 
 def generate_plan(client: TestClient, kp_ids: list[UUID]):
+    # This API helper uses only TEST_DATABASE_URL, already validated by
+    # tests.conftest. The lhopital syllabus fixture deliberately contains two
+    # numeric calculation prompts without graders; complete that synthetic
+    # pool here so plan tests exercise the successful path, while separate
+    # tests continue to cover missing-grader rejection.
+    if any(code == "math.calculus.limit.lhopital" for code in _codes_for_ids(kp_ids)):
+        from backend.db import create_db_engine, create_session_factory
+        from backend.services.answer_verification import answer_version_sha256, verify_answer
+        from backend.models.learning import Question
+        from tests.conftest import TEST_DATABASE_URL
+        engine = create_db_engine(TEST_DATABASE_URL)
+        try:
+            with create_session_factory(engine)() as db:
+                rows = list(db.scalars(select(Question).where(
+                    Question.kp_id.in_(kp_ids), Question.question_type == "calculation")))
+                for question in rows:
+                    if question.grading_config is not None:
+                        continue
+                    question.grading_config = {"verified": True, "method": "numeric_final",
+                        "version": "isolated-plan-fixture"}
+                    verify_answer(db, question_id=question.id, verification_type="human_verified",
+                        verifier="isolated-synthetic-test-fixture", method="exact numeric fixture grader",
+                        note="Synthetic numeric grader for an isolated plan integration fixture.",
+                        idempotency_key=f"isolated-plan-fixture:{question.id}",
+                        expected_answer_sha256=answer_version_sha256(question))
+                db.commit()
+        finally:
+            engine.dispose()
     return client.post(
         "/api/plans/today/generate", json={"selected_kp_ids": [str(kp) for kp in kp_ids]}
     )
+
+
+def _codes_for_ids(kp_ids: list[UUID]) -> set[str]:
+    from backend.db import create_db_engine, create_session_factory
+    from backend.models.learning import KnowledgePoint
+    from tests.conftest import TEST_DATABASE_URL
+    engine = create_db_engine(TEST_DATABASE_URL)
+    try:
+        with create_session_factory(engine)() as db:
+            return set(db.scalars(select(KnowledgePoint.code).where(
+                KnowledgePoint.id.in_(kp_ids))))
+    finally:
+        engine.dispose()
 
 
 def items_by_ordinal(plan: dict) -> dict[int, dict]:
@@ -516,7 +586,7 @@ def test_generate_plan_creates_two_basic_and_one_variant_per_leaf(
     leaves = leaf_codes(session_factory)
     kp_id = leaves["math.calculus.limit.lhopital"]
     response = generate_plan(client, [kp_id])
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
     body = response.json()
     assert body["status"] == "active"
     assert body["study_date"] == "2026-01-01"
@@ -550,10 +620,21 @@ def test_plan_response_never_leaks_answer_or_explanation(client: TestClient, ses
 def test_same_day_cannot_generate_twice(client: TestClient, session_factory) -> None:
     leaves = leaf_codes(session_factory)
     kp_id = leaves["math.calculus.limit.lhopital"]
-    assert generate_plan(client, [kp_id]).status_code == 201
+    created = generate_plan(client, [kp_id])
+    assert created.status_code == 201
+    created_body = created.json()
     second = generate_plan(client, [kp_id])
     assert second.status_code == 409
     assert second.json()["error"]["code"] == "plan_already_generated"
+    # Re-entering Today's Study restores the already-frozen plan instead of
+    # regenerating/reordering it or calling an external model.
+    restored = client.get("/api/plans/today")
+    assert restored.status_code == 200
+    restored_body = restored.json()
+    assert restored_body["plan_id"] == created_body["plan_id"]
+    assert [item["id"] for item in restored_body["items"]] == [
+        item["id"] for item in created_body["items"]
+    ]
 
 
 def test_empty_selection_is_rejected(client: TestClient) -> None:
@@ -1239,7 +1320,7 @@ def test_self_report_endpoint_does_not_grade_selected_options(
 
     # 换一天选对也仍为 unknown，不能绕过可靠判题入口。
     clock.now = DAY2
-    other_kp = leaves["math.linear-algebra.determinant.properties"]
+    other_kp = leaves["math.calculus.series.geometric"]
     other_body = generate_plan(client, [other_kp]).json()
     other_choice = next(
         item for item in items_by_ordinal(other_body).values() if item["options"]

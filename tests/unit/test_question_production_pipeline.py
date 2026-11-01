@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from backend.models.learning import KnowledgePoint, Question
 from backend.services.question_production_pipeline import (
-    assess_production_question, resolve_identity, validate_question_content,
+    assess_production_question, resolve_identity, validate_question_content, duplicate_choice_option_pairs,
 )
 
 
@@ -50,6 +50,39 @@ def test_content_validator_catches_missing_options_figure_placeholders_and_dupli
             "duplicate_question_content"} <= set(result.detected_issues)
 
 
+def test_duplicate_choice_content_is_a_hard_structure_error():
+    node = KnowledgePoint(id=uuid4(), code="test.leaf", name="隔离节点", subject="math2")
+    q = reviewed_question(node)
+    q.options = {"A": "1/2", "B": "0.5", "C": "1", "D": "2"}
+    result = validate_question_content(q)
+    assert result.status == "INCOMPLETE"
+    assert "choice_options_duplicate_content" in result.detected_issues
+    assert duplicate_choice_option_pairs(q.options) == [("A", "B")]
+
+
+def test_option_comparison_preserves_superscripts_variable_case_and_interval_bounds():
+    options = {"A": "2ᵐ−1", "B": "2ᵐ⁻¹", "C": "A", "D": "a"}
+    assert duplicate_choice_option_pairs(options) == []
+    assert duplicate_choice_option_pairs({"A": "(0,1)", "B": "[0,1]"}) == []
+    assert duplicate_choice_option_pairs({"A": " A,C ", "B": "$A,C$"}) == [("A", "B")]
+
+
+def test_source_diagram_reference_requires_embedded_information():
+    node = KnowledgePoint(id=uuid4(), code="test.leaf", name="隔离节点", subject="408")
+    q = reviewed_question(node)
+    q.stem = "如原卷网络图所示，主机H通过AP向Internet发送IP分组，判断帧地址。"
+    assert "figure_or_table_asset_not_embedded" in validate_question_content(q).detected_issues
+    q.stem += "\n\n```text\nH --无线帧F--> AP\nAP --连接--> R --连接--> Internet\nH MAC: 00-12-34-56-78-9a\nAP MAC: 00-12-34-56-78-9b\nR MAC: 00-12-34-56-78-9c\n```"
+    assert validate_question_content(q).completeness == "complete"
+
+
+def test_code_block_pointing_elsewhere_is_not_a_diagram():
+    node = KnowledgePoint(id=uuid4(), code="test.leaf", name="隔离节点", subject="408")
+    q = reviewed_question(node)
+    q.stem = "如原卷网络图所示，判断帧地址。\n```text\n请自行打开本机PDF原卷查看\n```"
+    assert "figure_or_table_asset_not_embedded" in validate_question_content(q).detected_issues
+
+
 def test_production_assessment_does_not_promote_exact_unreviewed_question():
     node = KnowledgePoint(id=uuid4(), code="synthetic.node", name="隔离节点", subject="math2",
         is_active=True, is_assessable=True, is_reference_only=False)
@@ -75,3 +108,17 @@ def test_reference_only_is_not_treated_as_online_question():
     assert "reference_only_mapping_not_online_question" in report["content_validation"]["detected_issues"]
     assert report["stages"]["knowledge_mapping_validation"] == "BLOCKED"
     assert report["production_ready"] is False
+def test_embedded_table_is_not_missing_asset_and_never_satisfies_missing_figure():
+    from types import SimpleNamespace
+    from backend.services.question_production_pipeline import validate_question_content
+    table='\n| 状态 | 序列 |\n|---|---|\n|初始|1,3,2|\n|第一趟|1,2,3|'
+    q=SimpleNamespace(stem='排序结果如下表所示，选择算法。'+table,
+        question_type='single_choice',options={'A':'算法甲','B':'算法乙'},correct_answer='A',explanation='逐项核对表格中的序列变化。')
+    assert 'figure_or_table_asset_not_embedded' not in validate_question_content(q).detected_issues
+    q.stem='依据下图和如下表分析。'+table
+    assert 'figure_or_table_asset_not_embedded' in validate_question_content(q).detected_issues
+    q.stem='排序结果如下表所示。\n|状态|序列|\n|---|---|'
+    assert 'figure_or_table_asset_not_embedded' in validate_question_content(q).detected_issues
+    q.stem='排序结果如下表所示。\n|状态|序列|\n|---|---|\n|只有一格|'
+    assert 'figure_or_table_asset_not_embedded' in validate_question_content(q).detected_issues
+

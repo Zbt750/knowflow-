@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from backend.errors import AppError
 from backend.models.chat import ChatSession
-from backend.models.learning import KnowledgePoint, Question, QuestionAttempt, PracticeItem, DailyPlan
+from backend.models.learning import KnowledgePoint, Question, QuestionAttempt, PracticeItem, DailyPlan, QuestionVersion
 from backend.models.learning_task import LearningTask
 from backend.models.rag import Material, DocumentChunk
 from backend.schemas.learning_assistant import StudyContext
@@ -25,14 +25,21 @@ def validate_study_context(db, *, session_id, context=None, now=None):
     if item:
         if item.question_id is None: invalid()
         if ctx.question_id and ctx.question_id!=item.question_id: invalid()
+        if ctx.question_version_id and ctx.question_version_id!=item.question_version_id: invalid()
         if ctx.daily_plan_id and ctx.daily_plan_id!=item.plan_id: invalid()
-        ctx.question_id,ctx.daily_plan_id=item.question_id,item.plan_id
+        ctx.question_id,ctx.question_version_id,ctx.daily_plan_id=item.question_id,item.question_version_id,item.plan_id
     q=db.get(Question,ctx.question_id) if ctx.question_id else None
     if ctx.question_id and q is None: invalid()
+    if ctx.question_version_id:
+        version=db.get(QuestionVersion,ctx.question_version_id)
+        if not version or not q or version.question_id!=q.id: invalid()
+    elif q and q.current_version_id:
+        ctx.question_version_id=q.current_version_id
     attempt=db.get(QuestionAttempt,ctx.attempt_id) if ctx.attempt_id else None
     if ctx.attempt_id and attempt is None: invalid()
     if attempt:
         if q and attempt.question_id!=q.id: invalid()
+        if ctx.question_version_id and ctx.question_version_id!=attempt.question_version_id: invalid()
         if item and attempt.practice_item_id!=item.id: invalid()
         if not item:
             item=db.get(PracticeItem,attempt.practice_item_id)
@@ -40,6 +47,7 @@ def validate_study_context(db, *, session_id, context=None, now=None):
             if ctx.daily_plan_id and ctx.daily_plan_id!=item.plan_id: invalid()
             ctx.practice_item_id,ctx.daily_plan_id=item.id,item.plan_id
         ctx.question_id=attempt.question_id
+        ctx.question_version_id=attempt.question_version_id
         q=db.get(Question,ctx.question_id)
         if q is None: invalid()
     plan=db.get(DailyPlan,ctx.daily_plan_id) if ctx.daily_plan_id else None

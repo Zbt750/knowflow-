@@ -13,13 +13,14 @@ from sqlalchemy import text
 from backend.api.routes.chat import router as chat_router
 from backend.api.routes.health import router as health_router
 from backend.api.routes.materials import router as materials_router
-from backend.api.routes.study import router as study_router
+from backend.api.routes.study import router as study_router, warm_knowledge_tree_cache
 from backend.api.routes.settings import router as settings_router
 from backend.api.routes.learning_tasks import router as learning_tasks_router
 from backend.services.model_settings_service import load_local_settings
 from backend.services.model_settings_service import is_loopback
 from urllib.parse import urlsplit
 from backend.config import get_settings
+from backend.api.deps import get_now
 from backend.db import create_db_engine, create_session_factory
 from backend.errors import AppError, ErrorResponse, register_error_handlers
 from backend.jobs.runner import MaterialJobRunner
@@ -161,6 +162,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if _try_build_retrieval_stack(app, settings):
             _start_job_runner(app, settings)
 
+        # 知识树首屏依赖题目资格与学习证据的只读汇总。启动时预热一次，
+        # 让用户打开前端后的第一次访问也走缓存；任何后续 Session commit 都会失效。
+        try:
+            with app.state.session_factory() as warm_session:
+                warm_knowledge_tree_cache(warm_session, get_now())
+            logger.info("知识树读取缓存已预热")
+        except Exception:  # noqa: BLE001 - 预热失败不应阻止学习服务启动
+            logger.exception("知识树缓存预热失败；首个请求将按正常流程计算")
+
         yield
     finally:
         ownership_stop.set()
@@ -189,6 +199,8 @@ def create_app() -> FastAPI:
     # 传入 lifespan 后，TestClient/uvicorn 都会在启动和关闭时执行上面的资源管理。
     app = FastAPI(title="Kaoyan KB", version="0.1.0", lifespan=lifespan,
         responses={code: {"model": ErrorResponse} for code in (400, 401, 403, 404, 405, 409, 422, 500, 503)})
+    from backend.services.runtime_version import capture_runtime_version
+    app.state.runtime_version = capture_runtime_version()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=get_settings().allowed_web_origins,
@@ -229,6 +241,12 @@ def create_app() -> FastAPI:
     app.include_router(materials_router, prefix="/api")
     app.include_router(settings_router, prefix="/api")
     app.include_router(learning_tasks_router, prefix="/api")
+    from backend.api.routes.personal_questions import router as personal_questions_router
+    app.include_router(personal_questions_router, prefix="/api")
     from backend.api.routes.practice_requests import router as practice_requests_router
     app.include_router(practice_requests_router,prefix="/api")
+    from backend.api.routes.personal_trainings import router as personal_trainings_router
+    app.include_router(personal_trainings_router, prefix="/api")
+    from backend.api.routes.runtime_db_diagnostic import router as runtime_db_diagnostic_router
+    app.include_router(runtime_db_diagnostic_router, prefix="/api")
     return app

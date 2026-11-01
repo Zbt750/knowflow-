@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Query, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.api.deps import get_db
+from backend.api.deps import get_db, get_time_provider
 from backend.errors import AppError
 from backend.jobs.runner import MaterialJobRunner
 from backend.models.rag import DocumentChunk
@@ -43,6 +43,9 @@ from backend.schemas.materials import (
 )
 from backend.services import material_service
 from backend.services.retrieval_service import search_chunks
+from backend.schemas.material_practice import MaterialPracticeRequest, MaterialPracticeResponse
+from backend.services.material_practice_service import generate_from_material
+from backend.services.question_generation import Budget, PERSONAL_C7_OUTPUT_LIMIT, configured_provider
 
 router = APIRouter(prefix="/materials", tags=["materials"])
 
@@ -313,3 +316,41 @@ def retry_material(
     db.commit()
     runner.notify()
     return MaterialJobView.model_validate(job)
+
+
+@router.post("/{material_id}/practice", response_model=MaterialPracticeResponse, status_code=201)
+def generate_practice_from_material(
+    material_id: UUID,
+    body: MaterialPracticeRequest,
+    request: Request,
+    clock=Depends(get_time_provider),
+) -> MaterialPracticeResponse:
+    """从指定资料生成个人练习；只写个人题库，不碰公共题库与今日卷。"""
+    provider = getattr(request.app.state, "personal_generation_provider", None)
+    if provider is None:
+        try:
+            provider = configured_provider(
+                request.app.state.settings,
+                Budget(max_calls=5, max_output_tokens=PERSONAL_C7_OUTPUT_LIMIT),
+                real_call_authorized=True,
+            )
+        except ValueError as exc:
+            raise AppError("llm_not_configured") from exc
+    result = generate_from_material(
+        request.app.state.session_factory,
+        material_id=material_id,
+        body=body,
+        provider=provider,
+        now=clock(),
+    )
+    question_ids = result.get("question_ids") or []
+    return MaterialPracticeResponse(
+        material_id=material_id,
+        material_title=result["material_title"],
+        request_key=body.request_key,
+        batch_id=result.get("batch_id"),
+        status="completed" if question_ids else "failed",
+        question_ids=question_ids,
+        failures=result.get("failures") or [],
+        message=result.get("message"),
+    )

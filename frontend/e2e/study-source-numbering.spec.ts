@@ -13,6 +13,7 @@ test("今日卷编号独立于原卷编号，专注和整卷都隐藏原题号",
   };
   await page.route("**/api/health", route => route.fulfill({ json: { status: "ok", database: "connected" } }));
   await page.route("**/api/knowledge/tree", route => route.fulfill({ json: { nodes: [] } }));
+  await page.route("**/api/practice-requests", route => route.fulfill({ json: [] }));
   await page.route("**/api/plans/today", route => route.fulfill({ json: {
     status: "active", plan_id: "local-plan", study_date: "2026-10-03", completed_count: 0,
     total_count: 1, items: [item], focus_item_id: item.id, summary_kps: [],

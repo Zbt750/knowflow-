@@ -23,6 +23,7 @@ async function setup(page: Page, type = "single_choice") {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/health") return route.fulfill({ json: { status: "ok", database: "connected" } });
     if (path === "/api/plans/today") return route.fulfill({ json: plan });
+    if (path === "/api/practice-requests") return route.fulfill({ json: [] });
     if (path === "/api/knowledge/tree") return route.fulfill({ json: { nodes: [{
       id: "root", code: "root", name: "数学", is_assessable: false, online_question_count: 0, children: [
         { id: "empty", code: "empty", name: "只有原卷索引", is_assessable: true, is_reference_only: true, online_question_count: 0, children: [] },

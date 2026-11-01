@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     app_runtime_profile: Literal["web", "desktop"] = "web"
     # 原文证据只允许显式启用的隔离评测；开发/生产默认不留副本。
     capture_test_evidence: bool = False
+    # Temporary local-only runtime DB inspection; disabled unless explicitly opted in.
+    runtime_db_diagnostics_enabled: bool = False
+    # B2: opt-in teaching-use projection; never changes strict graduation trust.
+    teaching_practice_enabled: bool = False
     allowed_web_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     # Pydantic 启动时校验连接串格式；开发/部署默认始终读这一项。
     database_url: PostgresDsn

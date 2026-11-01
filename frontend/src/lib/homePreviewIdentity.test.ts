@@ -1,0 +1,8 @@
+import {expect,it} from 'vitest';
+import type {HomePreview} from '../api/homeRecommendation';
+import {coherentHomePreview,homePreviewIdentity} from './homePreviewIdentity';
+const sample=()=>({session_id:'s',task_id:'p',draft_version:'v',status:'ready',budget_minutes:90,context:{workload:undefined},
+ draft:{budget_minutes:90,total_minutes:80,questions:[{question_id:'q',question_version_id:'qv',minutes:80}]}} as HomePreview);
+it('identity includes session, preview and version',()=>{const p=sample();expect(homePreviewIdentity(p)).toBe('s/p/v');expect(homePreviewIdentity({...p,session_id:'other'})).not.toBe(homePreviewIdentity(p));expect(homePreviewIdentity({...p,draft_version:'new'})).not.toBe(homePreviewIdentity(p));});
+it('requires counts, budget and question versions to form one coherent paper',()=>{expect(coherentHomePreview(sample())).toBe(true);const sum=sample();sum.draft!.total_minutes=20;expect(coherentHomePreview(sum)).toBe(false);const budget=sample();budget.budget_minutes=60;expect(coherentHomePreview(budget)).toBe(false);const version=sample();version.draft!.questions[0].question_version_id='';expect(coherentHomePreview(version)).toBe(false);const duplicate=sample();duplicate.draft!.questions.push(duplicate.draft!.questions[0]);duplicate.draft!.total_minutes=160;expect(coherentHomePreview(duplicate)).toBe(false);});
+it('cancelled, malformed and unknown drafts cannot be confirmed',()=>{expect(coherentHomePreview({...sample(),status:'cancelled'})).toBe(false);expect(coherentHomePreview({...sample(),context:undefined} as unknown as HomePreview)).toBe(false);expect(coherentHomePreview(null)).toBe(false);expect(coherentHomePreview({...sample(),draft_version:null})).toBe(false);});

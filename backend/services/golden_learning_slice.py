@@ -170,9 +170,14 @@ def reviewed_pack(asset: GoldenSlice) -> QuestionPack:
             # leaving SourceReview at "unknown" makes a reviewed test fixture
             # look like a provenance failure to the real eligibility service.
             source_type="original" if q.source.kind == "original" else "unknown",
+            content_origin=q.source.origin,
             reviewed_by=source_review.reviewed_by, reviewed_on=source_review.reviewed_on),
             content_reviewed_by=content_review.reviewed_by,
             content_reviewed_on=content_review.reviewed_on,
             answer_reviewed_by=q.reviews["answer"].reviewed_by,
-            answer_reviewed_on=q.reviews["answer"].reviewed_on))
+            answer_reviewed_on=q.reviews["answer"].reviewed_on,
+            answer_provenance="human_verified",
+            answer_reliability="verified",
+            answer_review_method="golden_slice_six_aspect_human_review",
+            answer_review_note=q.reviews["answer"].note))
     return QuestionPack(pack_id=asset.slice_id, version=asset.version, questions=questions)

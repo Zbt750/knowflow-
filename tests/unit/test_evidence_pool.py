@@ -59,3 +59,25 @@ def test_unknown_pool_is_not_a_learner_mastery_label():
     result = assess_evidence_pool(questions=[], eligibility_by_id={}, attempted_question_ids=set(), known=False)
     assert result.status == "UNKNOWN"
     assert result.reasons == ()
+
+
+def test_versioned_pool_keeps_strict_type_skill_and_distinct_gates_but_not_origin_quota():
+    from backend.mastery.policy import MasteryPolicy
+
+    questions=[make_question(f"真实题{i}") for i in range(3)]
+    for q in questions: q.question_provenance="real_exam"; q.skill_tags=["topic"]
+    policy=MasteryPolicy(policy_version=2,required_question_origins={"real_exam":3},
+        min_confirmations=3,min_real_questions=3,required_variant_count=0,
+        required_skill_tags=frozenset({"topic"}),min_day_span=2)
+    arguments={"questions":questions,"eligibility_by_id":{q.id:eligible(q) for q in questions},
+        "attempted_question_ids":{q.id for q in questions},"policy":policy}
+    result=assess_evidence_pool(**arguments)
+    # Inventory remains available for a future independent retest; source
+    # identity does not gate eligibility for a public objective evidence pool.
+    assert result.status=="SUFFICIENT" and result.unattempted_objective_question_count==0
+    questions[-1].question_provenance="trusted_practice"
+    result=assess_evidence_pool(**arguments)
+    assert result.status=="SUFFICIENT"
+    # Other reliability gates remain unchanged.
+    arguments["eligibility_by_id"][questions[-1].id]=eligible(questions[-1],capability="ai_consistent_objective",answer_provenance="ai_generated")
+    assert assess_evidence_pool(**arguments).status=="INSUFFICIENT"

@@ -17,6 +17,8 @@ def _next_review(occurred_at: datetime, stage: int, policy: MasteryPolicy) -> tu
 
 def _not_graduated_state(snapshot: MasterySnapshot) -> MasteryState:
     # 窗口或自评基础证据存在时，表示用户已在积累确认；否则仍未开始有效学习。
+    if snapshot.pending_review_question_ids:
+        return MasteryState.STUCK
     return (
         MasteryState.CONSOLIDATING
         if snapshot.evidence_window or snapshot.manual_credit_count
@@ -48,6 +50,21 @@ def _try_graduate(snapshot: MasterySnapshot, occurred_at: datetime, policy: Mast
     return TransitionResult(updated, "graduated", updated != snapshot)
 
 
+def _update_graduation_question_window(current, evidence, policy):
+    """Keep one trusted completion per required question, independent of recency.
+
+    v3's frozen set is small and bounded. Its completion facts must not fall out
+    of the ordinary rolling evidence window as the learner completes later
+    questions, otherwise a valid set could become impossible to finish.
+    """
+    required = set(policy.graduation_question_ids)
+    retained = {item.question_id: item for item in current
+                if item.question_id in required and item.level is EvidenceLevel.CONFIRMED}
+    if evidence.question_id in required and evidence.level is EvidenceLevel.CONFIRMED:
+        retained[evidence.question_id] = evidence
+    return tuple(sorted(retained.values(), key=lambda item: item.occurred_at))
+
+
 def transition(
     current: MasterySnapshot,
     event: DomainLearningEvent,
@@ -72,6 +89,15 @@ def transition(
     }:
         updated = replace(current, node_self_grade=event.self_grade or current.node_self_grade,
                           manual_credit_count=0, manual_confirmed_at=None)
+        return TransitionResult(updated, "self_feedback_only", updated != current)
+
+    # v3 completion is based on the frozen question set and objective receipts;
+    # self-assessment remains a learning signal and cannot complete/reset items.
+    if policy.policy_version == 3 and event.event_type in {
+        EventType.NODE_SELF_ASSESSED, EventType.QUESTION_SELF_ASSESSED,
+    }:
+        updated = replace(current, node_self_grade=event.self_grade or current.node_self_grade,
+            manual_credit_count=0, manual_confirmed_at=None)
         return TransitionResult(updated, "self_feedback_only", updated != current)
 
     # 叶子节点整体自评：贡献透明基础证据，不伪造 QuestionAttempt。
@@ -157,6 +183,24 @@ def _objective_transition(current: MasterySnapshot, event: DomainLearningEvent,
         base = replace(base, state=MasteryState.CONSOLIDATING, mastered_at=None,
                        next_review_at=None, review_stage=0)
     if evidence.level is EvidenceLevel.FAILURE:
+        if policy.policy_version == 3:
+            # Completion is an achieved fact. A later wrong answer schedules
+            # adaptive review but does not erase a prior trusted completion.
+            # An uncompleted required item remains pending until independently
+            # completed; extra questions never alter the frozen set.
+            retained = _update_graduation_question_window(window, evidence, policy)
+            pending = tuple(dict.fromkeys((*base.pending_review_question_ids, evidence.question_id)))
+            failed = replace(base, evidence_window=retained, pending_review_question_ids=pending,
+                next_review_at=event.occurred_at + timedelta(days=1))
+            if base.state is MasteryState.MASTERED:
+                failed = replace(failed, state=MasteryState.MASTERED, mastered_at=base.mastered_at)
+                return TransitionResult(failed, "post_graduation_question_review_due", failed != current)
+            if evidence.question_id not in policy.graduation_question_ids:
+                return TransitionResult(replace(failed, state=current.state,
+                    mastered_at=current.mastered_at), "extra_practice_review_scheduled", failed != current)
+            return TransitionResult(replace(failed,
+                state=MasteryState.STUCK if current.state is not MasteryState.MASTERED else MasteryState.MASTERED,
+                mastered_at=current.mastered_at), "graduation_question_review_scheduled", failed != current)
         # 只撤销这道题的有效确认；其他题与永久历史保留。不由一次错误清空窗口。
         retained = tuple(item for item in window if item.question_id != evidence.question_id)
         pending = tuple(dict.fromkeys((*base.pending_review_question_ids, evidence.question_id)))
@@ -169,14 +213,28 @@ def _objective_transition(current: MasterySnapshot, event: DomainLearningEvent,
                   else "history_unknown_answer_recorded" if category == "independent_correct_history_unknown"
                   else "assisted_answer_recorded" if event.payload.get("assisted") else "low_confidence_answer_recorded")
         return TransitionResult(base, reason, base != current)
-    updated = replace(base, evidence_window=update_evidence_window(
+    v3_completion_window = (_update_graduation_question_window(window, evidence, policy)
+        if policy.policy_version == 3 else None)
+    updated = replace(base, evidence_window=v3_completion_window if v3_completion_window is not None else update_evidence_window(
         window, evidence, max_size=policy.max_evidence_window,
     ), pending_review_question_ids=tuple(q for q in base.pending_review_question_ids if q != evidence.question_id))
+    if policy.policy_version == 3:
+        if base.state is MasteryState.MASTERED:
+            # Graduation is a durable historical fact; later practice refreshes
+            # per-question evidence without rewriting its first graduation date.
+            return TransitionResult(replace(updated, state=MasteryState.MASTERED,
+                mastered_at=base.mastered_at), "post_graduation_question_completed", updated != current)
+        result = _try_graduate(updated, event.occurred_at, policy)
+        reason = "graduated_question_set_completed" if result.reason_code == "graduated" else "graduation_question_completed"
+        return TransitionResult(result.snapshot, reason, result.changed)
     if updated.pending_review_question_ids:
         updated = replace(updated, state=MasteryState.STUCK, mastered_at=None,
                           next_review_at=base.next_review_at or event.occurred_at + timedelta(days=1))
         return TransitionResult(updated, "objective_needs_review", updated != current)
     if base.state is MasteryState.MASTERED:
+        if policy.policy_version == 2 and not graduation_check(updated.evidence_window,
+            manual_credit_count=0, manual_confirmed_at=None, policy=policy)[0]:
+            return _try_graduate(updated, event.occurred_at, policy)
         if base.next_review_at and event.occurred_at >= base.next_review_at:
             stage, next_at = _next_review(event.occurred_at, base.review_stage + 1, policy)
             updated = replace(updated, review_stage=stage, next_review_at=next_at)

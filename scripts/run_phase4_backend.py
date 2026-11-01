@@ -14,7 +14,7 @@ def main():
     paths=("backend/services/learning_qa_service.py","backend/services/learning_task_service.py","backend/services/learning_task_tools.py",
         "backend/services/learning_assistant_service.py","backend/services/study_context_service.py","backend/services/assistant_router.py",
         "backend/services/question_availability.py","backend/chat/service.py","backend/chat/evidence.py","backend/api/routes/chat.py",
-        "backend/schemas/learning_assistant.py","frontend/src/components/LearningTaskPanel.vue","frontend/src/pages/ChatPage.vue",
+        "backend/schemas/learning_assistant.py","frontend/src/api/chat.ts","frontend/src/components/LearningTaskPanel.vue","frontend/src/pages/ChatPage.vue",
         "backend/app.py","backend/models/chat.py","backend/models/practice_request.py","backend/services/practice_request_service.py",
         "backend/services/deep_qa_handoff_service.py","backend/services/qa_information_router.py","backend/services/web_search_service.py",
         "backend/api/routes/practice_requests.py","frontend/src/components/PracticeRequestCard.vue","frontend/src/pages/MaterialsPage.vue","frontend/src/router.ts")

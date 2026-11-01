@@ -37,7 +37,8 @@ def setup_rows(monkeypatch, stages="ABCDEFG", row_count=None):
         rows = (rows * row_count)[:row_count]
     monkeypatch.setattr(service, "_ready_materials", lambda *_: [material])
     db = SimpleNamespace(execute=lambda *_: SimpleNamespace(all=lambda: rows),
-                         scalars=lambda *_: SimpleNamespace(all=lambda: []))
+                         scalars=lambda *_: SimpleNamespace(all=lambda: []),
+                         get=lambda *_:SimpleNamespace(purpose="learning_qa",material_scope_ids=[str(material.id)]))
     return db, material
 
 

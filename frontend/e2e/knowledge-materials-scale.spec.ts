@@ -49,9 +49,17 @@ test("120个知识点默认折叠，分批展示，搜索保留祖先并可收�
   await expect(page.getByTestId("tree-node-math.limits")).toBeVisible();
   await expect(page.getByTestId("tree-node-math.limits.0")).toHaveCount(0);
   await page.getByRole("button", { name: "展开函数与极限", exact: true }).click();
-  await expect(page.locator('[data-testid^="tree-node-math.limits."]')).toHaveCount(20);
-  await page.getByRole("button", { name: "显示更多函数与极限下的节点", exact: true }).click();
-  await expect(page.locator('[data-testid^="tree-node-math.limits."]')).toHaveCount(40);
+  // The current canvas deliberately exposes 8 nodes per branch batch. Exercise
+  // all 120 actual nodes, rather than only the former first 40: every real
+  // "more" click must add exactly eight unique, correctly ordered children.
+  const leaves = page.locator('[data-testid^="tree-node-math.limits."]');
+  for (let visible = 8; visible <= 120; visible += 8) {
+    await expect(leaves).toHaveCount(visible);
+    expect(await leaves.evaluateAll(nodes => nodes.map(node => node.getAttribute("data-testid"))))
+      .toEqual(Array.from({ length: visible }, (_, index) => `tree-node-math.limits.${index}`));
+    if (visible < 120) await page.getByRole("button", { name: "显示更多函数与极限下的节点", exact: true }).click();
+  }
+  await expect(page.getByRole("button", { name: "显示更多函数与极限下的节点", exact: true })).toHaveCount(0);
   await page.getByTestId("knowledge-search").fill("math.limits.119");
   await expect(page.getByTestId("tree-node-math")).toBeVisible();
   await expect(page.getByTestId("tree-node-math.limits.119")).toBeVisible();

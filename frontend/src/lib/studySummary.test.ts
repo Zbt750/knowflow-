@@ -28,4 +28,11 @@ describe("学习小结", () => {
     expect(wrongAnswerItems(items).map(item => item.id)).toEqual(["wrong", "wrong-assisted"]);
     expect(JSON.stringify(items)).toBe(before);
   });
+  it("将服务端返回的重练错题合并回看但不重复计入今日卷", () => {
+    const root = { id: "root", completed: true, answer_submission: { result: "wrong" } } as PlanItemView;
+    const retry = { id: "retry", retry_source_id: "root", completed: true, answer_submission: { result: "wrong" } } as PlanItemView;
+    const unrelated = { id: "unknown-retry", retry_source_id: "root", completed: true, answer_submission: { result: "unknown" } } as PlanItemView;
+    expect(wrongAnswerItems([root], [retry, unrelated]).map(item => item.id)).toEqual(["root", "retry"]);
+    expect(wrongAnswerItems([root, retry], [retry]).map(item => item.id)).toEqual(["root", "retry"]);
+  });
 });

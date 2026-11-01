@@ -12,7 +12,7 @@ from backend.mastery.policy import MasteryPolicy
 from backend.mastery.rules import effective_confirmation_count
 from backend.mastery.storage import (
     apply_snapshot,
-    policy_from_storage,
+    policy_for_node,
     snapshot_from_storage,
     snapshot_to_storage,
 )
@@ -27,6 +27,7 @@ from backend.models.learning import (
     QuestionAttempt,
 )
 from backend.services.practice_lock import lock_practice_item
+from backend.services.question_versions import question_for_practice_item
 
 
 @dataclass(frozen=True)
@@ -113,7 +114,7 @@ def assess_practice_item(
         snapshot = snapshot_from_storage(kp_state)
         return AssessmentResult(snapshot.state, "skipped", snapshot.next_review_at, _count(snapshot))
 
-    question = item.question  # 普通题的题干、答案与题型。
+    question = question_for_practice_item(session, item)  # 题目实例绑定的不可变内容版本。
     reference: ExamQuestionReference | None = item.exam_reference
     if question is None and reference is None:
         raise ValueError("practice_item_source_missing")
@@ -139,7 +140,7 @@ def assess_practice_item(
     session.flush()  # 拿到 attempt.id，供 LearningEvent 的 source_id 审计关联。
 
     # 复用投影事务，但自述不构造旧规则的 CONFIRMED 证据。
-    policy = policy_from_storage(session.get(KpMasteryPolicy, item.kp_id))
+    policy = policy_for_node(session, item.kp_id, bind_if_unset=True)
     event = DomainLearningEvent(
         event_type=EventType.PRACTICE_SELF_REPORTED, occurred_at=now, self_grade=self_grade
     )

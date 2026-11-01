@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, field_validator
 from typing import Literal
-from backend.schemas.capability import CapabilityProfile
+from backend.schemas.capability import CapabilityProfile, PostGraduationPractice
 from backend.schemas.question_source import QuestionSourceView
 from backend.schemas.question_trust import QuestionTrustView
 
@@ -20,6 +20,7 @@ class GapItemView(BaseModel):
 
 
 class KnowledgeNodeView(BaseModel):
+    home_allocatable_question_count: int | None = None
     """知识树节点；父节点 state 必须为 None，由页面汇总 children。"""
 
     id: UUID
@@ -28,7 +29,8 @@ class KnowledgeNodeView(BaseModel):
     subject: str
     ordinal: int
     is_assessable: bool
-    # 历年题号索引叶子：没有内置题干；原卷自评可计入该叶子的掌握度与毕业条件。
+    # Legacy source-pointer nodes may also own complete online Questions; new
+    # self reports never provide verified graduation confirmations.
     is_reference_only: bool = False
     online_question_count: int = 0
     practice_eligible_question_count: int = 0
@@ -41,6 +43,8 @@ class KnowledgeNodeView(BaseModel):
     unattempted_objective_question_count: int = 0
     variation_objective_question_count: int = 0
     summary: str | None = None
+    post_graduation: PostGraduationPractice | None = None
+    post_graduation_review_count: int = 0
     learning_goal: str | None = None
     # 只有可考核叶子才有状态；父节点的汇总由页面数 children 得到，不存第二份统计真相。
     state: str | None = None
@@ -60,6 +64,9 @@ class KnowledgeNodeView(BaseModel):
     next_step: str | None = None
     # 该叶子自己的策略快照；字典的键是题型机器码。
     required_question_types: dict[str, int] = {}
+    policy_version: int = 1
+    graduation_set_binding_status: Literal["unstarted", "legacy_history_unbound", "bound"] = "unstarted"
+    required_question_origins: dict[str, int] = {}
     excluded_question_types: list[str] = []
     required_skill_tags: list[str] = []
     children: list["KnowledgeNodeView"] = []
@@ -90,6 +97,7 @@ class NodeQuestionView(BaseModel):
     """知识节点题库里的一道题；这里绝不返回答案与解析。"""
 
     id: UUID
+    bank_scope: Literal["public", "personal"] = "public"
     question_type: str
     difficulty: str
     is_variant: bool
@@ -120,6 +128,7 @@ class NodeAttemptView(BaseModel):
 
     id: UUID
     question_id: UUID | None = None
+    question_version_id: UUID | None = None
     exam_reference_id: UUID | None = None
     question_stem: str
     self_grade: str | None
@@ -155,6 +164,7 @@ class KnowledgeNodeDetail(BaseModel):
     # 关联资料在阶段 C 接入检索后填充；现在明确返回空列表而不是伪造数据。
     materials_ready: bool = False
     capability_profile: CapabilityProfile | None = None
+    personal_questions: dict = {}
 
 
 class NodeSelfAssessmentRequest(BaseModel):

@@ -75,7 +75,8 @@ def prepare(monkeypatch, *, mode="filter", hits=None, scoped=False, diversified=
         attribution_inputs.append(list(actual))
         return None
     monkeypatch.setattr(service, "matched_kp_attribution", attribution)
-    db = SimpleNamespace(scalars=lambda *_: SimpleNamespace(all=lambda: []))
+    db = SimpleNamespace(scalars=lambda *_: SimpleNamespace(all=lambda: []),
+        get=lambda *_:SimpleNamespace(purpose="learning_qa",material_scope_ids=[str(h.material_id) for h in source]))
     prepared = service._search_pending(db, session_id=uuid4(), assistant_id=uuid4(), question=question,
                                       mode=chat_mode, stack=SimpleNamespace(embedder=None, keyword_index=None,
                                       vector_store=None, reranker=None), history_token_budget=0)
@@ -126,9 +127,10 @@ def test_empty_filtered_evidence_enters_labeled_general_reference_without_citati
     validate_evidence_snapshot(snapshot, str(prepared.assistant_id))
 
 
-def test_user_mode_does_not_gain_knowledge_attribution_after_filter(monkeypatch):
+def test_user_mode_does_not_gain_knowledge_attribution_with_explicit_file_scope(monkeypatch):
     prepared, _, attribution_inputs = prepare(monkeypatch, chat_mode="user")
-    assert len(prepared.citation_map) == 1
+    assert len(prepared.citation_map) == 2
+    assert prepared.context_screening["reason"]=="file_scope"
     assert prepared.matched_kp_id is None and attribution_inputs == []
 
 

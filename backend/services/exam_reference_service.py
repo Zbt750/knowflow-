@@ -502,9 +502,9 @@ def sync_exam_reference_index(db: Session) -> dict[str, int]:
     # 测试/生产 session 使用 autoflush=False；显式落下新关联，下面的计数才看到刚导入真题。
     db.flush()
 
-    # 这些节点没有系统内题干，因此毕业门槛按该节点实际绑定的不同真题数配置：
-    # 最多要求 3 道，少于 3 道时按可用题量下调；同时取消变式配额（来源未标注变式），
-    # 仍要求真实题目、自评确认、题型覆盖与考法标签覆盖，避免“点节点自评”直接毕业。
+    # New reference topics keep the existing distinct-question/cross-day
+    # learning thresholds, but source identity is not a graduation quota.
+    # Source pointers/self reports do not supply reliable objective confirmations.
     reference_kps = db.scalars(
         select(KnowledgePoint).where(KnowledgePoint.is_reference_only.is_(True))
     ).all()
@@ -521,17 +521,18 @@ def sync_exam_reference_index(db: Session) -> dict[str, int]:
         created_policy = policy is None
         policy_note = (
             f"{_REFERENCE_POLICY_NOTE}共 {reference_count} 道已索引真题，"
-            f"需要完成其中 {required} 道不同题；原卷题型/变式信息不完整，不伪造该类配额。"
+            f"建议完成 {required} 道不同且通过正式审核的练习题；题目来源不作为毕业硬性配额。"
         )
         if created_policy:
             policy = KpMasteryPolicy(kp_id=kp.id)
             db.add(policy)
-        if created_policy or (
-            policy is not None and policy.note and policy.note.startswith(_REFERENCE_POLICY_NOTE)
-        ):
+        # Existing policies are changed only by an explicit guarded migration.
+        if created_policy:
             policy.min_confirmations = required
             policy.min_real_questions = required
-            policy.required_question_types = {"external_exam": required}
+            policy.policy_version = 2
+            policy.required_question_origins = {}
+            policy.required_question_types = {}
             policy.excluded_question_types = []
             policy.required_skill_tags = [kp.name]
             policy.required_variant_count = 0

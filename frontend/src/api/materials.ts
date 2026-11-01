@@ -124,3 +124,34 @@ export function reindexMaterial(id: string): Promise<MaterialJob> {
 export function retryMaterial(id: string): Promise<MaterialJob> {
   return api.post<MaterialJob>(`/api/materials/${id}/retry`);
 }
+
+export type PracticeDifficulty = "basic" | "improved" | "comprehensive";
+export type PracticeQuestionType = "single_choice" | "fill_blank" | "calculation" | "proof" | "subjective";
+
+export interface MaterialPracticeInput {
+  request_key: string;
+  knowledge_point_ids: string[];
+  question_count: number;
+  difficulty: PracticeDifficulty;
+  question_type: PracticeQuestionType;
+  user_requirement?: string | null;
+}
+
+export interface MaterialPracticeResponse {
+  material_id: string;
+  material_title: string;
+  request_key: string;
+  batch_id: string | null;
+  status: string;
+  question_ids: string[];
+  failures: Array<Record<string, unknown>>;
+  message: string | null;
+}
+
+/** 从指定资料生成个人练习；只写个人题库，不进入公共题库或今日卷。 */
+export function generatePracticeFromMaterial(
+  materialId: string,
+  body: MaterialPracticeInput,
+): Promise<MaterialPracticeResponse> {
+  return api.post<MaterialPracticeResponse>(`/api/materials/${materialId}/practice`, body);
+}

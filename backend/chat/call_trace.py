@@ -14,7 +14,7 @@ def safe_failure_reason(detail):
     status = re.fullmatch(r"(?:stream|complete):http_(\d{3})", detail)
     if status:
         return "http_" + status.group(1)
-    network = re.fullmatch(r"(?:stream|complete):(ConnectError|ReadTimeout|ConnectTimeout|RemoteProtocolError|ReadError|PoolTimeout)", detail)
+    network = re.fullmatch(r"(?:stream|complete):(ConnectError|ReadTimeout|ConnectTimeout|RemoteProtocolError|ReadError|PoolTimeout|WriteTimeout|WriteError|ProxyError|CloseError|TimeoutError|SSLError|SSLCertVerificationError|gaierror|ConnectionRefusedError|ConnectionResetError)", detail)
     if network:
         return "network_" + network.group(1)
     if detail == "stream:total_timeout":

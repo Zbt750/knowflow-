@@ -20,3 +20,11 @@ def test_unverified_answer_never_graded():
     verdict = grade_numeric_final_answer(answer="2", expected="2", verified=False)
     assert verdict.result == "unknown"
     assert verdict.reason == "answer_not_verified"
+
+
+def test_bounded_constant_parser_accepts_sympy_uppercase_e_without_approximation():
+    from backend.services.constant_expression import compare_constant_expressions
+
+    assert compare_constant_expressions("$31e$", "31*E") == "right"
+    assert compare_constant_expressions("31e", "31*E") == "right"
+    assert compare_constant_expressions("31.0000001e", "31*E") == "wrong"

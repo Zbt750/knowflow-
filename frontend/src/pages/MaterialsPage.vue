@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import StudyMascot from '../components/StudyMascot.vue';
 // 个人资料搜索与文件管理共用现有解析、检索和引用能力。
 // 约束：所有业务状态（状态、块数、索引版本、块内容、检索结果）都来自后端；
 // 页面只负责展示与触发动作，不自己推断资料"是不是可用"。
@@ -11,7 +12,10 @@ const materialRevision = ref(0);
 
 import { ApiError } from "../api/client";
 import MarkdownContent from "../components/MarkdownContent.vue";
+import { fetchKnowledgeTree } from "../api/study";
+import type { KnowledgeNodeView } from "../types/practice";
 import {
+  generatePracticeFromMaterial,
   deleteMaterial,
   getMaterial,
   getMaterialContent,
@@ -21,9 +25,11 @@ import {
   retryMaterial,
   uploadMaterial,
   type ChunkPreview,
+  type Material,
   type MaterialDetail,
   type MaterialContentResponse,
   type MaterialListResponse,
+  type MaterialPracticeResponse,
   type UploadResponse,
 } from "../api/materials";
 import { StaleResponse, useAsyncTask } from "../composables/useAsyncTask";
@@ -49,6 +55,79 @@ const upload = useAsyncTask<UploadResponse>();
 const contentTask = useAsyncTask<MaterialContentResponse>();
 
 const selectedId = ref<string | null>(null);
+// 资料 → 个人练习：范围由当前资料决定，知识点/题量/难度由用户显式选择。
+const practiceMaterial = ref<Material | null>(null);
+const practiceNodes = ref<KnowledgeNodeView[]>([]);
+const practiceNodesLoading = ref(false);
+const practiceKpId = ref("");
+const practiceCount = ref(3);
+const practiceDifficulty = ref<"basic" | "improved" | "comprehensive">("basic");
+const practiceType = ref<"single_choice" | "fill_blank" | "calculation" | "proof" | "subjective">("single_choice");
+const practiceRequirement = ref("");
+const practiceBusy = ref(false);
+const practiceError = ref<string | null>(null);
+const practiceResult = ref<MaterialPracticeResponse | null>(null);
+
+function flattenAssessable(nodes: KnowledgeNodeView[]): KnowledgeNodeView[] {
+  const output: KnowledgeNodeView[] = [];
+  for (const node of nodes) {
+    if (node.is_assessable && !node.is_reference_only && !(node.children?.length)) output.push(node);
+    if (node.children?.length) output.push(...flattenAssessable(node.children));
+  }
+  return output;
+}
+
+async function openPractice(item: Material): Promise<void> {
+  practiceMaterial.value = item;
+  practiceResult.value = null;
+  practiceError.value = null;
+  practiceKpId.value = "";
+  practiceCount.value = 3;
+  practiceRequirement.value = "";
+  if (practiceNodes.value.length) return;
+  practiceNodesLoading.value = true;
+  try {
+    const tree = await fetchKnowledgeTree();
+    practiceNodes.value = flattenAssessable(tree.nodes);
+  } catch {
+    practiceError.value = "无法加载知识点，请稍后重试。";
+  } finally {
+    practiceNodesLoading.value = false;
+  }
+}
+
+function closePractice(): void {
+  if (practiceBusy.value) return;
+  practiceMaterial.value = null;
+}
+
+async function submitPractice(): Promise<void> {
+  if (!practiceMaterial.value || !practiceKpId.value) {
+    practiceError.value = "请选择知识点。";
+    return;
+  }
+  practiceBusy.value = true;
+  practiceError.value = null;
+  practiceResult.value = null;
+  try {
+    practiceResult.value = await generatePracticeFromMaterial(practiceMaterial.value.id, {
+      request_key: crypto.randomUUID(),
+      knowledge_point_ids: [practiceKpId.value],
+      question_count: practiceCount.value,
+      difficulty: practiceDifficulty.value,
+      question_type: practiceType.value,
+      user_requirement: practiceRequirement.value.trim() || null,
+    });
+    if (!practiceResult.value.question_ids.length) {
+      practiceError.value = "本次没有生成可用题目，请调整知识点、难度或要求后重试。";
+    }
+    materialRevision.value += 1;
+  } catch (error) {
+    practiceError.value = error instanceof ApiError ? error.message : "生成练习失败，请稍后重试。";
+  } finally {
+    practiceBusy.value = false;
+  }
+}
 const uploadTitle = ref("");
 const selectedFile = ref<File | null>(null);
 const showDetail = ref(false);
@@ -434,13 +513,15 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="page materials-page" data-testid="materials-page">
+  <section class="page materials-page" :class="{ 'materials-page--reading': showDetail }" data-testid="materials-page">
     <header class="materials-header">
-      <div><p>我的资料</p></div>
+      <div class="materials-heading-copy"><p class="eyebrow">我的资料 · 学习依据</p><h2>把值得反复读的，留在手边。</h2><p>上传、阅读、检索自己的资料。回答中的引用可以回到具体页码与原文。</p>
       <div class="materials-header-actions">
         <button type="button" class="refresh-button" :disabled="isBusy" @click="loadList(true)">刷新</button>
         <button type="button" class="upload-toggle" data-testid="upload-toggle" @click="fileInput?.click()">添加资料</button>
       </div>
+      </div>
+      <StudyMascot pose="read" class="materials-heading-mascot" />
     </header>
 
     <MaterialSearch ref="materialSearch" :revision="materialRevision" :initial-scope="initialSearchScope" @open-source="(id, chunkId) => openMaterial(id, chunkId)" @scope-changed="clearLegacySearchScope" @upload="fileInput?.click()" />
@@ -460,6 +541,55 @@ onBeforeUnmount(() => {
       <p v-if="actionError" class="form-error" data-testid="action-error">{{ actionError }}</p>
     </form>
     <p v-if="uploadNotice && !selectedFile" class="notice upload-brief-notice" data-testid="upload-notice">{{ uploadNotice }}</p>
+    <form v-if="practiceMaterial" class="practice-panel" data-testid="material-practice-form" @submit.prevent="submitPractice">
+      <header class="practice-panel__head">
+        <div>
+          <strong>从《{{ practiceMaterial.title }}》生成个人练习</strong>
+          <p>题目只保存到个人题库，不会进入公共题库或正式今日卷。</p>
+        </div>
+        <button type="button" :disabled="practiceBusy" @click="closePractice">关闭</button>
+      </header>
+      <div class="practice-grid">
+        <label class="field"><span>知识点</span>
+          <select v-model="practiceKpId" data-testid="practice-kp" :disabled="practiceNodesLoading || practiceBusy">
+            <option value="">{{ practiceNodesLoading ? "加载中…" : "请选择知识点" }}</option>
+            <option v-for="node in practiceNodes" :key="node.id" :value="node.id">{{ node.name }}</option>
+          </select>
+        </label>
+        <label class="field"><span>题量</span>
+          <select v-model.number="practiceCount" data-testid="practice-count" :disabled="practiceBusy">
+            <option v-for="n in 5" :key="n" :value="n">{{ n }} 道</option>
+          </select>
+        </label>
+        <label class="field"><span>难度</span>
+          <select v-model="practiceDifficulty" data-testid="practice-difficulty" :disabled="practiceBusy">
+            <option value="basic">基础</option>
+            <option value="improved">提高</option>
+            <option value="comprehensive">综合</option>
+          </select>
+        </label>
+        <label class="field"><span>题型</span>
+          <select v-model="practiceType" data-testid="practice-type" :disabled="practiceBusy">
+            <option value="single_choice">单选</option>
+            <option value="fill_blank">填空</option>
+            <option value="calculation">计算</option>
+            <option value="proof">证明</option>
+            <option value="subjective">主观</option>
+          </select>
+        </label>
+      </div>
+      <label class="field field--title"><span>额外要求（可选）</span>
+        <textarea v-model="practiceRequirement" maxlength="4000" rows="2" placeholder="例如：只考资料里的方法，不照抄原题" data-testid="practice-requirement" />
+      </label>
+      <div class="practice-actions">
+        <button type="submit" class="primary" :disabled="practiceBusy || !practiceKpId" data-testid="practice-submit">{{ practiceBusy ? "生成中…" : "生成练习" }}</button>
+        <button type="button" :disabled="practiceBusy" @click="closePractice">取消</button>
+      </div>
+      <p v-if="practiceError" class="form-error" data-testid="practice-error">{{ practiceError }}</p>
+      <p v-if="practiceResult?.question_ids.length" class="notice" data-testid="practice-result">
+        已生成 {{ practiceResult.question_ids.length }} 道个人练习题并保存到个人题库；不会进入公共题库或今日卷。
+      </p>
+    </form>
     <p v-if="actionNotice && !showDetail" class="notice" data-testid="action-notice">{{ actionNotice }}</p>
     <p v-if="actionError && !selectedFile" class="form-error" data-testid="action-error">{{ actionError }}</p>
 
@@ -473,7 +603,8 @@ onBeforeUnmount(() => {
       <section class="list-panel">
         <header class="panel-head materials-list-head"><div><h2>资料</h2><span>{{ searchQuery ? `匹配 ${list.data.value?.total ?? 0} 份` : `${list.data.value?.total ?? 0} 份` }}</span></div><input v-model="searchInput" type="search" maxlength="120" aria-label="搜索资料名称" placeholder="搜索资料名称" data-testid="material-search" /></header>
         <p v-if="list.state.value === 'success' && !materials.length" class="state state--empty" data-testid="materials-empty">{{ searchQuery ? "没有找到匹配的资料，试试其他名称。" : "还没有资料，点击右上角“添加资料”选择文件。" }}</p>
-        <ul v-else class="material-list" data-testid="material-list">
+        <div v-if="materials.length" class="material-table-labels" aria-hidden="true"><span>资料名称</span><span>解析 / 索引状态</span><span>添加时间</span><span>操作</span></div>
+        <ul v-if="materials.length" class="material-list" data-testid="material-list">
           <li v-for="item in visibleMaterials" :key="item.id">
             <div class="material-item" :class="{ 'material-item--selected': item.id === selectedId && showDetail }">
               <span class="file-glyph" aria-hidden="true"></span>
@@ -483,9 +614,12 @@ onBeforeUnmount(() => {
                 <span v-if="item.last_error_code" class="material-item__error">{{ materialErrorLabel(item.last_error_code) }}</span>
               </span>
               <span class="material-status" :class="materialStatusClass(item.status)">{{ materialStatusLabel(item.status) }}</span>
+              <time class="material-date" :datetime="item.created_at">{{ formatTime(item.created_at) }}</time>
+              <div class="material-row-actions">
               <button type="button" class="material-view" :aria-label="'查看' + item.title" @click="openMaterial(item.id)">阅读 <span aria-hidden="true">→</span></button>
               <div v-if="item.status==='ready'&&item.source_type==='user'" class="material-qa-entry">
                 <button type="button" :disabled="materialSearch?.busy || materialSearch?.loading" @click="materialSearch?.useFile(item.id)" :aria-label="'针对'+item.title+'提问'">提问</button>
+              </div>
               </div>
             </div>
           </li>
@@ -517,6 +651,11 @@ onBeforeUnmount(() => {
         </header>
         <div class="detail-summary">
           <span class="material-status" :class="materialStatusClass(selected.status)" data-testid="detail-status">{{ materialStatusLabel(selected.status) }}</span>
+        </div>
+
+        <div class="reader-guide">
+          <StudyMascot pose="magnify" />
+          <span>沿着章节读下去；问答里的引用可以回到这份资料的原文。</span>
         </div>
 
         <section class="reader-body" data-testid="material-reader">

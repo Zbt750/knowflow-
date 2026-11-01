@@ -38,7 +38,9 @@ def test_public_view_only_exposes_identity():
 def test_transcribed_real_source_never_enables_automatic_grading():
     data = exam_payload()
     q = data["questions"][0]
-    q.update(content_status="source_transcribed", answer_reviewed_by=None, grading_method=None)
+    q.update(content_status="source_transcribed", answer_reviewed_by=None, answer_reviewed_on=None,
+        answer_provenance="legacy_transcription", answer_reliability="unverified",
+        answer_review_method=None, answer_review_note=None, answer_reference=None, grading_method=None)
     assert QuestionPack.model_validate(data).questions[0].content_status == "source_transcribed"
     q["grading_method"] = "single_choice"
     with pytest.raises(ValidationError):
@@ -47,7 +49,9 @@ def test_transcribed_real_source_never_enables_automatic_grading():
 
 def test_transcribed_does_not_admit_generated_originals():
     data = payload()
-    data["questions"][0].update(content_status="source_transcribed", answer_reviewed_by=None, grading_method=None)
+    data["questions"][0].update(content_status="source_transcribed", answer_reviewed_by=None,
+        answer_reviewed_on=None, answer_provenance="legacy_transcription", answer_reliability="unverified",
+        answer_review_method=None, answer_review_note=None, answer_reference=None, grading_method=None)
     with pytest.raises(ValidationError):
         QuestionPack.model_validate(data)
 

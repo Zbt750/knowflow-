@@ -230,7 +230,9 @@ def test_demo_retirement_preserves_externally_revised_question(session_factory, 
 def test_unreviewed_transcription_is_not_eligible_on_reference_only_mapping(client, session_factory):
     data = pack_data()
     q = data["questions"][0]
-    q.update(content_status="source_transcribed", answer_reviewed_by=None, grading_method=None)
+    q.update(content_status="source_transcribed", answer_reviewed_by=None, answer_reviewed_on=None,
+        answer_provenance="legacy_transcription", answer_reliability="unverified",
+        answer_review_method=None, answer_review_note=None, answer_reference=None, grading_method=None)
     q["source"].update(kind="user_provided", source_type="exam", year=2026,
         question_number=8, subject="数学二", paper_title="合成隔离测试原卷", edition="回忆版")
     with session_factory() as db:

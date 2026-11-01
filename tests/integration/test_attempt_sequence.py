@@ -1,4 +1,4 @@
-"""P2 immutable retries, stale requests and fresh-item retests against test PG."""
+"""单次提交锁定、历史幂等及新的练习实例复测；仅使用隔离PG。"""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from uuid import UUID, uuid4
@@ -29,38 +29,34 @@ def test_wrong_then_self_corrected_keeps_both_without_confirming(client, item_id
     first = send(client, item_id, "3", "sequence-first-wrong").json()
     assert first["attempt_number"] == 1 and first["sequence_category"] == "incorrect"
     corrected = send(client, item_id, "1", "sequence-self-correct", first["attempt_id"])
-    assert corrected.status_code == 200
-    second = corrected.json()
-    assert second["result"] == "right" and second["sequence_category"] == "self_corrected"
-    assert second["attempt_number"] == 2 and second["previous_attempt_id"] == first["attempt_id"]
-    assert not second["assisted"] and second["effective_confirmation_count"] == 0
-    assert second["mastery_reason"] == "corrected_answer_recorded"
-    assert not second["can_retry"]
+    assert corrected.status_code == 409
+    assert corrected.json()["error"]["code"] == "practice_item_already_assessed"
+    assert not first["can_retry"]
     history = get_history(client, item_id)
-    assert history["items"] == [first, second]
-    # Fake clock makes timestamps identical; latest must still be the second row.
+    assert history["items"] == [first]
     plan = client.get("/api/plans/today").json()
-    assert plan["items"][0]["answer_submission"] == second
+    assert plan["items"][0]["answer_submission"] == first
     assert plan["completed_count"] == 1 and plan["total_count"] == 1
     with session_factory() as db:
         state = db.get(KpState, db.get(PracticeItem, UUID(item_id)).kp_id)
         assert len(state.pending_review_question_ids) == 1 and not state.evidence_window
-        assert db.scalar(select(func.count()).select_from(QuestionAttempt)) == 2
-        assert db.scalar(select(func.count()).select_from(LearningEvent)) == 2
+        assert db.scalar(select(func.count()).select_from(QuestionAttempt)) == 1
+        assert db.scalar(select(func.count()).select_from(LearningEvent)) == 1
 
 
 @pytest.mark.parametrize("exposure", ["solution", "process_review"])
 def test_observed_assistance_is_sticky_during_retry(client, item_id, session_factory, clock, exposure):
     first = send(client, item_id, "2", "sequence-assisted-first").json()
+    fresh, _ = next_item(session_factory, item_id, "2026-01-02")
     if exposure == "solution":
-        assert client.post(f"/api/practice-items/{item_id}/answer-reveal").status_code == 200
+        assert client.post(f"/api/practice-items/{fresh}/answer-reveal").status_code == 200
     else:
         with session_factory.begin() as db:
-            item = db.get(PracticeItem, UUID(item_id))
+            item = db.get(PracticeItem, UUID(fresh))
             db.add(LearningEvent(kp_id=item.kp_id, source_id=item.id, event_type="ai_process_reviewed",
                 evidence_level="weak", payload={"feedback": "ISOLATED SIMULATED REVIEW"},
                 occurred_at=clock.now, idempotency_key="sequence-review-fixture"))
-    second = send(client, item_id, "1", "sequence-assisted-second", first["attempt_id"]).json()
+    second = send(client, fresh, "1", "sequence-assisted-second").json()
     assert second["assisted"] and second["assistance_level"] == exposure
     assert second["sequence_category"] == ("solution_assisted_correct" if exposure == "solution" else "process_review_assisted_correct")
     assert second["effective_confirmation_count"] == 0
@@ -70,13 +66,13 @@ def test_observed_assistance_is_sticky_during_retry(client, item_id, session_fac
 def test_retry_receipt_replays_and_conflicting_or_stale_requests_fail(client, item_id):
     first = send(client, item_id, "3", "sequence-idem-first").json()
     second = send(client, item_id, "4", "sequence-idem-second", first["attempt_id"])
-    assert second.status_code == 200
-    assert send(client, item_id, "4", "sequence-idem-second", first["attempt_id"]).json() == second.json()
-    assert send(client, item_id, "4", "sequence-idem-second").status_code == 409
+    assert second.status_code == 409
+    assert send(client, item_id, "3", "sequence-idem-first").json() == first
+    assert send(client, item_id, "4", "sequence-idem-first").status_code == 409
     assert send(client, item_id, "5", "sequence-idem-second", first["attempt_id"]).status_code == 409
     stale = send(client, item_id, "1", "sequence-idem-stale", first["attempt_id"])
-    assert stale.status_code == 409 and stale.json()["error"]["code"] == "answer_attempt_conflict"
-    assert len(get_history(client, item_id)["items"]) == 2
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "practice_item_already_assessed"
+    assert len(get_history(client, item_id)["items"]) == 1
 
 
 def test_first_attempt_and_success_cannot_be_forged_into_retry(client, item_id):
@@ -85,25 +81,34 @@ def test_first_attempt_and_success_cannot_be_forged_into_retry(client, item_id):
     assert first["sequence_category"] == "first_independent_correct"
     assert first["effective_confirmation_count"] == 1
     denied = send(client, item_id, "1", "sequence-repeat-right", first["attempt_id"])
-    assert denied.status_code == 409 and denied.json()["error"]["code"] == "answer_retry_not_allowed"
+    assert denied.status_code == 409 and denied.json()["error"]["code"] == "practice_item_already_assessed"
     assert len(get_history(client, item_id)["items"]) == 1
 
 
 def test_blank_then_correct_is_not_relabelled_as_first_try(client, item_id):
     blank = send(client, item_id, "", "sequence-blank-first").json()
     assert blank["sequence_category"] == "unable_to_grade"
-    corrected = send(client, item_id, "1", "sequence-blank-second", blank["attempt_id"]).json()
-    assert corrected["sequence_category"] == "correct_after_ungraded"
-    assert corrected["effective_confirmation_count"] == 0
+    corrected = send(client, item_id, "1", "sequence-blank-second", blank["attempt_id"])
+    assert corrected.status_code == 409
+    assert get_history(client, item_id)["items"] == [blank]
 
 
-def test_changed_question_blocks_retry_but_keeps_old_receipt(client, item_id, session_factory):
+def test_question_edit_does_not_change_an_existing_item_retry_or_old_receipt(client, item_id, session_factory):
     first = send(client, item_id, "3", "sequence-version-first").json()
     with session_factory.begin() as db:
-        db.get(PracticeItem, UUID(item_id)).question.stem += "（内容修订）"
-    denied = send(client, item_id, "1", "sequence-version-second", first["attempt_id"])
-    assert denied.status_code == 409 and denied.json()["error"]["code"] == "answer_question_changed"
+        item = db.get(PracticeItem, UUID(item_id))
+        bound_version_id = item.question_version_id
+        bound_stem = item.question_version.stem
+        bound_answer = item.question_version.correct_answer
+        item.question.stem += "（内容修订）"
+    retried = send(client, item_id, bound_answer, "sequence-version-second", first["attempt_id"])
+    assert retried.status_code == 409
     assert send(client, item_id, "3", "sequence-version-first").json() == first
+    with session_factory() as db:
+        item = db.get(PracticeItem, UUID(item_id))
+        assert item.question_version_id == bound_version_id
+        assert item.question_version.stem == bound_stem
+        assert item.question.current_version_id != bound_version_id
     assert get_history(client, item_id)["items"] == [first]
 
 
@@ -119,11 +124,11 @@ def next_item(factory, item, study_date):
 
 def test_fresh_retest_reads_history_and_deduplicates_confirmation(client, item_id, session_factory, clock):
     first = send(client, item_id, "2", "sequence-fresh-wrong").json()
-    send(client, item_id, "1", "sequence-fresh-corrected", first["attempt_id"])
+    assert send(client, item_id, "1", "sequence-fresh-corrected", first["attempt_id"]).status_code == 409
     clock.now += timedelta(days=1)
     item, kp = next_item(session_factory, item_id, "2026-01-02")
     success = send(client, item, "1", "sequence-fresh-retest").json()
-    assert success["sequence_category"] == "repeat_correct" and success["effective_confirmation_count"] == 1
+    assert success["sequence_category"] == "independent_retest_correct" and success["effective_confirmation_count"] == 1
     clock.now += timedelta(days=1)
     third, _ = next_item(session_factory, item_id, "2026-01-03")
     repeated = send(client, third, "1", "sequence-fresh-repeat").json()
@@ -131,7 +136,7 @@ def test_fresh_retest_reads_history_and_deduplicates_confirmation(client, item_i
     tools = TaskTools(session_factory, budget_minutes=10, now=clock.now, goal="洛必达")
     nodes = tools.execute("search_knowledge", {"query": "洛必达"})["nodes"]
     state = tools.execute("get_learning_state", {"kp_ids": [n["kp_id"] for n in nodes]})["states"][0]
-    assert {a["sequence_category"] for a in state["recent_attempts"]} >= {"self_corrected", "incorrect", "repeat_correct"}
+    assert {a["sequence_category"] for a in state["recent_attempts"]} >= {"independent_retest_correct", "incorrect", "repeat_correct"}
     assert all("raw_answer" not in a for a in state["recent_attempts"])
     with session_factory() as db:
         assert db.get(KpState, UUID(kp)).state != "mastered"
@@ -163,16 +168,40 @@ def test_legacy_history_is_not_invented_as_first_independent_success(client, ite
     assert get_history(client, item_id)["legacy_self_report_count"] == 1
 
 
+def test_new_tracked_retest_recoverable_after_legacy_history(client, item_id, session_factory, clock):
+    with session_factory.begin() as db:
+        old = db.get(PracticeItem, UUID(item_id))
+        legacy = QuestionAttempt(practice_item_id=old.id, question_id=old.question_id, kp_id=old.kp_id,
+            objective_result="unknown", submitted_at=clock.now, idempotency_key="legacy-boundary-record",
+            result_state="stuck", reason_code="legacy_unknown")
+        db.add(legacy); db.flush(); legacy_id = legacy.id
+    clock.now += timedelta(days=1)
+    first_item, _ = next_item(session_factory, item_id, "2026-01-02")
+    first = send(client, first_item, "1", "boundary-first-current").json()
+    assert first["sequence_category"] == "independent_correct_history_unknown"
+    assert first["effective_confirmation_count"] == 0
+    clock.now += timedelta(days=1)
+    second_item, _ = next_item(session_factory, item_id, "2026-01-03")
+    second = send(client, second_item, "1", "boundary-future-retest").json()
+    assert second["sequence_category"] == "repeat_correct"
+    assert second["effective_confirmation_count"] == 1
+    with session_factory() as db:
+        untouched = db.get(QuestionAttempt, legacy_id)
+        assert untouched.objective_result == "unknown" and untouched.grading_evidence is None
+        first_receipt = db.get(QuestionAttempt, UUID(first["attempt_id"]))
+        assert first_receipt.grading_evidence["history_unknown"] is True
+        later = db.get(QuestionAttempt, UUID(second["attempt_id"]))
+        assert later.grading_evidence["prior_history_excluded_count"] == 1
+
+
 def test_retry_limit_and_final_receipt_idempotency(client, item_id):
-    latest = None
-    for i in range(20):
-        response = send(client, item_id, "99", f"sequence-limit-{i:03}", latest)
-        assert response.status_code == 200
-        latest = response.json()["attempt_id"]
+    response = send(client, item_id, "99", "sequence-limit-000")
+    assert response.status_code == 200
+    latest = response.json()["attempt_id"]
     assert not response.json()["can_retry"]
     denied = send(client, item_id, "1", "sequence-limit-overflow", latest)
-    assert denied.status_code == 409 and denied.json()["error"]["code"] == "answer_attempt_limit"
-    assert len(get_history(client, item_id)["items"]) == 20
+    assert denied.status_code == 409 and denied.json()["error"]["code"] == "practice_item_already_assessed"
+    assert len(get_history(client, item_id)["items"]) == 1
     assert send(client, item_id, "99", "sequence-limit-000").status_code == 200
 
 
@@ -189,8 +218,8 @@ def test_two_concurrent_corrections_save_only_one_successor(client, item_id, ses
                 db.rollback(); return str(exc)
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(correction, range(2)))
-    assert sorted(map(str, results)) == ["2", "answer_attempt_conflict"]
-    assert len(get_history(client, item_id)["items"]) == 2
+    assert results == ["practice_item_already_assessed", "practice_item_already_assessed"]
+    assert len(get_history(client, item_id)["items"]) == 1
 
 
 def test_history_endpoint_is_readonly_and_missing_item_has_envelope(client, item_id, session_factory):

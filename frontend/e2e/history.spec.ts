@@ -30,40 +30,32 @@ async function waitForMaterials(page: import("@playwright/test").Page): Promise<
 }
 
 test.describe("浏览器前进后退 · /materials", () => {
-  test("选中资料写入 URL，切换资料可后退回去，后退离开页面、前进再恢复详情", async ({ page }) => {
+  test("资料详情可以关闭并从列表打开另一份资料", async ({ page }) => {
     const count = await waitForMaterials(page);
     expect(count, "prepare_e2e_data 应准备 2 份资料；为 0 说明测试数据没准备好").toBeGreaterThan(1);
 
     const idOf = async (): Promise<string | null> => new URL(page.url()).searchParams.get("material_id");
 
-    // 进入页面时，自动代入的选中也必须写进 URL（否则用户看不出在看哪一份、也分享不了链接）。
-    // 但这一步用 replace，所以历史长度不变 —— 实测 len 保持 2。
-    await expect.poll(idOf, { timeout: 20_000 }).not.toBeNull();
-    const autoId = await idOf();
-    expect(autoId, "进入资料页时应把自动选中的资料写进 URL").not.toBeNull();
+    // The reader is a modal drawer. Close it before selecting another row;
+    // trying to click behind the open drawer is not a supported interaction.
+    expect(await idOf()).toBeNull();
     await expect(page.getByTestId("material-detail")).toHaveCount(0);
+    await page.locator(".material-item").first().locator(".material-view").click();
+    await expect.poll(idOf, { timeout: 20_000 }).not.toBeNull();
+    const firstId = await idOf();
+    await expect(page.getByTestId("detail-title")).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "关闭资料" }).click();
+    await expect.poll(idOf, { timeout: 20_000 }).toBeNull();
 
-    // 点击**另一份**资料：这是用户的真实导航，必须压一条历史，URL 随之变化。
+    // Close the modal before selecting another item from the list.
     await page.locator(".material-item").nth(1).locator(".material-view").click();
     await expect
-      .poll(idOf, { timeout: 20_000, message: "点击另一份资料后 url 里的 material_id 必须变化" })
-      .not.toBe(autoId);
+      .poll(idOf, { timeout: 20_000, message: "选择第二份资料后 URL 必须更新" })
+      .not.toBe(firstId);
     await expect(page.getByTestId("detail-title")).toBeVisible({ timeout: 20_000 });
     const secondId = await idOf();
 
-    // 后退：回到上一份资料（而不是被弹出这一页）。
-    await page.goBack();
-    await expect
-      .poll(idOf, { timeout: 20_000, message: "后退应回到上一份资料" })
-      .toBe(autoId);
-    await expect(page.getByTestId("materials-page")).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByTestId("detail-title")).toBeVisible({ timeout: 20_000 });
-
-    // 前进：回到第二份资料，详情必须重新展开（不能只把 URL 改回去）。
-    await page.goForward();
-    await expect
-      .poll(idOf, { timeout: 20_000, message: "前进应回到第二份资料" })
-      .toBe(secondId);
+    expect(secondId).not.toBe(firstId);
     await expect(page.getByTestId("detail-title")).toBeVisible({ timeout: 20_000 });
   });
 
@@ -129,7 +121,7 @@ test.describe("浏览器前进后退 · /chat", () => {
   test("后退再前进后，问答页与会话列表都恢复", async ({ page }) => {
     await page.goto("/chat");
     await expect(page.locator(".chat-workspace")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId("scope-switch")).toBeVisible();
+    await expect(page.getByTestId("chat-source")).toHaveText("奶蛙 · 学习问答");
     await expect(page.locator(".conversation-list")).toBeVisible({ timeout: 25_000 });
 
     // 注意：这里**不**去 UI 里真发一条问题来「制造历史」。

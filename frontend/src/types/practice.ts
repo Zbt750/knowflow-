@@ -38,17 +38,22 @@ export interface RecommendationItem {
   next_step: string;
   /** 还缺哪些题型；页面据此提示「预计加入」。 */
   missing_types: string[];
+  requires_graduation_set_confirmation: boolean;
 }
 
 /** 练习卷里的一道题；响应中不含答案与解析。 */
 export interface PlanItemView {
+  retry_source_id?: string | null;
+  answer_revealed_at?: string | null;
   question_source?: QuestionSourceView | null;
   question_trust?: QuestionTrustView | null;
   id: string;
   ordinal: number;
+  display_number?: number | null;
   kp_id: string;
   kp_name: string;
   question_id: string | null;
+  question_version_id?: string | null;
   question_type: string;
   /** 学习角色：basic / typical / variant / comprehensive。 */
   question_role: string | null;
@@ -91,6 +96,8 @@ export interface TodayActive {
   completed_count: number;
   total_count: number;
   items: PlanItemView[];
+  /** 已保存的单独重练中明确判错的实例；不计入今日卷题数。 */
+  retry_wrong_items?: PlanItemView[];
   focus_item_id: string | null;
   summary_kps: TodaySummaryKp[];
   /** 卷子构成：题型 → 道数。 */
@@ -127,6 +134,9 @@ export interface PracticeItemAnswer {
 }
 
 export interface KnowledgeNodeView {
+  home_allocatable_question_count?: number | null;
+  post_graduation?: import('../api/types').components['schemas']['PostGraduationPractice'] | null;
+  post_graduation_review_count?:number;
   online_question_count?: number;
   practice_eligible_question_count?: number;
   blocked_active_question_count?: number;
@@ -158,6 +168,8 @@ export interface KnowledgeNodeView {
   next_step: string | null;
   /** 该叶子自己的策略快照。 */
   required_question_types: Record<string, number>;
+  policy_version?: number;
+  graduation_set_binding_status?: "unstarted" | "legacy_history_unbound" | "bound";
   excluded_question_types: string[];
   required_skill_tags: string[];
   children: KnowledgeNodeView[];
@@ -180,6 +192,7 @@ export interface KnowledgeLessonResponse {
 }
 
 export interface NodeQuestionView {
+  bank_scope?: 'public'|'personal';
   options?: Record<string, string> | null;
   question_source?: QuestionSourceView | null;
   trust: QuestionTrustView;
@@ -219,6 +232,7 @@ export interface NodeAttemptView {
 }
 
 export interface KnowledgeNodeDetail {
+  personal_questions?: {count:number;latest:{batch_id:string;count:number;message:string;created_at:string}|null};
   node: KnowledgeNodeView;
   questions: NodeQuestionView[];
   attempts: NodeAttemptView[];

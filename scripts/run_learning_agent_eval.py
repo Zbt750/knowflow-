@@ -22,7 +22,7 @@ CASES = [
     {"id": "insufficient", "goal": "洛必达只做计算题，只有5分钟，不要安排知识复习，题目不足请说明", "budget": 5, "query": "洛必达", "expected": "needs_info", "type": "calculation"},
     {"id": "reference_only", "goal": "合成原卷节点只有来源引用，帮我找在线题，没有题干就告诉我不要编题", "budget": 30, "query": "合成原卷", "expected": "needs_info"},
     {"id": "unknown_scope", "goal": "帮我复习量子计算考试的超导量子纠错，库里没有就先问我", "budget": 30, "query": "量子纠错", "expected": "needs_info"},
-    {"id": "manual_program", "goal": "合成程序节点只做程序题，纸上写，不运行代码，说明需要人工对照", "budget": 20, "query": "合成程序", "expected": "ready", "type": "program"},
+    {"id": "manual_program", "goal": "合成程序节点只做程序题，纸上写，不运行代码，说明需要人工对照", "budget": 20, "query": "合成程序", "expected": "needs_info", "type": "program"},
     {"id": "existing_today", "goal": "洛必达只做选择题，今日已有的题不要重复加，没有新题就说明", "budget": 15, "query": "洛必达", "expected": "needs_info", "type": "single_choice", "existing": True},
     {"id": "modify", "goal": "洛必达比较弱，安排适合的题", "budget": 30, "query": "洛必达", "expected": "ready", "modify": "少一点，只做填空题，不超过5分钟", "modified_budget": 5, "type": "fill_blank"},
 ]
@@ -92,9 +92,13 @@ def isolated_factory(url):
 def seed_fixture(factory, *, existing=False):
     from backend.models.learning import KnowledgePoint, Question, ExamQuestionReference, DailyPlan, PracticeItem, KpState, QuestionAttempt
     from backend.models.base import Base
-    from sqlalchemy import delete
+    from sqlalchemy import delete,update,text
     now = datetime.now(timezone.utc)
     with factory.begin() as db:
+        database,schema,marker=db.execute(text("SELECT current_database(),current_schema(),obj_description(oid,'pg_namespace') FROM pg_namespace WHERE nspname=current_schema()")).one()
+        if not database.endswith("_test") or not re.fullmatch(r"agent_eval_[0-9a-f]{16}",schema) or marker!="kaoyan-agent-eval:v1":
+            raise ValueError("Protocol fixture requires its own marked isolated schema")
+        db.execute(update(Question).values(answer_verification_event_id=None))
         for table in reversed(Base.metadata.sorted_tables):
             db.execute(delete(table))
         root = KnowledgePoint(code="eval.root", name="合成评测范围", subject="数学二", is_assessable=False)
@@ -112,15 +116,17 @@ def seed_fixture(factory, *, existing=False):
             if entry["kp_code"] != math.code:
                 continue
             q = Question(kp_id=math.id, **{k: v for k, v in entry.items() if k != "kp_code"})
-            q.question_provenance = "ai_generated_practice"
-            q.content_trust = "verified"
-            q.content_reviewed_by = "protocol-test-fixture"
-            q.content_reviewed_at = now
-            q.source_status = "not_applicable"
-            q.answer_provenance = "ai_generated"
-            q.answer_reliability = "model_generated"
-            db.add(q); questions.append(q)
-        program_q = Question(kp_id=program.id, question_type="program", stem="合成例题：用伪代码查找数组最大值，并说明时间复杂度。", explanation="人工检查边界与循环。", estimated_minutes=12)
+            if q.grading_config is None and q.question_type == "calculation":
+                q.grading_config = {"verified": True, "method": "numeric_final", "version": "PROTOCOL_TEST_FIXTURE"}
+            from tests.integration.test_learning_loop import mark_isolated_question_trusted
+            mark_isolated_question_trusted(q, db=db)
+            questions.append(q)
+        program_q = Question(kp_id=program.id, question_type="program", stem="合成例题：用伪代码查找数组最大值，并说明时间复杂度。",
+            correct_answer="初始化当前最大值，遍历其余元素并比较更新，时间复杂度O(n)。",
+            explanation="人工检查边界与循环。",estimated_minutes=12,
+            question_provenance="trusted_practice",source_status="not_applicable",content_trust="verified",
+            content_reviewed_by="isolated-synthetic-test-fixture",content_reviewed_at=now,
+            answer_provenance="ai_generated",answer_reliability="model_generated")
         db.add(program_q)
         db.add(ExamQuestionReference(subject="数学二", year=2020, question_number=1, knowledge_point_id=ref.id, topic_label="合成来源", source_topic_label="合成来源", local_folder="synthetic", source_note="合成索引，无原卷题干"))
         db.add(KpState(kp_id=math.id, state="stuck", assessment_basis="objective_v1", node_self_grade="mastered"))
@@ -143,15 +149,16 @@ class ProtocolProvider:
     def __init__(self, case): self.case, self.turn, self.nodes = case, 0, []
 
     def tool_turn(self, messages, tools, *, timeout):
+        from backend.services.learning_task_context import expand_records
         self.turn += 1
         if self.turn == 1:
             actions = [("search_knowledge", {"query": self.case["query"]})]
         elif self.turn == 2:
-            self.nodes = [n["kp_id"] for n in json.loads(messages[-1]["content"])["nodes"]]
+            self.nodes = [n["kp_id"] for n in expand_records(json.loads(messages[-1]["content"]))["nodes"]]
             if not self.nodes: return self.final(True)
             actions = [("get_learning_state", {"kp_ids": self.nodes}), ("find_questions", {"kp_ids": self.nodes})]
         elif self.turn == 3:
-            qs = json.loads(messages[-1]["content"])["questions"]
+            qs = expand_records(json.loads(messages[-1]["content"]))["questions"]
             qs = [q for q in qs if not q["in_today_plan"] and q["minutes"] <= self.case.get("modified_budget", self.case["budget"])
                   and (not self.case.get("type") or q["question_type"] == self.case["type"])
                   and (not self.case.get("basic") or q["difficulty"] == "basic")]

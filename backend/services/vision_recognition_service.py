@@ -7,6 +7,7 @@ import time
 import warnings
 
 import httpx
+from backend.chat import http_clients as model_http
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
@@ -78,13 +79,14 @@ async def recognize_work(settings, data):
         timeout = min(effective.llm_timeout_seconds, 60)
         started = time.monotonic()
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-                response = await asyncio.wait_for(client.post(
-                    effective.llm_base_url.rstrip("/") + "/chat/completions",
-                    headers={"Authorization": "Bearer " + effective.llm_api_key.get_secret_value()},
-                    json=payload), timeout=timeout)
-                response.raise_for_status()
-                body = response.json()
+            with model_http.call_purpose('vision','vision_recognition'):
+                async with model_http.async_client(timeout=timeout, follow_redirects=False) as client:
+                    response = await asyncio.wait_for(client.post(
+                        effective.llm_base_url.rstrip("/") + "/chat/completions",
+                        headers={"Authorization": "Bearer " + effective.llm_api_key.get_secret_value()},
+                        json=payload), timeout=timeout)
+                    response.raise_for_status()
+                    body = response.json()
             if not isinstance(body, dict):
                 raise AppError("vision_output_incomplete")
             choices = body.get("choices")

@@ -44,6 +44,24 @@ class Capture(FakeProvider):
         return super().complete(messages, attempt=attempt)
 
 
+def test_r5_document_record_question_stays_in_document_retrieval(session_factory,stack,monkeypatch):
+    seed_personal(session_factory,stack);sid=UUID(daily_session(session_factory)['session_id'])
+    def forbidden(*args,**kwargs):
+        raise AssertionError('document question must not execute a bank query')
+    monkeypatch.setattr('backend.services.assistant_data_queries.execute_read_only_data_query',forbidden)
+    class Request:
+        async def is_disconnected(self):return False
+    async def run():
+        return b''.join([f async for f in stream_answer(session_factory,request=Request(),session_id=sid,
+            question='这份讲义里有没有写 2021 年真题的第几题？如果没有，请直接说没有记录。',
+            stack=stack,provider=FakeProvider('没有记录。'))]).decode()
+    frames=asyncio.run(run())
+    assert '系统题库（不是资料文档检索）' not in frames and 'event: done' in frames
+    with session_factory() as db:
+        saved=db.scalar(select(ChatMessage).where(ChatMessage.session_id==sid,ChatMessage.role=='assistant'))
+        assert (saved.metadata_ or {}).get('answer_source')!='business_data'
+
+
 def test_default_all_ready_user_materials_without_selection(session_factory, stack):
     rows = seed_personal(session_factory, stack)
     session = daily_session(session_factory)
@@ -180,6 +198,60 @@ def test_stream_does_not_leak_unsupported_background(session_factory,stack):
             question="相似是什么？",stack=stack,provider=FakeProvider("相似条件 [C1]。\n## 通用知识参考\nEXTERNAL_SECRET"))]).decode()
     frames=asyncio.run(run())
     assert "EXTERNAL_SECRET" not in frames and "通用知识参考" not in frames and "相似条件" in frames
+
+
+def test_material_search_api_routes_question_bank_query_to_read_only_business_data(session_factory, stack, monkeypatch):
+    """The actual Materials-page SSE endpoint can query the bank without RAG/model fallback."""
+    from datetime import datetime, timezone
+    from sqlalchemy import func
+    from backend.models.learning import Question, QuestionVersion, PracticeItem, QuestionAttempt
+    from backend.services.question_availability import question_availability
+    from backend.services.material_search_service import daily_session, update_scope
+
+    rows = seed_personal(session_factory, stack)
+    session_view = daily_session(session_factory)
+    sid = UUID(session_view["session_id"])
+    update_scope(session_factory, session_id=sid, scope_mode="selected",
+        selected_file_ids=[rows[0][0]])
+    with session_factory() as db:
+        expected = question_availability(db, now=datetime.now(timezone.utc), limit=0)["practice_eligible_count"]
+        before = {model.__name__: db.scalar(select(func.count()).select_from(model))
+            for model in (Question, QuestionVersion, PracticeItem, QuestionAttempt)}
+
+    class NoModelProvider:
+        model = "forbidden-model-call"
+        def __getattr__(self, name):
+            raise AssertionError(f"business data query must not touch provider.{name}")
+
+    from backend.api.routes import chat as chat_route
+    monkeypatch.setattr(chat_route, "_DeferredProvider", lambda settings: NoModelProvider())
+    from backend.app import create_app
+    from backend.config import get_settings
+    app = create_app()
+    app.state.session_factory = session_factory
+    app.state.settings = get_settings()
+    app.state.instance_lock_lost = False
+    app.state.retrieval_stack = stack
+    response = TestClient(app).post(
+        f"/api/chat/sessions/{sid}/answers:stream",
+        json={"question": "系统题库里有多少道可练题？"})
+
+    assert response.status_code == 200
+    assert "数据来源：系统题库（不是资料文档检索）。" in response.text
+    assert f"全部科目范围内有 {expected} 道符合当前可练资格" in response.text
+    assert '"citations": []' in response.text
+    assert '"model_called": false' in response.text
+    with session_factory() as db:
+        assistant = db.scalar(select(ChatMessage).where(
+            ChatMessage.session_id == sid, ChatMessage.role == "assistant")
+            .order_by(ChatMessage.seq.desc()))
+        assert assistant.status == "completed"
+        assert assistant.metadata_["answer_source"] == "business_data"
+        assert assistant.metadata_["read_only_data_query"]["query_type"] == "inventory"
+        assert assistant.metadata_["model_called"] is False
+        assert assistant.metadata_["writes"] is False
+        assert before == {model.__name__: db.scalar(select(func.count()).select_from(model))
+            for model in (Question, QuestionVersion, PracticeItem, QuestionAttempt)}
 
 
 def test_api_daily_scope_and_history_visibility(session_factory,stack):

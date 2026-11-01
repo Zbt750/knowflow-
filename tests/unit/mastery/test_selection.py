@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from uuid import UUID
 
 import pytest
 
@@ -83,6 +84,36 @@ def test_budget_minutes_has_three_levels_and_safe_default() -> None:
     assert budget_minutes(TimeBudget.DEEP.value) == 120
     # 未知预算按标准处理，绝不返回 0（否则一道题都选不出来）。
     assert budget_minutes("unknown") == 90
+
+
+def test_v3_equal_learning_gain_does_not_starve_long_questions():
+    candidates = [cand(str(UUID(int=n+1)), question_type="single_choice", minutes=3) for n in range(20)]
+    candidates.append(cand(str(UUID(int=99)), question_type="calculation", minutes=15))
+    policy = MasteryPolicy(policy_version=3, graduation_question_ids=tuple(q.question_id for q in candidates),
+        graduation_set_version=1)
+    result = select_questions(policy, (), candidates, limit=5)
+    assert len(result.items) == 5
+    assert any(q.question_type == "calculation" for q in result.items)
+    assert result.total_minutes <= result.budget
+
+
+def test_v3_variety_does_not_invent_unavailable_or_out_of_scope_types():
+    candidates = [cand(str(UUID(int=n+1)), question_type="single_choice", minutes=3) for n in range(8)]
+    policy = MasteryPolicy(policy_version=3, graduation_question_ids=tuple(q.question_id for q in candidates),
+        graduation_set_version=1)
+    result = select_questions(policy, (), candidates, limit=5)
+    assert len(result.items) == 5
+    assert {q.question_type for q in result.items} == {"single_choice"}
+
+
+def test_v3_oversized_long_question_does_not_block_remaining_short_work():
+    large, short = str(UUID(int=101)), str(UUID(int=102))
+    candidates = [cand(large, question_type="calculation", minutes=100),
+        cand(short, question_type="single_choice", minutes=3)]
+    policy = MasteryPolicy(policy_version=3, graduation_question_ids=(large, short), graduation_set_version=1)
+    result = select_questions(policy, (), candidates, budget="light")
+    assert [q.question_id for q in result.items] == [short]
+    assert result.skipped_over_budget == 1
 
 
 def test_excluded_question_types_are_never_selected() -> None:

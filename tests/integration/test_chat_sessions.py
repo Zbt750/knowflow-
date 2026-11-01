@@ -67,9 +67,10 @@ def client(app) -> Iterator[TestClient]:
         yield test_client
 
 
-def make_session(session_factory, *, mode: str, title: str = "新对话") -> UUID:
+def make_session(session_factory, *, mode: str, title: str = "新对话", purpose: str = "qa") -> UUID:
     with session_factory.begin() as db:
-        row = ChatSession(title=title, mode=mode)
+        row = ChatSession(title=title, mode=mode, purpose=purpose,
+            study_date="2026-01-01" if purpose == "study" else None)
         db.add(row)
         db.flush()
         return row.id
@@ -174,6 +175,85 @@ def test_response_fields_are_unchanged(client, session_factory) -> None:
     assert set(items[0]) == EXPECTED_FIELDS | {"purpose", "material_scope_ids"}
     assert items[0]["title"] == "我的资料问题"
     assert items[0]["mode"] == "user"
+
+
+def test_purpose_filters_history_detail_and_delete_scope(client, session_factory) -> None:
+    qa = make_session(session_factory, mode="builtin", title="问答历史", purpose="qa")
+    study = make_session(session_factory, mode="builtin", title="今日学习首页", purpose="study")
+    add_user_message(session_factory, session_id=qa, content="普通知识问题")
+    add_user_message(session_factory, session_id=study, content="系统推荐与预览")
+
+    assert listed_ids(client, mode="builtin", purpose="qa") == [str(qa)]
+    assert listed_ids(client, mode="builtin", purpose="study") == [str(study)]
+    assert client.get(f"/api/chat/sessions/{study}/messages", params={"purpose": "qa"}).status_code == 404
+    assert client.get(f"/api/chat/sessions/{qa}/messages", params={"purpose": "study"}).status_code == 404
+    study_assistant = client.post(f"/api/chat/sessions/{study}/assistant:stream", params={"purpose": "qa"},
+        json={"question": "确认"})
+    qa_assistant = client.post(f"/api/chat/sessions/{qa}/assistant:stream", params={"purpose": "study"},
+        json={"question": "确认"})
+    assert study_assistant.status_code == 404
+    assert qa_assistant.status_code == 404
+    study_answer = client.post(f"/api/chat/sessions/{study}/answers:stream", params={"purpose": "qa"},
+        json={"question": "洛必达法则是什么？"})
+    assert study_answer.status_code == 404
+    assert client.patch(f"/api/chat/sessions/{study}", params={"purpose": "qa"},
+                        json={"title": "不应改名"}).status_code == 404
+    assert client.delete(f"/api/chat/sessions/{study}", params={"purpose": "qa"}).status_code == 404
+    assert client.get(f"/api/chat/sessions/{study}/messages", params={"purpose": "study"}).status_code == 200
+    with session_factory() as db:
+        assert db.get(ChatSession, study) is not None
+        assert db.get(ChatSession, qa) is not None
+    assert client.delete(f"/api/chat/sessions/{qa}", params={"purpose": "qa"}).status_code == 204
+    assert client.get(f"/api/chat/sessions/{study}/messages", params={"purpose": "study"}).status_code == 200
+    assert client.get(f"/api/chat/sessions/{qa}/messages", params={"purpose": "qa"}).status_code == 404
+
+
+def test_positively_tagged_legacy_home_session_is_recovered_as_study_only(client, session_factory) -> None:
+    legacy = make_session(session_factory, mode="builtin", title="线性代数安排90分钟", purpose="qa")
+    add_user_message(session_factory, session_id=legacy, content="线性代数安排90分钟")
+    with session_factory.begin() as db:
+        db.add(ChatMessage(session_id=legacy, role="assistant", status="completed",
+            content="试卷预览：18道，预计90分钟。尚未创建今日卷。",
+            metadata_={"home_recommendation": True}))
+
+    qa_rows = client.get("/api/chat/sessions", params={"mode": "builtin", "purpose": "qa"})
+    study_rows = client.get("/api/chat/sessions", params={"mode": "builtin", "purpose": "study"})
+    assert legacy not in {row["session_id"] for row in qa_rows.json()}
+    recovered = next(row for row in study_rows.json() if row["session_id"] == str(legacy))
+    assert recovered["purpose"] == "study"
+    assert client.get(f"/api/chat/sessions/{legacy}/messages", params={"purpose": "qa"}).status_code == 404
+    history = client.get(f"/api/chat/sessions/{legacy}/messages", params={"purpose": "study"})
+    assert history.status_code == 200
+    assert any("试卷预览" in row["content"] for row in history.json())
+    assert client.delete(f"/api/chat/sessions/{legacy}", params={"purpose": "qa"}).status_code == 404
+    with session_factory() as db:
+        assert db.get(ChatSession, legacy) is not None
+
+
+def test_ambiguous_legacy_mixed_session_is_not_assigned_to_either_module(client, session_factory) -> None:
+    """保留混合归属的原始记录，但不把它猜成问答或首页学习历史。"""
+    legacy = make_session(session_factory, mode="builtin", title="归属待核验", purpose="qa")
+    add_user_message(session_factory, session_id=legacy, content="首页安排请求")
+    with session_factory.begin() as db:
+        db.add_all([
+            ChatMessage(session_id=legacy, role="assistant", status="completed",
+                content="首页试卷预览", metadata_={"home_recommendation": True}),
+            ChatMessage(session_id=legacy, role="assistant", status="completed",
+                content="无法确认来源的旧回答", metadata_={}),
+        ])
+
+    qa_rows = listed_ids(client, mode="builtin", purpose="qa")
+    study_rows = listed_ids(client, mode="builtin", purpose="study")
+    assert str(legacy) not in qa_rows
+    assert str(legacy) not in study_rows
+    assert client.get(f"/api/chat/sessions/{legacy}/messages", params={"purpose": "qa"}).status_code == 404
+    assert client.get(f"/api/chat/sessions/{legacy}/messages", params={"purpose": "study"}).status_code == 404
+
+    # 不确定归属只限制模块展示与访问，不删除或改写已有会话、消息。
+    with session_factory() as db:
+        assert db.get(ChatSession, legacy) is not None
+        rows = db.scalars(select(ChatMessage).where(ChatMessage.session_id == legacy).order_by(ChatMessage.seq)).all()
+        assert [row.content for row in rows] == ["首页安排请求", "首页试卷预览", "无法确认来源的旧回答"]
 
 
 def test_sessions_are_ordered_by_most_recently_updated(client, session_factory) -> None:

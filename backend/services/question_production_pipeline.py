@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
 import re
+from functools import lru_cache
 from typing import Any, Iterable
 
 from backend.services.question_eligibility import question_eligibility
@@ -17,6 +18,12 @@ from backend.services.question_attestation import has_current_source_attestation
 
 
 PIPELINE_VERSION = "question-production-assessment-v1"
+
+
+def assess_question_quality(question, node, **kwargs):
+    """Reusable shadow entrance; preserves existing eligibility/import contracts."""
+    from backend.services.question_quality import audit_question
+    return audit_question(question, node, **kwargs)
 _PLACEHOLDER = re.compile(r"待补|待核对|占位|TODO|未识别|未逐字|OCR|\ufffd|（图略）", re.I)
 _FIGURE_CUE = re.compile(r"如图|见图|下图|图\s*\d|表\s*\d|如下表|图中")
 _FIGURE_MARKER = re.compile(r"!\[[^\]]*\]\([^)]+\)|<img\b|\\includegraphics", re.I)
@@ -24,7 +31,7 @@ _FIGURE_MARKER = re.compile(r"!\[[^\]]*\]\([^)]+\)|<img\b|\\includegraphics", re
 
 def _norm_subject(value: Any) -> str | None:
     raw = str(value or "").strip().lower().replace(" ", "")
-    if raw in {"408", "计算机408", "计算机学科专业基础"}:
+    if raw in {"408", "计算机408", "计算机学科专业基础", "计算机学科专业基础（408）"}:
         return "408"
     if raw in {"math2", "数学二", "数学", "考研数学"}:
         return "math2"
@@ -112,7 +119,7 @@ class ContentValidationResult:
     completeness: str
     content_hash: str
     detected_issues: tuple[str, ...]
-    validation_method: str = "deterministic_structure_checks_v1"
+    validation_method: str = "deterministic_structure_checks_v2"
 
     def public_dict(self) -> dict:
         result = asdict(self)
@@ -120,9 +127,99 @@ class ContentValidationResult:
         return result
 
 
+def _has_embedded_markdown_table(stem: str) -> bool:
+    """Require a nonempty header, separator and at least one matching data row."""
+    lines=stem.splitlines()
+    def cells(line):
+        value=line.strip()
+        return [cell.strip() for cell in value.strip('|').split('|')] if '|' in value else []
+    for i in range(1,len(lines)-1):
+        header,separator,row=cells(lines[i-1]),cells(lines[i]),cells(lines[i+1])
+        if (len(header)>=2 and len(header)==len(separator)==len(row)
+                and all(header) and all(row)
+                and all(re.fullmatch(r':?-{3,}:?',cell) for cell in separator)):
+            return True
+    return False
+
+
+def duplicate_choice_option_pairs(options: Any) -> list[tuple[str, str]]:
+    # Only pure, bounded string inputs are shared across requests. A changed
+    # option/order is a new key; no question trust or learner facts are cached.
+    if (isinstance(options, dict) and len(options) <= 16
+            and all(type(k) is str and type(v) is str and len(k) <= 80 and len(v) <= 2048
+                    for k, v in options.items())):
+        return list(_cached_option_pairs(tuple(options.items())))
+    return _compute_option_pairs(options)
+
+
+@lru_cache(maxsize=2048)
+def _cached_option_pairs(items):
+    return tuple(_compute_option_pairs(dict(items)))
+
+
+@lru_cache(maxsize=8192)
+def _constant_options_equal(left, right):
+    # Values come from the bounded constant parser and are immutable SymPy
+    # expressions. Reuse the same exact comparison, never an approximation.
+    from sympy import simplify
+    difference = left - right
+    # Exact SymPy facts, never float tolerance: avoid a general simplify when
+    # subtraction/assumptions already prove zero or nonzero for constants.
+    if difference.is_zero is not None:
+        return difference.is_zero is True
+    return simplify(difference) == 0
+
+
+def _compute_option_pairs(options: Any) -> list[tuple[str, str]]:
+    """Detect only provable identical/equal choices; preserve mathematical syntax.
+
+    NFKC and case folding are intentionally excluded because superscripts and
+    variable case can change the meaning of a mathematical expression.
+    Unsupported text or expressions are never guessed equal.
+    """
+    if not isinstance(options, dict):
+        return []
+    from backend.services.constant_expression import constant_expression
+    entries = list(options.items())
+    normalised = {}
+    constants = {}
+    for key, value in entries:
+        if not isinstance(value, str):
+            continue
+        text = re.sub(r"\\(?:left|right|displaystyle)", "", value)
+        text = re.sub(r"\s+", "", text).strip("$").replace("−", "-")
+        normalised[key] = text
+        constants[key] = constant_expression(value)
+    pairs = []
+    for index, (left, _) in enumerate(entries):
+        for right, _ in entries[index + 1:]:
+            literal_equal = bool(normalised.get(left)) and normalised.get(left) == normalised.get(right)
+            a, b = constants.get(left), constants.get(right)
+            numeric_equal = a is not None and b is not None and _constant_options_equal(a, b)
+            if literal_equal or numeric_equal:
+                pairs.append((str(left), str(right)))
+    return pairs
+
+
+def _has_embedded_text_diagram(stem: str) -> bool:
+    """Accept an explicitly represented topology, not a bare reference to a PDF.
+
+    This is only a structural check. Fidelity and sufficient conditions remain
+    part of the content-bound source review and independent solution evidence.
+    """
+    for block in re.findall(r"```(?:text)?\s*\n([\s\S]*?)```", stem):
+        if len(block.strip()) >= 40 and block.count("-->") + block.count("→") >= 2:
+            return True
+    return False
+
+
 def validate_question_content(question: Any, *, is_reference_only: bool = False,
                               duplicate_content: bool = False) -> ContentValidationResult:
-    """Catch structural failures only; a clean result still needs human review."""
+    """Catch structural failures; a clean result needs use-specific quality evidence.
+
+    Human six-aspect signoff is one strict upgrade path, not a universal ordinary
+    practice prerequisite. Teaching assessment lives in question_quality.
+    """
     issues: list[str] = []
     stem = str(getattr(question, "stem", "") or "").strip()
     answer = str(getattr(question, "correct_answer", "") or "").strip()
@@ -147,13 +244,18 @@ def validate_question_content(question: Any, *, is_reference_only: bool = False,
             if (len(valid_keys) != len(options)
                     or any(not isinstance(value, str) or not value.strip() for value in options.values())):
                 issues.append("choice_options_invalid_or_duplicate")
+            if duplicate_choice_option_pairs(options):
+                issues.append("choice_options_duplicate_content")
             # Keep the answer-reference check independent: malformed/duplicate
             # options should not hide a second, useful defect from the audit.
             if answer.upper() not in valid_keys:
                 issues.append("choice_answer_not_in_options")
     elif options is not None:
         issues.append("non_choice_has_options")
-    if _FIGURE_CUE.search(stem) and not _FIGURE_MARKER.search(stem):
+    figure_cue=re.search(r"如图|见图|下图|图\s*\d|图中|如原卷(?:网络)?图",stem)
+    table_cue=re.search(r"表\s*\d|如下表",stem)
+    if ((figure_cue and not _FIGURE_MARKER.search(stem) and not _has_embedded_text_diagram(stem))
+            or (table_cue and not _FIGURE_MARKER.search(stem) and not _has_embedded_markdown_table(stem))):
         issues.append("figure_or_table_asset_not_embedded")
     if duplicate_content:
         issues.append("duplicate_question_content")
@@ -163,7 +265,7 @@ def validate_question_content(question: Any, *, is_reference_only: bool = False,
     digest = content_digest(question)
     hard = {"reference_only_mapping_not_online_question", "stem_missing_or_too_short",
             "placeholder_or_ocr_marker", "answer_missing", "choice_options_missing",
-            "choice_options_invalid_or_duplicate", "choice_answer_not_in_options",
+            "choice_options_invalid_or_duplicate", "choice_options_duplicate_content", "choice_answer_not_in_options",
             "non_choice_has_options", "figure_or_table_asset_not_embedded",
             "duplicate_question_content", "stem_may_be_title_or_summary_only"}
     structural = not any(issue in hard for issue in issues)
@@ -188,7 +290,8 @@ def assess_production_question(question: Any, node: Any | None, *, identity: Ide
     source_reliability = getattr(question, "answer_reliability", "unknown") or "unknown"
     source_provenance = getattr(question, "answer_provenance", "unknown") or "unknown"
     answer_state = (
-        "VERIFIED_REFERENCE" if source_provenance == "verified_reference" and source_reliability == "verified"
+        "VERIFIED_REFERENCE" if source_provenance == "verified_reference" and eligibility.answer_verification_current
+        else "HUMAN_VERIFIED" if source_provenance == "human_verified" and eligibility.answer_verification_current
         else "AI_GENERATED" if source_provenance == "ai_generated"
         else "UNRESOLVED"
     )

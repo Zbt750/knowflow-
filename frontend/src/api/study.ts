@@ -1,4 +1,10 @@
 import { api } from "./client";
+export function createPracticeRetry(id: string, key: string): Promise<import('../types/practice').PlanItemView> {
+  return api.post(`/api/practice-items/${id}/retries`, {idempotency_key:key});
+}
+export function fetchPracticeRetry(id: string): Promise<import('../types/practice').PlanItemView> {
+  return api.get(`/api/practice-items/${id}/retry`);
+}
 import type { components } from "./types";
 export type ProcessReview = components["schemas"]["ProcessReviewResponse"];
 export interface ProcessReviewState {
@@ -32,13 +38,20 @@ import type {
 export function fetchToday(): Promise<TodayResponse> {
   return api.get<TodayResponse>("/api/plans/today");
 }
+export function fetchTodayRecommendations(): Promise<import('../types/practice').TodaySetup> {
+  return api.get('/api/plans/today/recommendations');
+}
 
 export function generateTodayPlan(
   selectedKpIds: string[],
   budget: string = "standard",
+  confirmLegacySetTransitionIds: string[] = [],
+  extendExisting = false,
 ): Promise<TodayResponse> {
   return api.post<TodayResponse>("/api/plans/today/generate", {
     selected_kp_ids: selectedKpIds,
+    ...(extendExisting ? { extend_existing: true } : {}),
+    confirm_legacy_set_transition_ids: confirmLegacySetTransitionIds,
     // 时间预算决定卷子长度；后端按每道题的 estimated_minutes 裁剪。
     budget,
   });
@@ -93,12 +106,12 @@ export function submitSelfAssessment(
   });
 }
 
-export function fetchKnowledgeTree(): Promise<KnowledgeTreeResponse> {
-  return api.get<KnowledgeTreeResponse>("/api/knowledge/tree");
+export function fetchKnowledgeTree(signal?: AbortSignal): Promise<KnowledgeTreeResponse> {
+  return api.get<KnowledgeTreeResponse>("/api/knowledge/tree", signal);
 }
 
-export function fetchKnowledgeNode(kpId: string): Promise<KnowledgeNodeDetail> {
-  return api.get<KnowledgeNodeDetail>(`/api/knowledge/${kpId}`);
+export function fetchKnowledgeNode(kpId: string, signal?: AbortSignal): Promise<KnowledgeNodeDetail> {
+  return api.get<KnowledgeNodeDetail>(`/api/knowledge/${kpId}`, signal);
 }
 
 export function fetchKnowledgeLesson(code: string): Promise<KnowledgeLessonResponse> {

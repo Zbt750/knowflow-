@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { E2E_PREFIX, expect, test, userMaterials } from "./fixtures";
 
 /**
- * 资料页端到端测试：走真实浏览器 + 真实后端 + 真实模型。
+ * 资料页端到端测试：真实浏览器、后端、索引；问答使用隔离离线Provider。
  *
  * 覆盖「上传 → 后台索引 → 可检索 → 检索命中原文 → 删除」整条链路。
  * 用真实文件（仓库自带的讲义），不使用任何前端假数据。
@@ -193,63 +193,19 @@ test.describe("资料库页面", () => {
     const materialId = await uploadLecture(page);
     const testTitle = await page.getByTestId("detail-title").innerText();
 
-    // 第一步：走真实问答，让这份资料**带上真实引用**。
-    // 不造引用就等于没测 —— 这正是原有用例的失误。
-    await page.goto("/chat");
-    await expect(page.locator(".chat-workspace")).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId("scope-switch")).toBeVisible();
-
-    // 切到「我的资料」范围：刚上传的资料属于 user 来源。
-    const switcher = page.getByTestId("scope-switch");
-    if (!(await switcher.innerText()).includes("当前：我的资料")) await switcher.click();
-    await expect(switcher).toContainText("当前：我的资料");
-
-    const setupNotice = page.locator(".chat-notice--setup");
-    const send = page.locator(".send-button");
-    if (await setupNotice.isVisible().catch(() => false)) {
-      // 我的资料范围下没有可检索资料 —— 环境问题，不是产品缺陷。
-      test.skip(true, "该范围没有可检索资料，无法制造引用");
-    }
-
-    // 先填问题再判断按钮可用性。
-    // **这里踩过一次坑**：空输入框时发送按钮本来就该禁用（canSend 要求问题非空），
-    // 据此跳过会让用例**永远**跳过、永远测不到目标路径 —— 与被测缺陷同样的毛病：
-    // 看起来在测，其实没测到。所以判据必须是「填了真实问题之后是否仍禁用」。
-    await page.locator("#chat-question").fill("洛必达法则的适用条件是什么？");
-    await expect
-      .poll(async () => await send.isEnabled(), {
-        timeout: 20_000,
-        message: "填了问题后发送按钮仍不可用（该范围没有可检索资料）",
-      })
-      .toBe(true)
-      .catch(() => {
-        test.skip(true, "填了问题后发送按钮仍不可用，无法制造引用");
-      });
-
-    await page.locator(".icon-button").click();
-    await expect(page.getByTestId("chat-source")).toBeVisible();
-    await page.locator("#chat-question").fill("洛必达法则的适用条件是什么？");
-    await send.click();
-
-    const citation = page.locator(".message-row--assistant").last().locator(".citation-box");
-    const errorNotice = page.locator(".chat-notice--error");
-    await expect
-      .poll(
-        async () =>
-          (await citation.count()) > 0 || (await errorNotice.isVisible().catch(() => false)),
-        { timeout: 150_000, message: "assistant 必须给出引用或明确错误，不能停在生成中" },
-      )
-      .toBe(true);
-
-    if (await errorNotice.isVisible().catch(() => false)) {
-      // 上游模型不可用时拿不到引用 —— 这条用例在语义上是「跳过」而不是失败，
-      // 但要**如实说明跳过的原因**，不能静默通过。
-      test.skip(
-        true,
-        `上游模型不可用，无法制造引用：${(await errorNotice.innerText()).slice(0, 60)}`,
-      );
-    }
-    await expect(citation).toHaveCount(1);
+    // Current private RAG lives in Materials and uses a scoped daily session.
+    // The isolated OfflineProvider generates the response; retrieval and
+    // citation persistence run through the real backend and local embedding.
+    await page.getByRole("button", { name: "关闭资料" }).click();
+    await page.getByRole("button", { name: "针对" + testTitle + "提问", exact: true }).click();
+    await expect(page.getByTestId("material-search-scope")).toContainText("已限定 1 份");
+    await page.getByTestId("material-search-question").fill("洛必达法则的适用条件是什么？");
+    await page.getByTestId("material-search-send").click();
+    const reply = page.getByTestId("material-search-assistant").last();
+    await expect(reply.locator("details")).toBeVisible({ timeout: 60000 });
+    await reply.locator("details > summary").click();
+    await expect(reply.locator("details")).toContainText(testTitle);
+    await expect(page.getByTestId("material-search-error")).toHaveCount(0);
 
     // 第二步：回到这份资料并删除它 —— 此刻它**真的被引用过**。
     await page.goto(`/materials?material_id=${materialId}`);

@@ -1,0 +1,14 @@
+const {createRequire}=require('node:module'),path=require('node:path'),fs=require('node:fs');
+const {chromium,expect}=createRequire(path.resolve('frontend/package.json'))('@playwright/test');
+const out=process.env.BLIND_OUT,base=process.env.BLIND_FRONT_URL,part=path.join(out,'remaining-scenes'),results=[];let id='READONLY';
+const write=(n,v)=>fs.writeFileSync(path.join(part,n),JSON.stringify(v,null,2));
+async function main(){const browser=await chromium.launch({channel:'chrome',headless:true});const ctx=await browser.newContext({baseURL:base,viewport:{width:1366,height:900},storageState:path.join(out,'browser-state.json')});const page=await ctx.newPage();page.setDefaultTimeout(30000);
+ const ledger=()=>JSON.parse(fs.readFileSync(path.join(part,'provider-ledger.json'),'utf8'));
+ async function run(name,fn){id=name;await ctx.setExtraHTTPHeaders({'x-blind-case':id});const n=ledger().requests.length;write('next-case.json',{id,total_before:4+n});try{results.push({id,status:'EXECUTED',...await fn(),physical_requests:ledger().requests.length-n});}catch(e){results.push({id,status:'BLOCKED',error:e.message,physical_requests:ledger().requests.length-n});}await page.screenshot({path:path.join(part,id+'.png'),fullPage:true}).catch(()=>{});write('extra-results.json',results);}
+ async function send(box,button,text){if(ledger().stop_reason||ledger().requests.length>=6)throw Error('shared budget stopped');await box.fill(text);await expect(button).toBeEnabled();const w=page.waitForResponse(r=>/\/(assistant|answers)(:|%3A)stream$/.test(r.url())&&r.request().method()==='POST');await button.click();const r=await w,sse=await r.text();await expect(box).toBeEnabled({timeout:150000});return {input:text,sse};}
+ try{
+ await page.goto('/materials');await expect(page.getByTestId('material-search-question')).toBeEnabled();
+ await run('RAG-MATH',async()=>{const r=await send(page.getByTestId('material-search-question'),page.getByTestId('material-search-send'),'按照这份笔记，求和从n等于1开始的nx的n次方为什么等于x除以一减x的平方？请写出求导后的式子，并说明适用范围。');return {...r,visible:await page.getByTestId('material-search-assistant').last().innerText(),katex:await page.getByTestId('material-search-assistant').last().locator('.katex').count()};});
+ await run('AGENT-INVENTORY',async()=>{if(ledger().requests.length>4)return {status:'NOT_RUN',reason:'reserve 2 physical calls'};await page.goto('/study');await expect(page.getByTestId('study-active')).toBeVisible();await page.getByTestId('study-frog-launcher').click();const r=await send(page.getByTestId('task-goal'),page.getByTestId('task-arrange'),'我现在可以练习的题目有哪些？哪些是历年真题，哪些是原创题？只查询实际库存，不要生成新题或创建计划。');return {...r,visible:await page.getByTestId('learning-task-panel').innerText()};});
+ }finally{write('extra-results.json',results);await browser.close();}}
+main().catch(e=>{write('extra-fatal.json',{error:e.stack});process.exitCode=1;});

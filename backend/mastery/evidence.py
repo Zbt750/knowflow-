@@ -14,6 +14,7 @@ def classify_objective_evidence(
     confidence: str | None = None,
     sequence_category: str | None = None,
     evidence_reliability: str | None = None,
+    confirmation_facts: dict[str, object] | None = None,
 ) -> Evidence:
     if occurred_at.tzinfo is None:
         raise ValueError("occurred_at 必须带时区")
@@ -29,7 +30,7 @@ def classify_objective_evidence(
     elif verified and result == "wrong":
         level = EvidenceLevel.FAILURE
     return Evidence(question_id, level, is_variant, occurred_at,
-                    source, question_type, skill_tags, reliability)
+                    source, question_type, skill_tags, reliability, confirmation_facts)
 
 
 def classify_evidence(

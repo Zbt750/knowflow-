@@ -5,10 +5,23 @@ conditions, units, matrices and multi-part answers are deliberately excluded.
 """
 import ast
 import re
+from functools import lru_cache
 from sympy import E, pi, Rational, sqrt, simplify
 
 
 def constant_expression(text: str | None):
+    if type(text) is str and len(text) <= 160:
+        return _cached_constant_expression(text)
+    return _compute_constant_expression(text)
+
+
+@lru_cache(maxsize=8192)
+def _cached_constant_expression(text: str):
+    # SymPy expressions are immutable; the full input string is the cache key.
+    return _compute_constant_expression(text)
+
+
+def _compute_constant_expression(text: str | None):
     if not text or len(text) > 160:
         return None
     value = text.strip().replace("−", "-").replace("π", "pi")
@@ -47,7 +60,7 @@ def constant_expression(text: str | None):
                 if not literal or not re.fullmatch(r"(?:\d+(?:\.\d*)?|\.\d+)", literal) or len(literal) > 12:
                     raise ValueError
                 return Rational(literal)
-            if isinstance(node, ast.Name) and node.id in {"pi", "e"}:
+            if isinstance(node, ast.Name) and node.id in {"pi", "e", "E"}:
                 return pi if node.id == "pi" else E
             if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
                 result = build(node.operand)

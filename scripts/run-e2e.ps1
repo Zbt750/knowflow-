@@ -28,7 +28,9 @@
 param(
     [int]$Port = 8001,
     [string]$OutputDir = "",
-    [string]$TestFile = ""
+    [string]$TestFile = "",
+    [string]$TestDatabaseUrl = $env:TEST_DATABASE_URL,
+    [string]$OwnedTestPort = $env:KAOYAN_OWNED_TEST_PORT
 )
 
 $ErrorActionPreference = "Continue"
@@ -64,8 +66,15 @@ while ($outputAncestor) {
 
 # 隔离环境：测试库 + 测试专用存储目录，绝不碰开发库与 storage/chroma。
 $env:APP_ENV = "test"
-$env:TEST_DATABASE_URL = "postgresql+psycopg://kaoyan:kaoyan_dev_pw@127.0.0.1:5433/kaoyan_test"
-$env:DATABASE_URL = "postgresql+psycopg://kaoyan:kaoyan_dev_pw@127.0.0.1:5433/kaoyan"
+$env:TEST_DATABASE_URL = $TestDatabaseUrl
+$env:DATABASE_URL = $TestDatabaseUrl
+$env:KAOYAN_OWNED_TEST_PORT = $OwnedTestPort
+# Keep the fixture client and Vite proxy on the same owned backend. Otherwise
+# -Port starts a healthy server while Playwright silently probes default 8001.
+$env:E2E_API_BASE = "http://127.0.0.1:$Port"
+$env:VITE_API_PROXY_TARGET = $env:E2E_API_BASE
+python scripts/prepare_e2e_learning.py --validate-only
+if ($LASTEXITCODE -ne 0) { throw 'Explicit owned isolated test database required; no fallback to 5433' }
 # 每轮独立的派生索引，避免复用损坏的 HNSW 段；保留旧运行便于诊断。
 $runStorage = Join-Path $root ("storage/e2e-test/" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runStorage -Force | Out-Null
@@ -106,6 +115,10 @@ function Stop-TestBackend {
 }
 
 Write-Host "=== 1/4 准备 e2e 数据（会彻底清空测试向量库）===" -ForegroundColor Cyan
+python -m alembic upgrade head
+if ($LASTEXITCODE -ne 0) { exit 1 }
+python scripts/prepare_e2e_learning.py --apply
+if ($LASTEXITCODE -ne 0) { exit 1 }
 python scripts\prepare_e2e_data.py --apply
 if ($LASTEXITCODE -ne 0) {
     Write-Host "数据准备未通过（脚本自带「向量条数 == 分块数」自检）。" -ForegroundColor Red

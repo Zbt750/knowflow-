@@ -1,6 +1,7 @@
 import { api } from "./client";
 import type { components } from "./types";
-export type LearningTask = components["schemas"]["TaskView"];
+import type { TodayAppendResult } from './todayAppend';
+export type LearningTask = Omit<components["schemas"]["TaskView"], 'append_result'> & { append_result?: TodayAppendResult | null };
 export const createLearningTask = (goal: string, budget: number, sessionId: string | null, currentPlanId: string | null) =>
   api.post<LearningTask>("/api/learning-tasks", { goal, budget_minutes: budget, session_id: sessionId, current_plan_id: currentPlanId, mode: "builtin" });
 export const fetchLearningTask = (id: string) => api.get<LearningTask>(`/api/learning-tasks/${id}`);

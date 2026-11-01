@@ -10,13 +10,18 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    Uuid,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import event, inspect
+from sqlalchemy.orm import Session as OrmSession
 
 from backend.models.base import Base, TimestampMixin
 from backend.models.types import uuid_pk
@@ -73,14 +78,35 @@ class KpState(Base, TimestampMixin):
     # 透明基础确认数：节点整体自评「我已掌握」时写 2。
     manual_credit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     manual_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 用户首次开始该知识点时固定的 v3 题集版本。None 表示尚未开始，跟随当前发布版。
+    graduation_set_version: Mapped[int | None] = mapped_column(Integer)
+    # Legacy activity without a trustworthy frozen set remains visible, but
+    # cannot count toward v3 until the learner explicitly starts that set.
+    graduation_set_binding_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unstarted", server_default="unstarted"
+    )
+    graduation_set_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Question(Base, TimestampMixin):
     """一道题只属于一个叶子知识点；题干不复制进练习记录。"""
 
     __tablename__ = "questions"
+    __table_args__ = (
+        CheckConstraint("bank_scope IN ('public','personal')", name="question_bank_scope_valid"),
+        Index("ix_questions_bank_node_visible", "bank_scope", "kp_id", "is_hidden"),
+        ForeignKeyConstraint(
+            ["id", "current_version_id"],
+            ["question_versions.question_id", "question_versions.id"],
+            name="fk_question_current_version_pair",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
 
     id: Mapped[UUID] = uuid_pk()
+    current_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     kp_id: Mapped[UUID] = mapped_column(
         ForeignKey("knowledge_points.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -106,6 +132,10 @@ class Question(Base, TimestampMixin):
     kp: Mapped[KnowledgePoint] = relationship()
     variant_group: Mapped[str | None] = mapped_column(String(120))
     difficulty: Mapped[str] = mapped_column(String(30), nullable=False, default="basic")
+    # Ownership is not provenance or certification. Existing rows remain public.
+    bank_scope: Mapped[str] = mapped_column(String(20), nullable=False, default="public", server_default="public")
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    generation_batch_id: Mapped[UUID | None] = mapped_column(ForeignKey("personal_generation_batches.id", ondelete="RESTRICT"), index=True)
     # Trust is deliberately separate from grading_config.provenance, which is a
     # legacy import snapshot and must not silently certify old questions.
     question_provenance: Mapped[str] = mapped_column(String(40), nullable=False, default="legacy_unknown")
@@ -117,12 +147,100 @@ class Question(Base, TimestampMixin):
     content_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     answer_reviewed_by: Mapped[str | None] = mapped_column(String(100))
     answer_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # This pointer is the only active answer-verification stamp. Eligibility
+    # also checks its content hash, so edits cannot inherit stale trust.
+    answer_verification_event_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("question_answer_verification_events.id", ondelete="RESTRICT",
+                   use_alter=True, name="fk_question_current_answer_verification"),
+        nullable=True,
+    )
+    current_answer_verification: Mapped["QuestionAnswerVerificationEvent | None"] = relationship(
+        foreign_keys=[answer_verification_event_id], post_update=True,
+    )
+    auto_review_event_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("question_auto_review_events.id", ondelete="RESTRICT",
+                   use_alter=True, name="fk_question_current_auto_review"),
+        nullable=True,
+    )
+    current_auto_review: Mapped["QuestionAutoReviewEvent | None"] = relationship(
+        foreign_keys=[auto_review_event_id], post_update=True,
+    )
     # Machine/source attestation is separate from human review and binds only
     # the imported question stem/options/type/mapping, not its answer key.
     source_attestation_key: Mapped[str | None] = mapped_column(String(64))
     source_attestation_sha256: Mapped[str | None] = mapped_column(String(64))
     answer_attestation_key: Mapped[str | None] = mapped_column(String(64))
     answer_attestation_sha256: Mapped[str | None] = mapped_column(String(64))
+    current_version: Mapped["QuestionVersion | None"] = relationship(
+        "QuestionVersion",
+        primaryjoin="and_(Question.id == QuestionVersion.question_id, "
+                    "Question.current_version_id == QuestionVersion.id)",
+        foreign_keys="[Question.id, Question.current_version_id]",
+        post_update=True,
+    )
+    versions: Mapped[list["QuestionVersion"]] = relationship(
+        foreign_keys="QuestionVersion.question_id", back_populates="question",
+        order_by="QuestionVersion.version_number", cascade="save-update, merge",
+    )
+
+
+class QuestionVersion(Base):
+    """Append-only, hash-bound snapshot of the question content and trust state."""
+
+    __tablename__ = "question_versions"
+    __table_args__ = (
+        UniqueConstraint("question_id", "version_number", name="uq_question_version_number"),
+        UniqueConstraint("question_id", "id", name="uq_question_version_question_id_id"),
+        CheckConstraint("version_number >= 1", name="question_version_number_positive"),
+        CheckConstraint("length(content_hash) = 64", name="question_version_hash_length"),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    question_id: Mapped[UUID] = mapped_column(
+        ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    kp_id: Mapped[UUID] = mapped_column(ForeignKey("knowledge_points.id", ondelete="RESTRICT"), nullable=False)
+    question_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    grading_mode: Mapped[str] = mapped_column(String(30), nullable=False)
+    grading_config: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    stem: Mapped[str] = mapped_column(Text, nullable=False)
+    options: Mapped[list[Any] | dict[str, Any] | None] = mapped_column(JSON)
+    correct_answer: Mapped[str | None] = mapped_column(Text)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    question_role: Mapped[str] = mapped_column(String(30), nullable=False)
+    skill_tags: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    estimated_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_variant: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    variant_group: Mapped[str | None] = mapped_column(String(120))
+    difficulty: Mapped[str] = mapped_column(String(30), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    bank_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    generation_batch_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    question_provenance: Mapped[str] = mapped_column(String(40), nullable=False)
+    content_trust: Mapped[str] = mapped_column(String(30), nullable=False)
+    source_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    answer_provenance: Mapped[str] = mapped_column(String(40), nullable=False)
+    answer_reliability: Mapped[str] = mapped_column(String(40), nullable=False)
+    content_reviewed_by: Mapped[str | None] = mapped_column(String(100))
+    content_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    answer_reviewed_by: Mapped[str | None] = mapped_column(String(100))
+    answer_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    answer_verification_event_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    auto_review_event_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    source_attestation_key: Mapped[str | None] = mapped_column(String(64))
+    source_attestation_sha256: Mapped[str | None] = mapped_column(String(64))
+    answer_attestation_key: Mapped[str | None] = mapped_column(String(64))
+    answer_attestation_sha256: Mapped[str | None] = mapped_column(String(64))
+    snapshot_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    review_status: Mapped[str] = mapped_column(String(40), nullable=False, default="snapshot_only")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    question: Mapped[Question] = relationship(
+        foreign_keys=[question_id], back_populates="versions"
+    )
 
 
 class QuestionSourceAttestation(Base):
@@ -201,6 +319,102 @@ class QuestionAnswerConsistencyRun(Base):
     )
 
 
+class QuestionAnswerVerificationEvent(Base):
+    """Append-only human/reference answer verification audit record.
+
+    AI consistency runs deliberately remain a separate table and can never
+    create one of these records.
+    """
+
+    __tablename__ = "question_answer_verification_events"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_answer_verification_idempotency"),
+        CheckConstraint("event_type IN ('verified','revoked')", name="answer_verification_event_type_valid"),
+        CheckConstraint("verification_type IN ('human_verified','verified_reference')",
+                        name="answer_verification_type_valid"),
+        CheckConstraint("length(answer_sha256) = 64", name="answer_verification_hash_length"),
+        CheckConstraint("length(idempotency_key) BETWEEN 1 AND 160",
+                        name="answer_verification_idempotency_length"),
+        Index("ix_answer_verification_question_created", "question_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    question_id: Mapped[UUID] = mapped_column(
+        ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    verification_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    answer_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    verification_method: Mapped[str] = mapped_column(String(120), nullable=False)
+    verifier: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    previous_state: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    related_event_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("question_answer_verification_events.id", ondelete="RESTRICT")
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+    question: Mapped[Question] = relationship(
+        foreign_keys=[question_id], backref="answer_verification_events"
+    )
+    related_event: Mapped["QuestionAnswerVerificationEvent | None"] = relationship(
+        remote_side="QuestionAnswerVerificationEvent.id", foreign_keys=[related_event_id]
+    )
+
+
+class QuestionAutoReviewEvent(Base):
+    """Append-only machine quality decision bound to one full question snapshot.
+
+    This is intentionally distinct from human answer verification. A passing
+    event can qualify a public question for bounded objective evidence, but it
+    never records a human reviewer or changes learner graduation rules.
+    """
+
+    __tablename__ = "question_auto_review_events"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_question_auto_review_idempotency"),
+        CheckConstraint("event_type IN ('qualified','revoked')",
+                        name="question_auto_review_event_type_valid"),
+        CheckConstraint("qualification_class IN ('exam_curated','exam_variant','development_original')",
+                        name="question_auto_review_class_valid"),
+        CheckConstraint("length(question_snapshot_sha256) = 64",
+                        name="question_auto_review_snapshot_hash_length"),
+        CheckConstraint("length(answer_sha256) = 64",
+                        name="question_auto_review_answer_hash_length"),
+        CheckConstraint("length(audit_sha256) = 64",
+                        name="question_auto_review_audit_hash_length"),
+        Index("ix_question_auto_review_question_created", "question_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = uuid_pk()
+    question_id: Mapped[UUID] = mapped_column(
+        ForeignKey("questions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    qualification_class: Mapped[str] = mapped_column(String(30), nullable=False)
+    review_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    question_snapshot_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    answer_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    audit_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    audit_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    related_event_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("question_auto_review_events.id", ondelete="RESTRICT")
+    )
+    previous_state: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    question: Mapped[Question] = relationship(foreign_keys=[question_id], backref="auto_review_events")
+    related_event: Mapped["QuestionAutoReviewEvent | None"] = relationship(
+        remote_side="QuestionAutoReviewEvent.id", foreign_keys=[related_event_id]
+    )
+
+
 class ExamQuestionReference(Base, TimestampMixin):
     """历年试题的题号引用；不包含题干，不是可作答的 Question。"""
 
@@ -234,11 +448,7 @@ class ExamQuestionReference(Base, TimestampMixin):
 
 
 class KpMasteryPolicy(Base, TimestampMixin):
-    """每个可考核叶子的独立毕业策略。
-
-    毕业不再只看题目总数：还要看真实题量、必考题型、必考考法、变式题与跨天确认。
-    策略按知识点存储，因此「只考选择题」与「只考大题」的叶子可以有不同的门槛。
-    """
+    """每个可考核叶子的版本化毕业策略；v3 指向一个冻结题目集合。"""
 
     __tablename__ = "kp_mastery_policies"
     __table_args__ = (
@@ -247,6 +457,19 @@ class KpMasteryPolicy(Base, TimestampMixin):
         CheckConstraint("required_variant_count >= 0", name="kp_policy_variant_count"),
         CheckConstraint("min_day_span >= 0", name="kp_policy_day_span"),
         CheckConstraint("manual_mastered_credit >= 0", name="kp_policy_manual_credit"),
+        CheckConstraint("policy_version IN (1,2,3)", name="kp_policy_version"),
+        CheckConstraint("jsonb_typeof(required_question_origins::jsonb) = 'object'", name="kp_policy_origins_object"),
+        CheckConstraint("(policy_version = 1 AND required_question_origins::jsonb = '{}'::jsonb) OR "
+            "(policy_version = 2 AND NOT (required_question_types::jsonb ? 'external_exam')) OR "
+            "(policy_version = 3 AND required_question_origins::jsonb = '{}'::jsonb "
+            "AND NOT (required_question_types::jsonb ? 'external_exam'))",
+            name="kp_policy_origin_semantics"),
+        CheckConstraint("(policy_version IN (1,2) AND graduation_set_version = 0 "
+            "AND graduation_question_ids::jsonb = '[]'::jsonb) OR "
+            "(policy_version = 3 AND ((graduation_set_version = 0 AND graduation_question_ids::jsonb = '[]'::jsonb) OR "
+            "(graduation_set_version >= 1 AND jsonb_typeof(graduation_question_ids::jsonb) = 'array' "
+            "AND jsonb_array_length(graduation_question_ids::jsonb) BETWEEN 1 AND 200)))",
+            name="kp_policy_graduation_set_semantics"),
     )
 
     # 一个叶子至多一行策略；kp_id 同时是主键与外键。
@@ -262,6 +485,11 @@ class KpMasteryPolicy(Base, TimestampMixin):
     required_question_types: Mapped[dict[str, int]] = mapped_column(
         JSON, nullable=False, default=dict
     )
+    # Version 1 reads historical type quotas; version 2 separates provenance.
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    required_question_origins: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False, default=dict)
+    graduation_question_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    graduation_set_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 该知识点不使用的题型；推荐与组卷都不会选它们。
     excluded_question_types: Mapped[list[str]] = mapped_column(
         JSON, nullable=False, default=list
@@ -277,6 +505,35 @@ class KpMasteryPolicy(Base, TimestampMixin):
     max_evidence_window: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
     # 仅用于展示与将来扩展：说明这个策略为什么这样配置。
     note: Mapped[str | None] = mapped_column(Text)
+
+
+class KpGraduationQuestionSetVersion(Base):
+    """只追加的毕业题目集合版本记录；题库新增不会自动修改既有集合。"""
+
+    __tablename__ = "kp_graduation_question_set_versions"
+    __table_args__ = (
+        CheckConstraint("set_version >= 1", name="kp_graduation_set_version_positive"),
+        CheckConstraint("jsonb_typeof(question_ids::jsonb) = 'array'",
+            name="kp_graduation_set_question_ids_array"),
+        CheckConstraint("jsonb_array_length(question_ids::jsonb) BETWEEN 1 AND 200",
+            name="kp_graduation_set_question_ids_bounded"),
+        CheckConstraint("length(question_ids_sha256) = 64", name="kp_graduation_set_hash_length"),
+        CheckConstraint("length(trim(reason)) > 0", name="kp_graduation_set_reason_nonempty"),
+    )
+
+    kp_id: Mapped[UUID] = mapped_column(
+        ForeignKey("knowledge_points.id", ondelete="CASCADE"), primary_key=True
+    )
+    set_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    question_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    question_ids_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Ordered immutable content-version bindings parallel to question_ids.
+    question_version_ids: Mapped[list[str] | None] = mapped_column(JSON)
+    question_version_ids_sha256: Mapped[str | None] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class DailyPlan(Base, TimestampMixin):
@@ -303,19 +560,34 @@ class PracticeItem(Base, TimestampMixin):
         UniqueConstraint("plan_id", "question_id", name="practice_item_plan_question"),
         UniqueConstraint("plan_id", "exam_reference_id", name="practice_item_plan_exam_reference"),
         UniqueConstraint("plan_id", "ordinal", name="practice_item_plan_ordinal"),
+        CheckConstraint("(plan_id IS NOT NULL AND retry_source_id IS NULL AND retry_key IS NULL) OR "
+            "(plan_id IS NULL AND retry_source_id IS NOT NULL AND retry_key IS NOT NULL)", name="practice_item_plan_or_retry"),
         CheckConstraint(
             "(question_id IS NOT NULL AND exam_reference_id IS NULL) OR "
             "(question_id IS NULL AND exam_reference_id IS NOT NULL)",
             name="practice_item_exactly_one_source",
         ),
+        CheckConstraint("question_id IS NULL OR question_version_id IS NOT NULL",
+                        name="practice_item_question_requires_version"),
+        ForeignKeyConstraint(
+            ["question_id", "question_version_id"],
+            ["question_versions.question_id", "question_versions.id"],
+            name="fk_practice_item_question_version_pair",
+        ),
     )
 
     id: Mapped[UUID] = uuid_pk()
-    plan_id: Mapped[UUID] = mapped_column(
-        ForeignKey("daily_plans.id", ondelete="CASCADE"), nullable=False, index=True
+    plan_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("daily_plans.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    # Explicitly requested retries are standalone instances, never extra paper items.
+    retry_source_id: Mapped[UUID | None] = mapped_column(ForeignKey("practice_items.id"), nullable=True, index=True)
+    retry_key: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
     question_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("questions.id"), nullable=True
+    )
+    question_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("question_versions.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     exam_reference_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("exam_question_references.id"), nullable=True
@@ -329,8 +601,18 @@ class PracticeItem(Base, TimestampMixin):
     answer_revealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     question: Mapped[Question | None] = relationship()
+    question_version: Mapped[QuestionVersion | None] = relationship(foreign_keys=[question_version_id])
     exam_reference: Mapped[ExamQuestionReference | None] = relationship()
     plan: Mapped[DailyPlan] = relationship(back_populates="items")
+    attempts: Mapped[list["QuestionAttempt"]] = relationship(back_populates="practice_item")
+
+
+class PracticeRetryRequest(Base):
+    """Durable aliases when two tabs resume the same pending retry."""
+    __tablename__ = 'practice_retry_requests'
+    idempotency_key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    source_id: Mapped[UUID] = mapped_column(ForeignKey('practice_items.id', ondelete='CASCADE'), nullable=False)
+    retry_id: Mapped[UUID] = mapped_column(ForeignKey('practice_items.id', ondelete='CASCADE'), nullable=False)
 
 
 class QuestionAttempt(Base):
@@ -339,6 +621,10 @@ class QuestionAttempt(Base):
     __tablename__ = "question_attempts"
 
     id: Mapped[UUID] = uuid_pk()
+    practice_item: Mapped[PracticeItem] = relationship(
+        back_populates="attempts", foreign_keys="QuestionAttempt.practice_item_id"
+    )
+    question_version: Mapped[QuestionVersion | None] = relationship(foreign_keys="QuestionAttempt.question_version_id")
     practice_item_id: Mapped[UUID] = mapped_column(
         ForeignKey("practice_items.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -348,11 +634,21 @@ class QuestionAttempt(Base):
             "(question_id IS NULL AND exam_reference_id IS NOT NULL)",
             name="question_attempt_exactly_one_source",
         ),
+        CheckConstraint("question_id IS NULL OR question_version_id IS NOT NULL",
+                        name="question_attempt_question_requires_version"),
         Index("ix_question_attempts_exam_reference_id", "exam_reference_id"),
+        ForeignKeyConstraint(
+            ["question_id", "question_version_id"],
+            ["question_versions.question_id", "question_versions.id"],
+            name="fk_attempt_question_version_pair",
+        ),
     )
 
     question_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("questions.id"), nullable=True, index=True
+    )
+    question_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("question_versions.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     exam_reference_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("exam_question_references.id"), nullable=True
@@ -387,8 +683,18 @@ class LearningEvent(Base):
     )
     # 无外键：事件可能引用题目、计划或节点自评，来源类型随 event_type 变化。
     source_id: Mapped[UUID | None] = mapped_column()
+    question_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("question_versions.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     evidence_level: Mapped[str | None] = mapped_column(String(30))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     idempotency_key: Mapped[str | None] = mapped_column(String(120), unique=True)
+
+
+@event.listens_for(OrmSession, "before_flush")
+def _ensure_question_version_bindings(session, _flush_context, _instances):
+    # Imported lazily to avoid model/service import cycles during mapper setup.
+    from backend.services.question_versions import ensure_question_versions_for_flush
+    ensure_question_versions_for_flush(session)

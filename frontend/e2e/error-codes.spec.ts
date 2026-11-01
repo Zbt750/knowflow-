@@ -103,7 +103,7 @@ test.describe("错误码与页面行为（规格 2.5）", () => {
 
     const generateError = page.getByTestId("plan-generate-error");
     await expect(generateError).toBeVisible({ timeout: 15_000 });
-    await expect(generateError).toContainText(/题库不足/);
+    await expect(generateError).toContainText(/暂无完整在线题目|题库无法满足练习要求/);
     // 不在前端猜「缺哪一道题」：不许出现具体题型/题量的推断式文案。
     await expect(generateError).not.toContainText(/缺少第 \d/);
     // 用户已勾选的知识点必须保留（兜底原则：不丢用户输入）。

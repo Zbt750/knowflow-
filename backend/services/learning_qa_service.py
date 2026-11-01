@@ -17,6 +17,7 @@ from backend.services.question_eligibility import question_eligibility
 from backend.services.lesson_service import read_lesson
 from backend.services.learning_task_tools import TaskTools
 from backend.services.assistant_router import evidence_explanation
+from backend.services.question_versions import question_for_practice_item
 
 PROMPT_VERSION="learning-qa-v7-round2"
 CONTEXT_BUDGET=2400
@@ -38,7 +39,9 @@ HINT_1只给方向和观察点；HINT_2给局部下一步/公式，不能给最�
 
 def question_relevant(message, action):
     if action in {None,"auto"} and evidence_explanation(message): return False
-    return action not in {None,"auto"} or bool(re.search(r"这(?:题|道题|一步)|看看这个|看一下这个|当前题|为什么选|答(?:案|错)|提示|我还是不懂|我的(?:证明|过程)|这.*思路",message))
+    return action not in {None,"auto"} or bool(re.search(
+        r"这(?:题|道题|一步)|看看这个|看一下这个|当前题|为什么选|答(?:案|错)|提示|我还是不懂|我的(?:证明|过程)|这.*思路|"
+        r"(?:上面|刚才|刚生成|你生成|生成的).{0,16}(?:题|练习)|那道题|这个题", message))
 
 
 def assemble_learning_context(db, factory, *, session_id, context, message, action=None, current_work=None, server_time=None, information_source=None):
@@ -53,17 +56,28 @@ def assemble_learning_context(db, factory, *, session_id, context, message, acti
             if required: raise AppError("study_context_too_large",status_code=422)
             omitted.append(name); return
         data[name]=value; used.append(name)
-    q=db.get(Question,ctx.question_id) if ctx.question_id else None
+    item=db.get(PracticeItem,ctx.practice_item_id) if ctx.practice_item_id else None
+    if item:
+        q=question_for_practice_item(db,item)
+    elif ctx.question_id and ctx.question_version_id:
+        from backend.services.question_versions import question_for_version
+        q=question_for_version(db,ctx.question_version_id)
+    else:
+        q=db.get(Question,ctx.question_id) if ctx.question_id else None
     if q and (question_relevant(message,action) or evidence_mode):
-        body={"question_id":str(q.id),"question_type":q.question_type,"stem":q.stem,"options":q.options,
+        body={"question_id":str(q.id),"question_version_id":str(getattr(q,"version_id",None) or getattr(q,"current_version_id",None)) if (getattr(q,"version_id",None) or getattr(q,"current_version_id",None)) else None,
+            "question_type":q.question_type,"stem":q.stem,"options":q.options,
             "knowledge_node_id":str(q.kp_id),"trust":question_eligibility(q,db.get(KnowledgePoint,q.kp_id)).public_dict()}
+        answer_verification_current = bool(body["trust"].get("answer_verification_current"))
         if evidence_mode:
             body.pop("stem"); body.pop("options")
             body["trust"]={k:body["trust"].get(k) for k in ("answer_provenance","answer_reliability","grading_capability","evidence_capability")}
         if action in {"solution","process_review"}:
             body["reference_answer"]=q.correct_answer
             body["reference_explanation"]=q.explanation[:2200]
-            body["explanation_independently_verified"]=bool(q.answer_provenance=="verified_reference" and q.answer_reliability=="verified")
+            body["answer_independently_verified"] = answer_verification_current
+            # Answer-key review is not an explanation review; do not conflate them.
+            body["explanation_independently_verified"] = False
         add("question",body,required=True)
         if current_work: add("student_draft",{"text":current_work,"submitted":False,"source":"user_input_untrusted"})
         if ctx.practice_item_id:
@@ -99,7 +113,7 @@ def assemble_learning_context(db, factory, *, session_id, context, message, acti
             states=tools.get_learning_state(db,NodeIds(kp_ids=node_ids))
             slim=[]
             for s in states["states"]:
-                slim.append({**{k:s.get(k) for k in ("kp_id","basis","basis_note","state","self_report_available","history_available","next_step")},
+                slim.append({**{k:s.get(k) for k in ("kp_id","basis","basis_note","state","self_report_available","history_available","next_step","learning_progress")},
                     "pending_review_count":len(s.get("pending_review_question_ids",[])),"recent_attempts":s.get("recent_attempts",[])[:12 if evidence_mode else 4],
                     "gaps":s.get("gaps",[]),"capabilities":[{k:d.get(k) for k in ("key","status","evidence_scope","independent_question_count")} for d in (s.get("capability_profile") or {}).get("dimensions",[])]})
             add("learning_state",{"states":slim,"note":states["note"]},required=evidence_mode)
@@ -197,7 +211,7 @@ def record_qa_assistance(db,*,context,message_id,level,now=None):
     old=db.scalar(select(LearningEvent).where(LearningEvent.idempotency_key==key))
     if old: return old.id
     item=db.get(PracticeItem,context.practice_item_id,with_for_update=True) if context.practice_item_id else None
-    q=db.get(Question,context.question_id)
+    q=question_for_practice_item(db,item) if item else db.get(Question,context.question_id)
     if not q or (item and item.question_id!=q.id): raise AppError("study_context_invalid",status_code=422)
     from backend.services.answer_submission_service import question_content_hash,record_answer_reveal
     if level=="solution" and item: record_answer_reveal(db,item_id=item.id,now=now or datetime.now(timezone.utc))
@@ -213,12 +227,13 @@ def record_qa_assistance(db,*,context,message_id,level,now=None):
 
 
 def qa_assistance_for_item(db,item,now):
-    from backend.services.answer_submission_service import question_content_hash
+    from backend.services.answer_submission_service import question_content_hash_matches
     from zoneinfo import ZoneInfo
-    day_start=datetime.fromisoformat(item.plan.study_date).replace(tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc)
+    study_date = item.plan.study_date if item.plan is not None else now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    day_start=datetime.fromisoformat(study_date).replace(tzinfo=ZoneInfo("Asia/Shanghai")).astimezone(timezone.utc)
     events=db.scalars(select(LearningEvent).where(LearningEvent.source_id.in_([item.id,item.question_id]),LearningEvent.event_type=="qa_assistance_used",LearningEvent.occurred_at<=now)).all()
     allowed={"none":0,"hint_1":1,"hint_2":2,"process_review":3,"solution":4}
     levels=[(e.payload or {}).get("assistance_level") for e in events if ((e.payload or {}).get("practice_item_id")==str(item.id)
         or ((e.payload or {}).get("scope")=="question_reading_only" and e.occurred_at>=day_start))
-        and (e.payload or {}).get("question_content_sha256")==question_content_hash(item.question)]
+        and question_content_hash_matches((e.payload or {}).get("question_content_sha256"), question_for_practice_item(db,item))]
     return max((l for l in levels if l in allowed),key=allowed.get,default="none")

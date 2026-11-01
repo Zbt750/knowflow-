@@ -189,7 +189,7 @@ def test_followup_scope_reaches_retrieval_filters_and_actual_prompt(monkeypatch)
     monkeypatch.setattr(service, "_ready_materials", lambda *_: [a, b])
     monkeypatch.setattr(service, "_recent_user_context", lambda *_, **__: ["阶段说明这份文件讲了哪些阶段？"])
     requests = []
-    hit = SimpleNamespace(chunk_id=uuid4(), material_title=a.title, heading_path=("阶段E",), content="窄屏一致")
+    hit = SimpleNamespace(chunk_id=uuid4(), material_id=a.id, material_title=a.title, heading_path=("阶段E",), content="窄屏一致")
     def search(db, *, request, **kwargs):
         requests.append(request)
         assert request.filters.material_ids == (a.id,)
@@ -199,7 +199,8 @@ def test_followup_scope_reaches_retrieval_filters_and_actual_prompt(monkeypatch)
     class Classifier:
         def classify_retrieval_intent(self, question):
             raise AssertionError("Resolved file must not add a model classifier call")
-    db = SimpleNamespace(scalars=lambda *_: SimpleNamespace(all=lambda: []))
+    db = SimpleNamespace(scalars=lambda *_: SimpleNamespace(all=lambda: []),
+        get=lambda *_:SimpleNamespace(purpose="learning_qa",material_scope_ids=[str(a.id)]))
     prepared = service._search_pending(db, session_id=uuid4(), assistant_id=uuid4(), question="它后半部分具体要求什么？", mode="user",
                                       stack=SimpleNamespace(embedder=None, vector_store=None, keyword_index=None, reranker=None), provider=Classifier(), history_token_budget=0)
     assert len(requests) == 1
@@ -232,6 +233,7 @@ def test_resolved_named_file_does_not_pay_for_model_intent_classifier(monkeypatc
     class Classifier:
         def classify_retrieval_intent(self, question):
             raise AssertionError("Named scope must not make an extra model call")
-    db = SimpleNamespace(scalars=lambda *_: SimpleNamespace(all=lambda: []))
+    db = SimpleNamespace(scalars=lambda *_: SimpleNamespace(all=lambda: []),
+        get=lambda *_:SimpleNamespace(purpose="learning_qa",material_scope_ids=[str(a.id)]))
     prepared = service._search_pending(db, session_id=uuid4(), assistant_id=uuid4(), question="验收笔记里的勾股与圆的联系", mode="user", stack=SimpleNamespace(embedder=None, vector_store=None, keyword_index=None, reranker=None), provider=Classifier(), history_token_budget=0)
     assert prepared.preparation_duration_ms >= 0

@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
+import StudyMascot from "../components/StudyMascot.vue";
+import { computed, nextTick, onMounted, onBeforeUnmount, onActivated, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 
 import { ApiError } from "../api/client";
 import { practiceTree } from "../lib/practiceTree";
+import {readStudyRetry,saveStudyRetry,clearStudyRetry} from '../lib/studyRetryContext';
 import {
   appendQuestions,
+  createPracticeRetry,
+  fetchPracticeRetry,
   revealAnswer,
   submitAnswer,
   fetchKnowledgeTree,
   fetchKnowledgeNode,
   generateTodayPlan,
   fetchToday,
+  fetchTodayRecommendations,
   submitSelfAssessment,
 } from "../api/study";
 import {
@@ -32,8 +37,12 @@ import type {
   TodaySetup,
 } from "../types/practice";
 import StudyFocus from "../components/StudyFocus.vue";
+import StudyPaperPreview from "../components/StudyPaperPreview.vue";
+import StudyProgressSummary from "../components/StudyProgressSummary.vue";
+import PersonalTrainingStudyMode from "../components/PersonalTrainingStudyMode.vue";
 import QuestionSource from "../components/QuestionSource.vue";
 import MarkdownContent from "../components/MarkdownContent.vue";
+import AnswerExplanation from '../components/AnswerExplanation.vue';
 import SelfReportActions from "../components/SelfReportActions.vue";
 import ProcessReview from "../components/ProcessReview.vue";
 import { createProcessReviewState, type ProcessReviewState } from "../api/study";
@@ -41,8 +50,21 @@ import { studySummary, wrongAnswerItems } from "../lib/studySummary";
 import { answerFeedback, answerAssessmentNote } from "../lib/answerFeedback";
 import { answerInputHint } from "../lib/answerInput";
 import { allowsSelfReport, answerSubmissionLabel, answerGradingNotice } from "../lib/answerInteraction";
-import { canRetryAnswer } from "../lib/attemptSequence";
+import { answerSubmissionFailure } from "../lib/answerSubmissionFailure";
 import LearningTaskPanel from "../components/LearningTaskPanel.vue";
+import HomeLearningWorkbench from "../components/HomeLearningWorkbench.vue";
+import KnowledgeScopeEditor from '../components/KnowledgeScopeEditor.vue';
+const showHomeWorkbench=ref(locationQuery('workspace')==='1');
+function setHomeWorkbench(open:boolean){
+ showHomeWorkbench.value=open;
+ const url=new URL(window.location.href);
+ if(open)url.searchParams.set('workspace','1');else url.searchParams.delete('workspace');
+ window.history.pushState({},'',url.toString());
+}
+const homeAssistant=ref<InstanceType<typeof HomeLearningWorkbench>|null>(null);
+// Both setup/active branches own different panel instances; preserve only the
+// user's open state across first-plan creation, not a stale question/context.
+const assistantOpen=ref(false);
 import type { StudyContext } from "../api/chat";
 const processDrafts = reactive<Record<string, string>>({});
 const processStates = reactive<Record<string, ProcessReviewState>>({});
@@ -55,6 +77,7 @@ const practiceSummary = computed(() => studySummary(active.value?.items ?? []));
 import KnowledgeQuestionPickerTree from "../components/KnowledgeQuestionPickerTree.vue";
 import KnowledgeScopeTree from "../components/KnowledgeScopeTree.vue";
 import { knowledgeSelection } from "../lib/knowledgeSelection";
+import { coveredPlanScope, pendingPlanScope } from "../lib/planExpansion";
 import { StaleResponse, useAsyncTask } from "../composables/useAsyncTask";
 
 // 统一状态（阶段 E）：今日学习、生成练习卷、查看答案三个异步动作都用
@@ -62,9 +85,8 @@ import { StaleResponse, useAsyncTask } from "../composables/useAsyncTask";
 // 解构出同名的 ref，模板里 `state === 'loading'` 之类的绑定保持不变 ——
 // 收敛的是**状态来源**，不是模板契约（28 个规格 testid 一个都不许动）。
 const todayTask = useAsyncTask<TodayResponse>(null, {
-  // 规格 2.5：kp_state_not_found 是「库里缺投影行」，提示先跑 seed.py 且不自动重试。
   errorMessages: {
-    kp_state_not_found: "缺少掌握度投影行，请先运行 python scripts\\seed.py，然后刷新本页。",
+    kp_state_not_found: "学习状态暂不可用，请刷新页面；若仍失败，请保留错误码联系维护者。",
   },
   fallbackMessage: "加载今日学习失败",
 });
@@ -75,7 +97,7 @@ const generateTask = useAsyncTask<TodayResponse>(null, {
     no_assessable_leaf_selected: "请先从知识树加入至少一个知识点。",
     question_pool_incomplete:
       "本次范围内暂无完整在线题目，或题库无法满足练习要求。请调整范围后重试。",
-    kp_state_not_found: "缺少掌握度投影行，请先运行 python scripts\\seed.py 再试。",
+    kp_state_not_found: "学习状态暂不可用，本次未生成练习卷。请刷新后检查。",
   },
   fallbackMessage: "生成失败",
 });
@@ -91,9 +113,72 @@ const appendTask = useAsyncTask<TodayResponse>(null, {
 // 今日学习数据的请求令牌，用于丢弃过期响应（见 load()）。
 let loadToken = 0;
 const route = useRoute();
+type LearningMode = "today" | "personal";
+const learningMode = ref<LearningMode>(locationQuery("mode") === "personal" ? "personal" : "today");
+const personalTrainingId = ref(locationQuery("training_id") ?? "");
+const personalTrainingOwnerId = ref(locationQuery("owner_session_id") ?? "");
+const personalTrainingAvailable = ref(false);
+const retryItem = ref<PlanItemView | null>(null);
+const retryLoading = ref(false);
+const retryNotice = ref('');
+const retryUnconfirmed = ref(false);
+const retryClosed = ref(false);
+const retryKeys = new Map<string,string>();
+function locationQuery(name: string): string | null {
+  try { return new URL(window.location.href).searchParams.get(name); }
+  catch { return null; }
+}
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function syncLearningModeFromLocation(): void {
+  const id = locationQuery("training_id") ?? "";
+  const owner = locationQuery("owner_session_id") ?? "";
+  if (id !== personalTrainingId.value || owner !== personalTrainingOwnerId.value) personalTrainingAvailable.value = false;
+  personalTrainingId.value = id;
+  personalTrainingOwnerId.value = owner;
+  learningMode.value = locationQuery("mode") === "personal" ? "personal" : "today";
+  if (!id || !owner || !uuidPattern.test(id) || !uuidPattern.test(owner)) personalTrainingAvailable.value = false;
+}
+function setLearningMode(next: LearningMode): void {
+  if (next === "personal" && (!personalTrainingAvailable.value || !uuidPattern.test(personalTrainingId.value)
+    || !uuidPattern.test(personalTrainingOwnerId.value))) return;
+  learningMode.value = next;
+  const url = new URL(window.location.href);
+  if (next === "personal") url.searchParams.set("mode", "personal");
+  else url.searchParams.delete("mode");
+  window.history.pushState(window.history.state, "", url.toString());
+}
+function onPersonalTrainingReady(available: boolean): void {
+  personalTrainingAvailable.value = available;
+}
+function rememberPaperItem(id: string | null, replace = false): void {
+  const url = new URL(window.location.href);
+  if (id) url.searchParams.set('item_id', id); else url.searchParams.delete('item_id');
+  if (replace) window.history.replaceState(window.history.state, '', url);
+  else window.history.pushState(window.history.state, '', url);
+}
+function rememberRetry(id: string | null) {
+  const url = new URL(window.location.href);
+  if (id) url.searchParams.set('retry_id',id); else url.searchParams.delete('retry_id');
+  window.history.replaceState(window.history.state,'',url);
+  if (id && active.value && !retryItem.value?.completed) saveStudyRetry(id, active.value.plan_id);
+  else clearStudyRetry();
+}
+async function beginRetry(source?: PlanItemView) {
+  const item=source ?? currentItem.value;
+  if (!item || retryLoading.value) return;
+  retryLoading.value=true; retryNotice.value='';
+  const key=retryKeys.get(item.id)??newIdempotencyKey(`retry-${item.id}`);retryKeys.set(item.id,key);
+  try { retryItem.value=await createPracticeRetry(item.id,key);retryClosed.value=false;mode.value='focus';rememberRetry(retryItem.value.id); }
+  catch { retryNotice.value='重练状态暂未确认，请再次点击读取同一操作；不会解锁或覆盖原始作答。'; }
+  finally { retryLoading.value=false; }
+}
+function closeRetry() {retryItem.value=null;retryClosed.value=true;retryUnconfirmed.value=false;retryNotice.value='';rememberRetry(null);}
 
 // 准备页
 const selectedKpIds = ref<string[]>([]);
+const showPlanSelection = ref(false);
+const selectionView = ref<TodaySetup | null>(null);
+const selectionLoading = ref(false);
 const generating = ref(false);
 const generateError = ref<string | null>(null);
 // 时间预算：决定卷子总时长上限（轻量 45 / 标准 90 / 深度 120 分钟）。
@@ -106,7 +191,7 @@ const scopeExpandedIds = ref(new Set<string>());
 const scopeCollapsedIds = ref(new Set<string>());
 const nodeLeaves = computed(() => flattenLeaves(scopeTree.value));
 const scopeSelection = computed(() => knowledgeSelection(scopeTree.value, selectedKpIds.value));
-const filteredScopeTree = computed(() => filterPickerTree(scopeTree.value, scopeSearch.value.trim()));
+const filteredScopeTree = computed(() => filterPickerTree(active.value?practiceTree(scopeTree.value):scopeTree.value, scopeSearch.value.trim()));
 const nodePickerLoading = ref(false);
 const nodePickerError = ref<string | null>(null);
 
@@ -126,32 +211,20 @@ const gradeNotice = ref<Record<string, string>>({});
 const gradeError = ref<Record<string, string>>({});
 const rawAnswers = ref<Record<string, string>>({});
 const submissionKeys = new Map<string, { fingerprint: string; key: string }>();
-const retryAttempts = ref<Record<string, string>>({});
+const submissionNeedsRefresh = ref<Record<string, boolean>>({});
 
-function beginAnswerRetry(item: PlanItemView): void {
-  if (submittingId.value !== null || answerLoadingId.value !== null || !canRetryAnswer(item.answer_submission)) return;
-  retryAttempts.value[item.id] = item.answer_submission!.attempt_id;
-  submissionKeys.delete(item.id);
-  rawAnswers.value[item.id] = "";
-  delete selectedOptions.value[item.id];
-  delete gradeError.value[item.id];
-  setAnswerOpen(item.id, false); // Exposure is sticky on the server; hiding cannot undo it.
-}
-
-function cancelAnswerRetry(item: PlanItemView): void {
-  if (submittingId.value !== null) return;
-  delete retryAttempts.value[item.id];
-  rawAnswers.value[item.id] = item.answer_submission?.raw_answer ?? "";
-  if (item.answer_submission?.selected_option) selectedOptions.value[item.id] = item.answer_submission.selected_option;
-  else delete selectedOptions.value[item.id];
+async function refreshSubmission(itemId: string): Promise<void> {
+  if (await load()) {
+    delete submissionNeedsRefresh.value[itemId];
+    delete gradeError.value[itemId];
+  }
 }
 
 async function submitFinalAnswer(item: PlanItemView): Promise<void> {
-  if (submittingId.value !== null || answerLoadingId.value !== null) return;
+  if (submittingId.value !== null || answerLoadingId.value !== null || item.completed || item.answer_submission || submissionNeedsRefresh.value[item.id]) return;
   const raw = rawAnswers.value[item.id];
   const option = selectedOptions.value[item.id];
-  const previous = retryAttempts.value[item.id];
-  const fingerprint = JSON.stringify([raw ?? null, option ?? null, previous ?? null]);
+  const fingerprint = JSON.stringify([raw ?? null, option ?? null]);
   let entry = submissionKeys.get(item.id);
   if (!entry || entry.fingerprint !== fingerprint) {
     entry = { fingerprint, key: newIdempotencyKey(`answer-${item.id}`) };
@@ -160,21 +233,18 @@ async function submitFinalAnswer(item: PlanItemView): Promise<void> {
   submittingId.value = item.id;
   delete gradeError.value[item.id];
   try {
-    const result = await submitAnswer(item.id, entry.key, raw, option, undefined, previous);
+    const result = await submitAnswer(item.id, entry.key, raw, option);
     // 保留已提交的当前题，直到用户主动继续；刷新不会把解析机会跳走。
     if (mode.value === "focus") focusItemId.value = item.id;
     item.completed = true;
     item.completed_at = result.submitted_at;
     item.answer_submission = result;
-    delete retryAttempts.value[item.id];
     await load();
   } catch (error) {
-    if (error instanceof ApiError && ["answer_attempt_conflict", "answer_retry_not_allowed", "answer_question_changed", "answer_attempt_limit"].includes(error.code ?? "")) {
-      delete retryAttempts.value[item.id];
-      gradeError.value[item.id] = error.message;
-      await load();
-    } else gradeError.value[item.id] = error instanceof ApiError && error.code === "practice_item_already_assessed"
-      ? "本题已提交，请刷新后查看记录。" : "提交未确认，请重试；同一答案不会重复记入。";
+    const failure = answerSubmissionFailure(error);
+    gradeError.value[item.id] = failure.message;
+    submissionNeedsRefresh.value[item.id] = failure.requiresRefresh;
+    if (failure.reload) await load();
   } finally {
     submittingId.value = null;
   }
@@ -190,7 +260,7 @@ const pickerTree = ref<KnowledgeNodeView[]>([]);
 const pickerSearch = ref("");
 const pickerLoading = ref(false);
 const pickerError = ref<string | null>(null);
-const pickerQuestions = ref<Record<string, { id: string; stem: string; is_variant: boolean; question_source?: import("../types/practice").QuestionSourceView | null }[]>>({});
+const pickerQuestions = ref<Record<string, { id: string; stem: string; is_variant: boolean; question_source?: import("../types/practice").QuestionSourceView | null; trust?: import("../types/practice").QuestionTrustView | null }[]>>({});
 const pickerQuestionLoadingIds = ref(new Set<string>());
 const pickerSelected = ref<string[]>([]);
 const pickerExpandedIds = ref(new Set<string>());
@@ -203,13 +273,42 @@ watch(() => pickerSearch.value.trim(), (query, previous) => {
 });
 
 const setup = computed<TodaySetup | null>(() =>
-  today.value && today.value.status === "setup" ? today.value : null,
+  today.value?.status === "setup" ? today.value : showPlanSelection.value ? selectionView.value : null,
 );
+const coveredKpEntries = computed(() => coveredPlanScope(active.value?.items ?? []));
+const coveredKpIds = computed(() => coveredKpEntries.value.map(item => item.id));
+function cancelPlanSelection() {
+  selectedKpIds.value = [];
+  showNodePicker.value = false;
+  selectionView.value = null;
+  showPlanSelection.value = false;
+}
+async function openPlanSelection() {
+  if (selectionLoading.value) return;
+  selectionLoading.value = true; generateError.value = null;
+  try {
+    const view = await fetchTodayRecommendations();
+    if (today.value?.study_date !== view.study_date) await load();
+    selectionView.value = view;
+    selectedKpIds.value = pendingPlanScope(view.recommendations.map(item => item.kp_id), active.value?.items ?? []);
+    showPlanSelection.value = true;
+    await nextTick();
+    document.querySelector('[data-testid="study-setup"]')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  } catch (error) { generateError.value = error instanceof Error ? error.message : '推荐范围读取失败，请重试。'; }
+  finally { selectionLoading.value = false; }
+}
 const selectedKpEntries = computed(() => selectedKpIds.value.map((id) => {
   const recommended = setup.value?.recommendations.find((item) => item.kp_id === id);
   const fromTree = nodeLeaves.value.find((node) => node.id === id);
   const path = scopeSelection.value.paths.get(id);
-  return { id, name: recommended?.name ?? fromTree?.name ?? "知识点", path: path?.names.slice(0, -1).join(" › ") ?? "" };
+  return {
+    id, name: recommended?.name ?? fromTree?.name ?? "知识点",
+    path: path?.names.slice(0, -1).join(" › ") ?? "",
+    nextStep: recommended?.next_step ?? "",
+    requiresSetConfirmation: Boolean(recommended?.requires_graduation_set_confirmation
+      || (fromTree?.graduation_set_binding_status === "legacy_history_unbound"
+        && fromTree.policy_version === 3)),
+  };
 }));
 
 async function locateSelectedKp(id: string): Promise<void> {
@@ -225,6 +324,20 @@ async function locateSelectedKp(id: string): Promise<void> {
 const active = computed<TodayActive | null>(() =>
   today.value && today.value.status !== "setup" ? (today.value as TodayActive) : null,
 );
+// 进入今日学习时默认把题目卡置于视口顶部，上面的进度/操作条向上滚动后仍可查看。
+let autoScrolledToQuestion = false;
+watch(active, (value) => {
+  if (!value || autoScrolledToQuestion || learningMode.value !== "today" || mode.value !== "focus") return;
+  autoScrolledToQuestion = true;
+  void nextTick(() => {
+    const card = document.querySelector(".study-active-main .focus-card") ?? document.querySelector(".focus-card");
+    if (!card) return;
+    window.scrollTo({ top: Math.max(0, card.getBoundingClientRect().top + window.scrollY - 8) });
+  });
+}, { immediate: true });
+watch(coveredKpIds, () => {
+  selectedKpIds.value = pendingPlanScope(selectedKpIds.value, active.value?.items ?? []);
+});
 // 旧卷和追加题也按题型呈现，同题型保留原卷次序。
 const questionTypeRank: Record<string, number> = {
   single_choice: 0,
@@ -236,37 +349,95 @@ const questionTypeRank: Record<string, number> = {
   external_exam: 3,
 };
 const orderedItems = computed(() => [...(active.value?.items ?? [])].sort((a, b) =>
-  (questionTypeRank[a.question_type] ?? 3) - (questionTypeRank[b.question_type] ?? 3)
+  (typeof a.display_number==='number' && typeof b.display_number==='number'
+    ? a.display_number - b.display_number
+    : (questionTypeRank[a.question_type] ?? 3) - (questionTypeRank[b.question_type] ?? 3))
   || a.ordinal - b.ordinal,
 ));
 const remainingItems = computed(() => orderedItems.value.filter((item) => !item.completed));
-const wrongItems = computed(() => wrongAnswerItems(orderedItems.value));
+const wrongItems = computed(() => wrongAnswerItems(orderedItems.value, active.value?.retry_wrong_items ?? []));
+const wrongKpIds = computed(() => new Set(wrongItems.value.map(item=>item.kp_id)));
+const paperCompleted = computed(() => !!active.value && orderedItems.value.length > 0 && remainingItems.value.length === 0);
+function wrongItemNumber(item: PlanItemView): number {
+  const rootId = item.retry_source_id ?? item.id;
+  const index = orderedItems.value.findIndex(row => row.id === rootId);
+  return index >= 0 ? index + 1 : item.display_number ?? item.ordinal;
+}
+async function returnToPaper() {
+  if(retryItem.value)closeRetry();
+  showPicker.value=false;mode.value='paper';
+  await nextTick();document.querySelector('[data-testid="paper-list"]')?.scrollIntoView({block:'start',behavior:'smooth'});
+}
+async function reviewPickerWrong(kpId: string) {
+  const item=wrongItems.value.find(row=>row.kp_id===kpId);
+  if(!item)return;
+  showPicker.value=false;
+  if(retryItem.value)closeRetry();
+  await revisitWrongAnswer(item.id);
+}
+async function chooseOtherKnowledge() {
+  pickerSearch.value='';pickerExpandedIds.value=new Set();pickerCollapsedIds.value=new Set();
+  await nextTick();document.querySelector<HTMLInputElement>('[data-testid="question-picker-search"]')?.focus();
+}
 async function revisitWrongAnswer(itemId: string): Promise<void> {
-  if (submittingId.value !== null || answerLoadingId.value !== null || !wrongItems.value.some(item => item.id === itemId)) return;
+  if (submittingId.value !== null || answerLoadingId.value !== null) return;
+  const item = wrongItems.value.find(row => row.id === itemId);
+  if (!item) return;
+  if (item.retry_source_id) {
+    // The server supplied this already persisted retry snapshot in TodayActive.
+    // Restore it for review; never create another nested retry instance here.
+    retryItem.value = item;
+    retryClosed.value = false;
+    retryUnconfirmed.value = false;
+    retryNotice.value = '';
+    mode.value = 'focus';
+    rememberRetry(item.id);
+    await nextTick();
+    const retryQuestion = document.querySelector<HTMLElement>('[data-testid="focus-question"]');
+    retryQuestion?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    retryQuestion?.focus({ preventScroll: true });
+    return;
+  }
   mode.value = "focus";
   focusItemId.value = itemId;
+  rememberPaperItem(itemId);
   await nextTick();
   const question = document.querySelector<HTMLElement>('[data-testid="focus-question"]');
   question?.scrollIntoView({ block: "start", behavior: "smooth" });
   question?.focus({ preventScroll: true });
 }
 const currentItem = computed<PlanItemView | null>(() =>
-  orderedItems.value.find((item) => item.id === focusItemId.value)
+  retryUnconfirmed.value ? null : retryItem.value ?? orderedItems.value.find((item) => item.id === focusItemId.value)
   ?? remainingItems.value[0]
   ?? null,
 );
 const currentIndex = computed(() => orderedItems.value.findIndex(item => item.id === currentItem.value?.id));
 const frogStudyContext = computed<StudyContext>(() => ({ version: "study-context-v1", surface: "study", origin: "practice",
   daily_plan_id: active.value?.plan_id, knowledge_node_ids: currentItem.value ? [currentItem.value.kp_id] : [],
-  question_id: currentItem.value?.question_id ?? undefined, practice_item_id: currentItem.value?.question_id ? currentItem.value.id : undefined,
+  question_id: currentItem.value?.question_id ?? undefined, question_version_id: currentItem.value?.question_version_id ?? undefined,
+  practice_item_id: currentItem.value?.question_id ? currentItem.value.id : undefined,
   attempt_id: currentItem.value?.answer_submission?.attempt_id ?? undefined }));
+const reviewNodeId=computed(()=>typeof route.query.review_node_id==='string'&&/^[0-9a-f-]{36}$/i.test(route.query.review_node_id)?route.query.review_node_id:null);
+const frogContext=computed<StudyContext>(()=>reviewNodeId.value?{surface:'study',origin:'knowledge',daily_plan_id:active.value?.plan_id,knowledge_node_ids:[reviewNodeId.value]}:frogStudyContext.value);
 function moveQuestion(direction: -1 | 1): void {
   if (submittingId.value !== null || answerLoadingId.value !== null || currentIndex.value < 0) return;
   const next = orderedItems.value[currentIndex.value + direction];
-  if (next) focusItemId.value = next.id;
+  if (next) {
+    focusItemId.value = next.id;
+    rememberPaperItem(next.id);
+  }
 }
 
-async function load(): Promise<void> {
+function jumpToPaperItem(id: string): void {
+  if (!orderedItems.value.some(item => item.id === id)) return;
+  focusItemId.value = id;
+  rememberPaperItem(id);
+  document.getElementById("paper-item-" + id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function load(): Promise<boolean> {
+  const retainedFocus = currentItem.value?.id;
+  const requestedFocus = locationQuery('item_id');
   // 请求令牌：连点自评/切模式会并发触发 load，晚发出的请求可能先返回。
   // 用它保证只有**最后一次**请求的结果能写回，避免旧数据覆盖新数据。
   const token = ++loadToken;
@@ -286,12 +457,63 @@ async function load(): Promise<void> {
     },
     { keepPreviousData: true },
   );
-  if (token !== loadToken) return;
+  if (token !== loadToken) return false;
+  const explicitRetry = locationQuery('retry_id');
+  if (requestedFocus && !explicitRetry) {
+    retryItem.value=null;retryClosed.value=true;retryUnconfirmed.value=false;clearStudyRetry();
+  }
+  // Explicit URL targets win. An ordinary /study navigation may restore only
+  // a bounded pointer for this same paper, then revalidate it with the server.
+  const rememberedRetry = !requestedFocus && !explicitRetry && today.value?.status !== 'setup' && today.value
+    ? readStudyRetry(today.value.plan_id) : null;
+  const retryId = explicitRetry ?? retryItem.value?.id ?? (!retryClosed.value ? rememberedRetry : null);
+  if (retryId) {
+    try {
+      const item=await fetchPracticeRetry(retryId);
+      if(token===loadToken) {
+        const source = today.value?.status === 'setup' ? null : today.value?.items.find(row => row.id === item.retry_source_id);
+        const matchesPaper = Boolean(source && source.question_id === item.question_id
+          && source.question_version_id === item.question_version_id);
+        if (matchesPaper) {
+          retryItem.value=item; retryClosed.value=false;retryUnconfirmed.value=false;retryNotice.value=''; rememberRetry(item.id);
+          if (item.completed) clearStudyRetry();
+        }
+        else {
+          retryItem.value=null; retryClosed.value=true;retryUnconfirmed.value=false;
+          retryNotice.value='这条重练记录不属于当前今日卷，已安全回到今日卷；原始作答仍保留。';
+          rememberRetry(null);
+        }
+      }
+    }
+    catch (error) {
+      if(token===loadToken) {
+        retryItem.value=null;
+        if(error instanceof ApiError && [404,409,410].includes(error.status ?? 0)) {
+          retryClosed.value=true;retryUnconfirmed.value=false;
+          retryNotice.value='重练记录不存在或已失效，已回到今日卷；原始作答仍保留。';rememberRetry(null);
+        } else {
+          retryClosed.value=false;retryUnconfirmed.value=true;
+          retryNotice.value='重练状态暂未确认，请读取状态后继续；不会把今日卷另一题替代为这次重练。';
+          rememberRetry(retryId);
+        }
+      }
+    }
+  }
+  if (token !== loadToken) return false;
   const data = today.value;
   if (data && state.value === "success") {
     if (data.status !== "setup") {
+      const requested = requestedFocus && data.items.some(item=>item.id===requestedFocus)
+        ? requestedFocus : null;
+      if (requested) focusItemId.value=requested;
+      else if (requestedFocus) rememberPaperItem(null, true);
+      else if (retainedFocus && data.items.some(item=>item.id===retainedFocus)) focusItemId.value=retainedFocus;
+      else if (!data.items.some(item=>item.id===focusItemId.value)) {
+        const stableFallback = data.items.find(item=>!item.completed) ?? null;
+        focusItemId.value = stableFallback?.id ?? null;
+      }
       for (const item of data.items) {
-        if (item.answer_submission && !retryAttempts.value[item.id]) {
+        if (item.answer_submission) {
           rawAnswers.value[item.id] = item.answer_submission.raw_answer ?? "";
           if (item.answer_submission.selected_option) selectedOptions.value[item.id] = item.answer_submission.selected_option;
         }
@@ -302,25 +524,62 @@ async function load(): Promise<void> {
       selectedKpIds.value = data.recommendations.map((item) => item.kp_id);
     }
   }
+  if (data?.status !== 'setup' && !retryItem.value && currentItem.value
+      && locationQuery('item_id') !== currentItem.value.id) {
+    rememberPaperItem(currentItem.value.id, true);
+  }
+  return Boolean(data && state.value === "success");
+}
+
+function handleLocationPopState(): void {
+  showHomeWorkbench.value=locationQuery('workspace')==='1';
+  syncLearningModeFromLocation();
+  if (learningMode.value === "personal") return;
+  const retryId = locationQuery('retry_id');
+  if (retryId !== retryItem.value?.id) {
+    retryItem.value = null;
+    retryClosed.value = !retryId;
+  }
+  const itemId = locationQuery('item_id');
+  if (itemId) focusItemId.value = itemId;
+  void load();
 }
 
 function toggleKp(kpId: string): void {
+  if (coveredKpIds.value.includes(kpId)) return;
   const index = selectedKpIds.value.indexOf(kpId);
   if (index >= 0) selectedKpIds.value.splice(index, 1);
   else selectedKpIds.value.push(kpId);
 }
 
 async function generate(): Promise<void> {
+  if (!active.value) { await homeAssistant.value?.prepare("default"); return; }
+  selectedKpIds.value = pendingPlanScope(selectedKpIds.value, active.value?.items ?? []);
   if (selectedKpIds.value.length === 0) {
     // 规格 2.5：no_assessable_leaf_selected —— 生成按钮禁用并提示先选知识点。
     generateError.value = "请至少选择一个知识点（没有选中时后端也会拒绝生成）";
     return;
   }
+  const confirmLegacySetTransitionIds = selectedKpEntries.value
+    .filter((item) => item.requiresSetConfirmation)
+    .map((item) => item.id);
+  if (confirmLegacySetTransitionIds.length > 0) {
+    const names = selectedKpEntries.value
+      .filter((item) => confirmLegacySetTransitionIds.includes(item.id))
+      .map((item) => item.name).join("、") || "所选知识点";
+    const accepted = window.confirm(
+      `${names}有历史练习记录，但旧毕业题集无法可靠恢复。历史记录会保留用于查看与学习分析，不计入新版正式毕业题集。确认现在开始当前版本的正式考核吗？`
+    );
+    if (!accepted) return;
+  }
   generating.value = true;
   generateError.value = null;
-  const result = await generateTask.run(() => generateTodayPlan(selectedKpIds.value, budget.value));
+  const result = await generateTask.run(() => generateTodayPlan(
+    selectedKpIds.value, budget.value, confirmLegacySetTransitionIds, Boolean(active.value),
+  ));
   if (result) {
     today.value = result;
+    cancelPlanSelection();
     generating.value = false;
     return;
   }
@@ -396,8 +655,9 @@ async function grade(item: PlanItemView, selfGrade: SelfGrade): Promise<void> {
       gradeNotice.value[item.id] = "已跳过本题，未记录掌握情况。";
       if (mode.value === "focus") {
         const index = remainingItems.value.findIndex((candidate) => candidate.id === item.id);
-        const next = remainingItems.value[(index + 1) % remainingItems.value.length];
-        focusItemId.value = next?.id ?? null;
+        const next = remainingItems.value[index + 1];
+        focusItemId.value = next?.id ?? item.id;
+        rememberPaperItem(focusItemId.value);
       }
     } else {
       gradeNotice.value[item.id] = "作答表现已记录。";
@@ -434,7 +694,7 @@ async function grade(item: PlanItemView, selfGrade: SelfGrade): Promise<void> {
         await load();
         return;
       case "kp_state_not_found":
-        gradeError.value[item.id] = "缺少掌握度投影行，请先运行 python scripts\\seed.py。";
+        gradeError.value[item.id] = "学习状态暂不可用，请刷新后检查；若仍失败，请保留错误码联系维护者。";
         return;
       default:
         gradeError.value[item.id] = `${error.message}（${error.code ?? "未知错误"}）`;
@@ -499,7 +759,7 @@ async function loadPickerTree(): Promise<void> {
   pickerError.value = null;
   try {
     const data = await fetchKnowledgeTree();
-    pickerTree.value = practiceTree(Array.isArray(data.nodes) ? data.nodes : []);
+      pickerTree.value = practiceTree(Array.isArray(data.nodes) ? data.nodes : [], true);
   } catch (error) {
     pickerError.value = error instanceof ApiError ? error.message : "加载知识树失败";
   } finally {
@@ -514,7 +774,7 @@ async function loadNodeLeaves(): Promise<void> {
   nodePickerError.value = null;
   try {
     const data = await fetchKnowledgeTree();
-    scopeTree.value = practiceTree(Array.isArray(data.nodes) ? data.nodes : []);
+    scopeTree.value = practiceTree(Array.isArray(data.nodes) ? data.nodes : [],true);
     // 默认露出学科下的章节，不把整棵树一次铺开。
     scopeExpandedIds.value = new Set(scopeTree.value.map((node) => node.id));
   } catch (error) {
@@ -560,7 +820,7 @@ async function loadPickerQuestions(kpId: string): Promise<void> {
     const inPaper = new Set(active.value?.items.map((item) => item.question_id) ?? []);
     pickerQuestions.value[kpId] = detail.questions
       .filter((question) => question.trust.practice_eligible && !inPaper.has(question.id))
-      .map((question) => ({ id: question.id, stem: question.stem, is_variant: question.is_variant, question_source: question.question_source }));
+      .map((question) => ({ id: question.id, stem: question.stem, is_variant: question.is_variant, question_source: question.question_source, trust: question.trust }));
   } catch (error) {
     pickerError.value = error instanceof ApiError ? error.message : "加载题库失败";
   } finally {
@@ -636,6 +896,8 @@ async function confirmAppend(): Promise<void> {
 }
 
 onMounted(async () => {
+  syncLearningModeFromLocation();
+  window.addEventListener('popstate', handleLocationPopState);
   await load();
   const kpId = typeof route.query.kp_id === "string" ? route.query.kp_id : null;
   if (!kpId || state.value !== "success") return;
@@ -654,30 +916,81 @@ onMounted(async () => {
     }
   }
 });
+function currentStudyDay() {
+  return new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+}
+let dayCheck: ReturnType<typeof setInterval> | undefined;
+async function checkStudyDay() {
+  if (today.value && today.value.study_date !== currentStudyDay() && !generating.value && !appending.value) {
+    showPlanSelection.value = false; selectionView.value = null;
+    await load();
+  }
+}
+onMounted(() => { dayCheck = setInterval(checkStudyDay, 15000); window.addEventListener('focus', checkStudyDay); });
+onActivated(checkStudyDay);
+onBeforeUnmount(() => {
+  if (dayCheck) clearInterval(dayCheck);
+  window.removeEventListener('focus', checkStudyDay);
+  window.removeEventListener('popstate', handleLocationPopState);
+});
 </script>
 
 <template>
-  <section class="page">
-    <p v-if="state === 'loading' && !today" class="state state--loading" data-testid="study-loading">正在加载今日学习…</p>
+  <section class="page page--study">
+    <p v-if="state === 'loading' && !today && learningMode === 'today'" class="state state--loading" data-testid="study-loading">正在加载今日学习…</p>
 
-    <div v-if="state === 'error' && !today" class="state state--error" data-testid="study-error">
+    <div v-if="state === 'error' && !today && learningMode === 'today'" class="state state--error" data-testid="study-error">
       <p>{{ errorMessage }}</p>
       <p v-if="errorCode" class="state__code">错误码：{{ errorCode }}</p>
       <button type="button" @click="load">重试</button>
     </div>
-    <p v-if="state === 'error' && today" class="state state--error" role="alert" data-testid="study-refresh-error">
+    <p v-if="state === 'error' && today && learningMode === 'today'" class="state state--error" role="alert" data-testid="study-refresh-error">
       刷新失败，当前练习内容仍保留：{{ errorMessage }} <button type="button" @click="load">重试</button>
     </p>
 
-    <LearningTaskPanel v-if="today" :session-id="null" :current-plan-id="active?.plan_id ?? null" :study-context="frogStudyContext" :current-work="currentItem ? processDrafts[currentItem.id] || rawAnswers[currentItem.id] || selectedOptions[currentItem.id] : undefined" :mascot="!!active" @confirmed="load" />
-
     <!-- 准备页：没有用户确认就不创建计划 -->
-    <div v-if="setup" class="study-setup" data-testid="study-setup">
+    <nav v-if="today || learningMode === 'personal'" class="study-mode-switch" aria-label="学习模式">
+      <button type="button" :class="{ active: learningMode === 'today' }" data-testid="mode-today" @click="setLearningMode('today')">今日学习</button>
+      <button v-if="personalTrainingAvailable" type="button" :class="{ active: learningMode === 'personal' }" data-testid="mode-personal-training" @click="setLearningMode('personal')">专项练习</button>
+    </nav>
+
+    <p v-if="learningMode === 'personal' && (!uuidPattern.test(personalTrainingId) || !uuidPattern.test(personalTrainingOwnerId))" role="alert" data-testid="training-route-invalid">
+      专项入口信息不完整，请从奶蛙的专项训练记录中重新打开。<button type="button" @click="setLearningMode('today')">返回今日学习</button>
+    </p>
+    <PersonalTrainingStudyMode
+      v-if="uuidPattern.test(personalTrainingId) && uuidPattern.test(personalTrainingOwnerId)"
+      v-show="learningMode === 'personal'"
+      :training-id="personalTrainingId"
+      :owner-session-id="personalTrainingOwnerId"
+      @ready="onPersonalTrainingReady"
+      @return-today="setLearningMode('today')"
+    />
+
+    <div v-if="setup && learningMode === 'today'" class="study-setup" :class="{'study-setup--extension': Boolean(active), 'study-setup--workbench': !active}" data-testid="study-setup">
       <div class="study-setup-intro">
-        <span>{{ setup.study_date }} · 今日练习</span>
-        <h2>今天的练习</h2>
+        <div>
+          <span>{{ setup.study_date }} · 今日练习</span>
+          <h2>{{active ? "今天，学透一点点。" : "今天怎么学，一起走下来。"}}</h2>
+          <p>从系统初案出发，让奶蛙按你的目标调整；看清题目，再确认开始。</p>
+          <p v-if="active" class="study-setup-facts">本次范围 <strong>{{ selectedKpIds.length }}</strong> 个知识点 · {{ BUDGET_OPTIONS.find(option => option.value === budget)?.hint }}</p>
+        </div>
+        <StudyMascot pose="read" class="study-setup-mascot" />
       </div>
+      <div v-if="active" class="setup-primary-action">            <button type="button" class="setup-generate" :disabled="generating || selectedKpIds.length === 0" data-testid="generate-plan" @click="generate">
+              {{ generating ? "正在准备…" : active ? "确认扩充今日卷" : "查看统一试卷预览" }}
+            </button><p v-if="generateError" role="alert">{{ generateError }}</p></div>
+      <HomeLearningWorkbench ref="homeAssistant" :extension="!!active" :selected-kp-ids="selectedKpIds" :budget="budget" @confirmed="load" @scope-change="selectedKpIds=$event">
+      <template #scope-editor><KnowledgeScopeEditor :nodes="filteredScopeTree" :selected-ids="selectedKpIds" :selected-entries="selectedKpEntries" :selected-counts="scopeSelection.counts" :expanded-ids="scopeExpandedIds" :collapsed-ids="scopeCollapsedIds" :search="scopeSearch" :loading="nodePickerLoading" :error="nodePickerError" @load="loadNodeLeaves" @update:search="scopeSearch=$event" @toggle="toggleNodeSelection" @branch="toggleScopeBranch"/></template>
+      <div class="study-setup-grid">
+      <div class="study-setup-main">
+      <header class="study-sheet-title"><h2>{{ active ? '按知识点扩充今日卷' : '今日练习卷' }}</h2><span>待确认</span><button v-if="active" type="button" @click="cancelPlanSelection">返回当前卷</button></header>
+      <section v-if="coveredKpEntries.length" data-testid="covered-plan-scope" aria-label="当前卷已覆盖知识点，只读">
+        <h3>当前卷已覆盖</h3>
+        <ul><li v-for="entry in coveredKpEntries" :key="entry.id">{{ entry.name }} · {{ entry.count }} 道 · 已锁定</li></ul>
+        <p class="picker-hint">以下仅选择本次新增范围；取消扩充不会移除原卷题目。</p>
+      </section>
       <div class="study-setup-layout">
+        <header class="study-suggestion-heading"><span>系统建议 · 可以调整</span><h3>从需要巩固的地方，再走稳一点。</h3><p>{{ active ? '现有题目和作答记录会保留；确认后只追加尚未在卷中的题目。' : '依据当前学习建议整理，确认后才会创建学习卷。' }}</p></header>
         <section class="study-select-panel">
           <header class="study-panel-heading">
             <div><h2>练习范围</h2></div>
@@ -706,6 +1019,7 @@ onMounted(async () => {
               <KnowledgeScopeTree
                 :nodes="filteredScopeTree"
                 :selected-ids="selectedKpIds"
+                :locked-ids="coveredKpIds"
                 :selected-counts="scopeSelection.counts"
                 :expanded-ids="scopeExpandedIds"
                 :collapsed-ids="scopeCollapsedIds"
@@ -729,7 +1043,8 @@ onMounted(async () => {
           <ul v-if="selectedKpEntries.length && !showNodePicker" class="recommend-list" data-testid="recommended-kp">
             <li v-for="(item, index) in selectedKpEntries" :key="item.id" class="selected-kp-row" :data-testid="'recommend-' + item.id">
               <span class="selected-kp-row__number">{{ String(index + 1).padStart(2, "0") }}</span>
-              <span class="recommend-name">{{ item.name }}<small v-if="item.path" class="selected-kp-path">{{ item.path }}</small></span>
+              <span class="recommend-name">{{ item.name }}<small v-if="item.nextStep" class="selected-kp-next">{{ item.nextStep }}</small><small v-if="item.path" class="selected-kp-path">{{ item.path }}</small></span>
+              <small v-if="item.requiresSetConfirmation" class="selected-kp-path">需确认开始新版正式考核</small>
             </li>
           </ul>
           <p v-if="!selectedKpEntries.length" class="state state--empty">
@@ -754,17 +1069,30 @@ onMounted(async () => {
           </fieldset>
           <div class="study-setup-action">
             <p class="hint" data-testid="selected-kp-count">本次包含 {{ selectedKpIds.length }} 个知识点</p>
-            <button type="button" class="setup-generate" :disabled="generating || selectedKpIds.length === 0" data-testid="generate-plan" @click="generate">
-              {{ generating ? "正在准备…" : "开始今日练习" }}
-            </button>
+
           </div>
           <p v-if="generateError" class="form-error" data-testid="plan-generate-error">{{ generateError }}</p>
         </aside>
       </div>
+      </div>
+
+      </div>
+      </HomeLearningWorkbench>
     </div>
 
+    <section v-if="active&&showHomeWorkbench&&learningMode === 'today'" data-testid="confirmed-home-workbench" class="confirmed-home-workbench">
+      <header><h2>今日学习工作台</h2><button type="button" data-testid="return-to-practice" @click="setHomeWorkbench(false)">返回练习</button></header>
+      <HomeLearningWorkbench :extension="false" :selected-kp-ids="[]" :budget="budget" :formal-paper="active" @practice="setHomeWorkbench(false)"/>
+    </section>
     <!-- 答题页 -->
-    <div v-if="active" class="study-active" data-testid="study-active">
+    <div v-if="active && learningMode === 'today'" v-show="!showHomeWorkbench" class="study-active" data-testid="study-active">
+      <header class="study-active-intro">
+        <div>
+          <span>今日练习 · {{ mode === "focus" ? "专注模式" : "阅览全卷" }}</span>
+        </div>
+        <button type="button" data-testid="open-home-workbench" @click="setHomeWorkbench(true)">查看学习工作台与推荐依据</button>
+        <span class="study-active-count">{{ active.completed_count }} / {{ active.total_count }} 题</span>
+      </header>
       <div class="study-plan-overview">
         <div class="study-progress">
       <p class="state" data-testid="study-status">
@@ -844,29 +1172,44 @@ onMounted(async () => {
         <p v-if="gradeError[currentItem.id]" class="form-error">{{ gradeError[currentItem.id] }}</p>
       </section>
 
+      <p v-if="retryItem" role="status">正在单独重练，不增加今日卷题数。原始作答保留；看解析或接受辅助后的答对不算独立掌握。<button type="button" :disabled="submittingId !== null" @click="closeRetry">返回今日卷</button></p>
+      <section v-if="paperCompleted && !retryItem" role="status" data-testid="completed-paper-actions">
+        <strong>今日卷已完成。</strong>
+        <span v-if="currentItem">下方为已提交题目的回看，原作答保持锁定。</span>
+        <p v-if="wrongItems.length">本卷有 {{ wrongItems.length }} 道错题，可直接选择重练：</p>
+        <button v-for="item in wrongItems" :key="item.id" type="button" :data-testid="`completed-retry-${item.id}`" :disabled="retryLoading || submittingId !== null" @click="item.retry_source_id ? revisitWrongAnswer(item.id) : beginRetry(item)">{{ item.retry_source_id ? '回看重练' : '重练' }}第 {{ wrongItemNumber(item) }} 题 · {{ item.kp_name }}</button>
+        <button type="button" @click="returnToPaper">阅览全卷</button>
+      </section>
+      <p v-if="retryNotice" role="alert">{{ retryNotice }}</p>
+      <div v-if="retryUnconfirmed"><button type="button" data-testid="refresh-retry-state" @click="load">读取重练状态</button><button type="button" @click="closeRetry">返回今日卷</button></div>
       <StudyFocus
-        v-if="mode === 'focus' && !currentItem?.is_external_reference"
+        v-if="mode === 'focus' && !currentItem?.is_external_reference && !retryUnconfirmed"
         :item="currentItem"
+        :retry-loading="retryLoading"
+        :standalone="!!retryItem"
+        @retry="beginRetry"
         :answer="currentItem ? answers[currentItem.id] : undefined"
         :answer-open="currentItem ? isAnswerOpen(currentItem.id) : false"
         :answer-loading="answerLoadingId !== null"
         :answer-error="answerError"
+        :show-answer-reveal="true"
+        :allow-self-report="true"
+        :show-grading-notice="true"
         :submitting="submittingId === currentItem?.id"
         :notice="currentItem ? gradeNotice[currentItem.id] : undefined"
         :grade-error="currentItem ? gradeError[currentItem.id] : undefined"
+        :submission-needs-refresh="currentItem ? submissionNeedsRefresh[currentItem.id] : false"
         :has-previous="currentIndex > 0"
         :has-next="currentIndex >= 0 && currentIndex < orderedItems.length - 1"
         :display-number="orderedItems.findIndex((item) => item.id === currentItem?.id) + 1"
         :raw-answer="currentItem ? rawAnswers[currentItem.id] ?? '' : ''"
         :selected-option="currentItem ? selectedOptions[currentItem.id] : undefined"
-        :retrying="currentItem ? Boolean(retryAttempts[currentItem.id]) : false"
         @reveal="currentItem && toggleAnswer(currentItem)"
         @grade="(g: SelfGrade) => currentItem && grade(currentItem, g)"
         @submit-answer="currentItem && submitFinalAnswer(currentItem)"
+        @refresh-submission="currentItem && refreshSubmission(currentItem.id)"
         @continue="moveQuestion(1)"
         @previous="moveQuestion(-1)"
-        @retry="currentItem && beginAnswerRetry(currentItem)"
-        @cancel-retry="currentItem && cancelAnswerRetry(currentItem)"
         @update:rawAnswer="(v: string) => currentItem && (rawAnswers[currentItem.id] = v)"
         @update:selectedOption="(v: string) => currentItem && (selectedOptions[currentItem.id] = v)"
       >
@@ -876,17 +1219,18 @@ onMounted(async () => {
       </StudyFocus>
 
       <!-- 全卷模式：按题型显示全部，包括已完成 -->
-      <ol v-if="mode === 'paper'" class="paper-list" data-testid="paper-list">
-        <li v-for="(item, index) in orderedItems" :key="item.id" class="paper-item">
+      <StudyPaperPreview v-if="mode === 'paper'" :items="orderedItems" test-id="paper-list">
+        <template #item="{ item, index }">
           <header>
             <strong>第 {{ index + 1 }} 题</strong>
             <span class="tag tag--muted">{{ typeLabel(item.question_type) }}</span>
             <span class="tag tag--muted">{{ item.completed ? "已完成" : "未完成" }}</span>
-            <span v-if="item.answer_submission" role="status" :aria-label="answerFeedback(item.answer_submission).label" :data-result="answerFeedback(item.answer_submission).tone" :data-testid="`paper-submission-${item.id}`">{{ answerFeedback(item.answer_submission).symbol }}</span>
+            <span v-if="item.answer_submission" role="status" :data-result="answerFeedback(item.answer_submission).tone"><span :data-testid="`paper-submission-${item.id}`" :aria-label="answerFeedback(item.answer_submission).label">{{ answerFeedback(item.answer_submission).symbol }}</span> {{ answerFeedback(item.answer_submission).label }} · 已锁定</span>
           </header>
           <div class="paper-question-layout">
             <div class="paper-question-main">
-          <QuestionSource v-if="!item.is_external_reference" :source="item.question_source" :show-original-number="false" />
+          <QuestionSource v-if="!item.is_external_reference" :source="item.question_source" :trust="item.question_trust" :show-original-number="false" :is-variant="item.is_variant" />
+          <p v-if="item.question_trust?.teaching_use === 'REFERENCE_ONLY'" class="answer-provenance">参考学习题 · 暂不支持可靠自动判题</p>
           <template v-if="item.is_external_reference && item.exam_reference">
             <section class="external-exam-task external-exam-task--paper" :data-testid="`external-exam-${item.id}`">
               <p class="eyebrow">{{ item.exam_reference.subject }} · {{ item.exam_reference.year }} 年</p>
@@ -920,7 +1264,7 @@ onMounted(async () => {
                   :name="`paper-option-${item.id}`"
                   :value="key"
                   :checked="selectedOptions[item.id] === key"
-                  :disabled="(item.completed && !retryAttempts[item.id]) || submittingId === item.id"
+                  :disabled="item.completed || submittingId === item.id"
                   :data-testid="`paper-option-${item.id}-${key}`"
                   @change="selectedOptions[item.id] = key"
                 />
@@ -934,22 +1278,21 @@ onMounted(async () => {
             <textarea
               v-model="rawAnswers[item.id]"
               rows="2"
-              :disabled="(item.completed && !retryAttempts[item.id]) || submittingId === item.id"
+              :disabled="item.completed || submittingId === item.id"
               :data-testid="`paper-raw-answer-${item.id}`"
               :placeholder="answerInputHint(item.answer_grading_method, item.question_type)"
             ></textarea>
           </label>
           <div class="actions">
-            <template v-if="!item.completed || retryAttempts[item.id]">
-              <button type="button" :disabled="submittingId !== null || answerLoadingId !== null" :data-testid="`paper-submit-answer-${item.id}`" @click="submitFinalAnswer(item)">{{ answerSubmissionLabel(item) }}</button>
+            <template v-if="!item.completed">
+              <button type="button" :disabled="submittingId !== null || answerLoadingId !== null || submissionNeedsRefresh[item.id]" :data-testid="`paper-submit-answer-${item.id}`" @click="submitFinalAnswer(item)">{{ answerSubmissionLabel(item) }}</button>
             </template>
-            <button v-if="item.completed && !retryAttempts[item.id] && canRetryAnswer(item.answer_submission)" type="button" :disabled="submittingId !== null || answerLoadingId !== null" :data-testid="`paper-retry-answer-${item.id}`" @click="beginAnswerRetry(item)">再试一次</button>
-            <button v-if="retryAttempts[item.id]" type="button" :disabled="submittingId !== null" :data-testid="`paper-cancel-retry-${item.id}`" @click="cancelAnswerRetry(item)">取消修改</button>
           </div>
           <p class="hint" :data-testid="`paper-grading-boundary-${item.id}`">{{ answerGradingNotice(item) }}</p>
           <SelfReportActions v-if="!item.completed && allowsSelfReport(item)" :disabled="submittingId === item.id" @grade="grade(item, $event)" />
           <p v-if="gradeNotice[item.id]" class="notice" data-testid="paper-notice">{{ gradeNotice[item.id] }}</p>
           <p v-if="gradeError[item.id]" class="form-error">{{ gradeError[item.id] }}</p>
+          <button v-if="submissionNeedsRefresh[item.id]" type="button" :disabled="submittingId !== null" @click="refreshSubmission(item.id)">刷新学习状态</button>
           <ProcessReview v-if="['calculation', 'proof', 'subjective'].includes(item.question_type)" :state="processState(item.id)" :item-id="item.id" :question-type="item.question_type" :model-value="processDrafts[item.id] ?? ''" @update:model-value="processDrafts[item.id] = $event" />
           </template>
             </div>
@@ -957,32 +1300,41 @@ onMounted(async () => {
               <button type="button" :disabled="answerLoadingId !== null" :aria-expanded="isAnswerOpen(item.id)" :aria-controls="`paper-answer-${item.id}`" @click="toggleAnswer(item)">{{ answerLoadingId === item.id ? "加载中…" : isAnswerOpen(item.id) ? "收起答案详解" : "查看答案详解" }}</button>
               <div v-if="isAnswerOpen(item.id) && answers[item.id]" :id="`paper-answer-${item.id}`" class="answer-box" :data-testid="`answer-${item.id}`">
                 <strong>参考答案：</strong><MarkdownContent :text="answers[item.id].correct_answer ?? '（无标准答案，请自行对照解析）'" />
-                <strong>解析：</strong><MarkdownContent :text="answers[item.id].explanation" />
+                <strong>参考解析：</strong><AnswerExplanation :text="answers[item.id].explanation" />
               </div>
             </aside>
           </div>
-        </li>
-      </ol>
+        </template>
+      </StudyPaperPreview>
 
         </div>
         <aside class="study-active-aside">
-      <details class="summary" data-testid="practice-result-summary">
-        <summary>本卷做题记录</summary>
-        <template v-if="practiceSummary.submitted || practiceSummary.selfReported">
-        <p>最终答案正确 {{ practiceSummary.correct }} · 错误 {{ practiceSummary.incorrect }} · 未判定 {{ practiceSummary.ungraded }}</p>
-        <p class="hint">辅助作答 {{ practiceSummary.assisted }} · 仅自评 {{ practiceSummary.selfReported }}。这些记录不等于知识点已掌握。</p>
-        </template>
+      <StudyProgressSummary :completed="active.completed_count" :total="active.total_count" label="完成进度" accessible-label="今日练习完成进度" test-id="today-progress-summary" />
+      <details v-if="mode === 'paper'" class="paper-navigation">
+        <summary>题号导航 <span>{{ currentIndex + 1 }} / {{ orderedItems.length }}</span></summary>
+        <nav class="paper-number-nav" aria-label="题目定位">
+          <button v-for="(item, index) in orderedItems" :key="item.id" type="button" :class="{ 'is-current': item.id === currentItem?.id, 'is-complete': item.completed }" :aria-label="'定位第 ' + (index + 1) + ' 题' + (item.completed ? '，已完成' : '')" @click="jumpToPaperItem(item.id)">{{ index + 1 }}</button>
+        </nav>
+      </details>
         <details v-if="wrongItems.length" class="wrong-answer-review" data-testid="wrong-answer-review">
           <summary>回看错题 <span>{{ wrongItems.length }}</span></summary>
           <ul aria-label="本卷错题">
             <li v-for="item in wrongItems" :key="item.id">
               <button type="button" :disabled="submittingId !== null || answerLoadingId !== null" :data-testid="`revisit-wrong-${item.id}`" @click="revisitWrongAnswer(item.id)">
-                第 {{ orderedItems.findIndex(candidate => candidate.id === item.id) + 1 }} 题 · {{ typeLabel(item.question_type) }}
+                第 {{ wrongItemNumber(item) }} 题 · {{ typeLabel(item.question_type) }}<span v-if="item.retry_source_id"> · 重练</span>
                 <small>{{ item.kp_name }}</small>
               </button>
             </li>
           </ul>
         </details>
+      <details class="summary" data-testid="practice-result-summary">
+        <summary>本卷记录</summary>
+        <div class="study-result-panel">
+        <template v-if="practiceSummary.submitted || practiceSummary.selfReported">
+        <p>最终答案正确 {{ practiceSummary.correct }} · 错误 {{ practiceSummary.incorrect }} · 未判定 {{ practiceSummary.ungraded }}</p>
+        <p class="hint">辅助作答 {{ practiceSummary.assisted }} · 仅自评 {{ practiceSummary.selfReported }}。这些记录不等于知识点已掌握。</p>
+        </template>
+
       <section class="summary">
         <h2>今日涉及的知识点</h2>
         <ul data-testid="today-kp-summary">
@@ -991,10 +1343,15 @@ onMounted(async () => {
           </li>
         </ul>
       </section>
+        </div>
       </details>
+
+      <LearningTaskPanel class="study-assistant-dock" :open="assistantOpen" @open-change="assistantOpen=$event" :session-id="null" :current-plan-id="active.plan_id" :study-context="frogContext" :review-request="!!reviewNodeId" :current-work="currentItem ? processDrafts[currentItem.id] || rawAnswers[currentItem.id] || selectedOptions[currentItem.id] : undefined" :mascot="true" :mascot-pose="mode === 'focus' ? 'magnify' : 'read'" @confirmed="load" />
 
       <div class="actions">
         <button type="button" data-testid="append-questions" @click="openPicker">追加练习题</button>
+        <button type="button" data-testid="extend-plan" :disabled="selectionLoading" @click="openPlanSelection">{{ selectionLoading ? '正在读取推荐…' : '按知识点扩充今日卷' }}</button>
+        <p v-if="generateError && !showPlanSelection" role="alert">{{ generateError }}</p>
       </div>
 
         </aside>
@@ -1028,6 +1385,10 @@ onMounted(async () => {
           :selected-question-ids="pickerSelected"
           :auto-expand-branches="pickerSearch.trim().length > 0"
           :level="1"
+          :wrong-kp-ids="wrongKpIds"
+          @return-paper="returnToPaper"
+          @review-wrong="reviewPickerWrong"
+          @choose-other="chooseOtherKnowledge"
           @toggle-node="togglePickerNode"
           @toggle-question="togglePickerQuestion"
         />
@@ -1049,6 +1410,12 @@ onMounted(async () => {
 
 
 <style scoped>
+.study-mode-switch { display:flex; flex-wrap:wrap; gap:8px; max-width:1240px; margin:12px auto; padding:0 clamp(16px,4vw,48px); }
+.study-mode-switch button { min-height:38px; padding:7px 13px; border:1px solid var(--border); border-radius:9px; color:var(--text-secondary); background:#fff; cursor:pointer; }
+.study-mode-switch button.active { border-color:var(--accent, #4c6d58); color:#fff; background:var(--accent, #4c6d58); }
+/* 只有一个“今日学习”入口时不再显示绿色标签，避免与页面标题重复。 */
+.study-mode-switch button.active:only-child { border:0; background:transparent; color:var(--text-secondary); font-size:13px; }
+.study-mode-switch button:disabled { opacity:.5; cursor:not-allowed; }
 .wrong-answer-review { margin: 14px 0; font-size: 12px; }
 .wrong-answer-review summary { cursor: pointer; color: var(--text-secondary); }
 .wrong-answer-review summary span { margin-left: 6px; color: var(--text-tertiary); }
@@ -1181,6 +1548,7 @@ onMounted(async () => {
 .study-active-aside [data-testid="append-questions"] { width: 100%; }
 .study-active-main .focus-card { padding: 20px; }
 .study-active-main .paper-list { margin-top: 0; }
+.study-active-main :deep(.paper-list) { margin-top: 0; }
 .external-exam-task { max-width: 760px; padding: 18px 0; }
 .external-exam-task .eyebrow { margin: 0 0 7px; color: var(--text-tertiary); font-size: 12px; }
 .external-exam-task h2 { margin: 0; font-size: 21px; font-weight: 600; }
@@ -1248,14 +1616,16 @@ onMounted(async () => {
 .study-active-aside [data-testid="append-questions"] { width: auto; border-color: var(--border); color: var(--text-secondary); font-weight: 400; }
 .study-active-main .paper-list { margin: 0; }
 .study-active-main .paper-item { margin: 0; padding: 24px 4px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
+.study-active-main :deep(.paper-list) { margin: 0; }
+.study-active-main :deep(.paper-item) { margin: 0; padding: 24px 4px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
 .paper-question-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .9fr); align-items: start; gap: 32px; }
 .paper-question-main, .paper-answer-pane { min-width: 0; }
 .paper-answer-pane { padding: 4px 0 0 22px; border-left: 1px solid var(--border); }
 .paper-answer-pane .answer-box { margin-top: 18px; padding: 0; border: 0; background: transparent; overflow-wrap: anywhere; }
-.study-active-main .paper-item .stem { margin: 18px 0; font-size: 18px; line-height: 1.8; white-space: pre-wrap; }
-.study-active-main .paper-item header .tag { border: 0; background: transparent; color: var(--text-tertiary); }
-.study-active-main .paper-item .notice { border: 0; background: transparent; color: var(--text-secondary); font-size: 12px; }
-.study-active-main .paper-item header { display: flex; align-items: center; gap: 10px; }
+.study-active-main :deep(.paper-item .stem) { margin: 18px 0; font-size: 18px; line-height: 1.8; white-space: pre-wrap; }
+.study-active-main :deep(.paper-item header .tag) { border: 0; background: transparent; color: var(--text-tertiary); }
+.study-active-main :deep(.paper-item .notice) { border: 0; background: transparent; color: var(--text-secondary); font-size: 12px; }
+.study-active-main :deep(.paper-item header) { display: flex; align-items: center; gap: 10px; }
 .study-active-main .question-meta { margin-top: 6px; color: var(--text-tertiary); font-size: 11px; line-height: 1.6; }
 .study-active-main .question-meta summary { width: fit-content; cursor: pointer; }
 .study-active-main .question-meta > div { margin: 4px 0 0 12px; }
@@ -1320,4 +1690,13 @@ onMounted(async () => {
   .study-setup-action { align-items: stretch; flex-direction: column; gap: 10px; }
   .study-config-panel .setup-generate { width: 100%; }
 }
+
+.study-setup--workbench .study-setup-intro{padding-block:8px;margin-bottom:12px;min-height:0}.study-setup--workbench .study-setup-intro h2{font-size:28px;margin:8px 0}.study-setup--workbench .study-setup-mascot{width:72px;max-height:90px;flex:0 0 72px}.confirmed-home-workbench{min-width:0}.confirmed-home-workbench>header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}@media(max-width:640px){.study-setup--workbench .study-setup-intro h2{font-size:23px}.study-setup--workbench .study-setup-mascot{width:48px;flex-basis:48px}}
+</style>
+
+<style scoped>
+.setup-primary-action { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:12px 0 20px; }
+.setup-primary-action .setup-generate { background:#2d2e30; color:white; min-height:44px; }
+
+.study-setup--workbench .study-setup-intro{padding-block:8px;margin-bottom:12px;min-height:0}.study-setup--workbench .study-setup-intro h2{font-size:28px;margin:8px 0}.study-setup--workbench .study-setup-mascot{width:72px;max-height:90px;flex:0 0 72px}.confirmed-home-workbench{min-width:0}.confirmed-home-workbench>header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}@media(max-width:640px){.study-setup--workbench .study-setup-intro h2{font-size:23px}.study-setup--workbench .study-setup-mascot{width:48px;flex-basis:48px}}
 </style>

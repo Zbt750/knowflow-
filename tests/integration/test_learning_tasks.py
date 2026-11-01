@@ -12,7 +12,7 @@ from backend.schemas.learning_task import CreateTask, TaskInput
 from backend.services.learning_task_service import create_task, run_task, get_task, cancel_task, modify_task
 from backend.services.learning_task_tools import TaskTools, classify_task_intent, tool_definitions
 from backend.services.question_availability import question_availability
-from backend.services.learning_task_service import confirm_task
+from backend.services.learning_task_service import _daily_plan_snapshot, confirm_task
 from backend.schemas.learning_task import ConfirmTask
 from backend.errors import AppError
 from zoneinfo import ZoneInfo
@@ -62,10 +62,11 @@ def test_pending_review_is_prioritized_before_candidate_limit_and_respects_type(
             db.add(mark_isolated_question_trusted(Question(kp_id=kp_id, question_type="single_choice", stem=f"隔离短题{index}",
                             correct_answer="A", explanation="隔离解析", estimated_minutes=1,
                             options={"A": "选项甲", "B": "选项乙"},
-                            grading_config={"verified": True, "method": "single_choice"})))
+                            grading_config={"verified": True, "method": "single_choice"}), db=db))
         pending = Question(kp_id=kp_id, question_type="calculation", stem="隔离待复测长题",
-                           correct_answer="1", explanation="隔离解析", estimated_minutes=60)
-        mark_isolated_question_trusted(pending)
+                           correct_answer="1", explanation="隔离解析", estimated_minutes=60,
+                           grading_config={"verified": True, "method": "numeric_final"})
+        mark_isolated_question_trusted(pending, db=db)
         db.add(pending); db.flush(); pending_id = str(pending.id)
         db.get(KpState, kp_id).pending_review_question_ids = [pending_id, "damaged-id", None]
         db.get(KpState, kp_id).assessment_basis = "objective_v1"
@@ -80,6 +81,37 @@ def test_pending_review_is_prioritized_before_candidate_limit_and_respects_type(
     assert tools.execute("find_questions", {"kp_ids": [str(kp_id)]})["candidate_list_complete"] is False
 
 
+def test_daily_plan_signature_uses_immutable_practice_version(session_factory):
+    now = datetime(2026, 1, 1, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
+    with session_factory.begin() as db:
+        question = db.scalar(select(Question).where(Question.is_active.is_(True)))
+        plan = DailyPlan(study_date="2026-01-01", status="active")
+        db.add(plan)
+        db.flush()
+        item = PracticeItem(plan_id=plan.id, question_id=question.id, kp_id=question.kp_id, ordinal=1)
+        db.add(item)
+        db.flush()
+        question_id, item_id = question.id, item.id
+        bound_version_id = item.question_version_id
+
+    with session_factory() as db:
+        before_snapshot, before_signature = _daily_plan_snapshot(db, now=now)
+    assert before_snapshot["item_count"] == 1
+
+    with session_factory.begin() as db:
+        question = db.get(Question, question_id)
+        question.stem = question.stem + "（仅当前版本修订）"
+        db.flush()
+        assert question.current_version_id != bound_version_id
+
+    with session_factory() as db:
+        after_snapshot, after_signature = _daily_plan_snapshot(db, now=now)
+        item = db.get(PracticeItem, item_id)
+        assert item.question_version_id == bound_version_id
+    assert after_signature == before_signature
+    assert after_snapshot["pending_items"] == before_snapshot["pending_items"]
+
+
 def test_availability_separates_ai_questions_plan_attempts_references_and_exclusions(session_factory):
     now = datetime(2026, 1, 1, 10, tzinfo=ZoneInfo("Asia/Shanghai"))
     with session_factory.begin() as db:
@@ -88,11 +120,13 @@ def test_availability_separates_ai_questions_plan_attempts_references_and_exclus
         ai_question = mark_isolated_question_trusted(Question(kp_id=node.id,
             question_type="single_choice", stem="隔离 AI 答案练习题，选择正确项。",
             options={"A": "甲", "B": "乙"}, correct_answer="A", explanation="隔离 AI 参考解析。",
-            grading_config={"verified": False, "practice_method": "single_choice"}))
+            grading_config={"verified": False, "practice_method": "single_choice"}), db=db)
         ai_question.answer_provenance = "ai_generated"
         ai_question.answer_reliability = "model_generated"
         ai_question.answer_reviewed_by = None
         ai_question.answer_reviewed_at = None
+        ai_question.answer_verification_event_id = None
+        ai_question.current_answer_verification = None
         db.add(ai_question)
 
         plan = DailyPlan(study_date="2026-01-01", status="active")
@@ -120,7 +154,9 @@ def test_availability_separates_ai_questions_plan_attempts_references_and_exclus
     assert inventory["already_in_plan_count"] == 1
     assert inventory["available_to_append_count"] == inventory["practice_eligible_count"] - 1
     assert inventory["previously_attempted_count"] == 1
-    assert inventory["answer_provenance_counts"]["ai_generated"] == 1
+    # Public reference-only AI answers are now archived, not admitted practice.
+    assert inventory["answer_provenance_counts"].get("ai_generated", 0) == 0
+    assert inventory["blocking_reasons"]["public_formal_review_required"] >= 1
     assert inventory["candidate_count"] is None and inventory["candidate_inventory_status"] == "not_indexed"
     with session_factory() as db:
         without_base = question_availability(db, now=now, kp_ids=[node_id],
@@ -189,6 +225,9 @@ def test_confirmation_rechecks_changed_draft_and_rolls_back(session_factory, cha
     ready = run_task(session_factory, task(session_factory).task_id, PlanningProvider())
     body = ConfirmTask(draft_version=ready.draft_version)
     qid = UUID(ready.draft["questions"][0]["question_id"])
+    with session_factory() as db:
+        current_version_id = db.get(Question, qid).current_version_id
+    assert ready.draft["questions"][0]["question_version"] == str(current_version_id)
     with session_factory.begin() as db:
         if change == "inactive": db.get(Question, qid).is_active = False
         if change == "budget": db.get(Question, qid).estimated_minutes = 241
@@ -229,11 +268,13 @@ class PlanningProvider:
         if self.calls == 1:
             actions = [("search_knowledge", {"query": "洛必达"})]
         elif self.calls == 2:
-            result = json.loads(messages[-1]["content"])
+            from backend.services.learning_task_context import expand_records
+            result = expand_records(json.loads(messages[-1]["content"]))
             self.nodes = [n["kp_id"] for n in result["nodes"]]
             actions = [("get_learning_state", {"kp_ids": self.nodes}), ("find_questions", {"kp_ids": self.nodes})]
         elif self.calls == 3:
-            result = json.loads(messages[-1]["content"])
+            from backend.services.learning_task_context import expand_records
+            result = expand_records(json.loads(messages[-1]["content"]))
             self.questions = [q for q in result["questions"] if not q["in_today_plan"]]
             actions = [("validate_plan", {"question_ids": [self.questions[0]["question_id"]], "rationale": "无历史时先做基础题。"})]
         else:
@@ -247,22 +288,26 @@ def task(factory, goal="洛必达比较弱，安排学习", budget=90, *, now=No
     return create_task(factory, CreateTask(goal=goal, budget_minutes=budget), now=now)
 
 
-def test_confirmation_appends_to_existing_completed_plan_without_reordering(session_factory):
+def test_confirmation_cannot_append_to_a_frozen_completed_plan(session_factory):
     with session_factory.begin() as db:
         questions = db.scalars(select(Question).order_by(Question.estimated_minutes.desc(), Question.id.desc())).all()
         other = questions[0]
         plan = DailyPlan(study_date=datetime.now(timezone.utc).astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat(), status="completed")
         db.add(plan); db.flush(); pid = plan.id
-        db.add(PracticeItem(plan_id=pid, question_id=other.id, kp_id=other.kp_id, ordinal=5, latest_self_grade="mastered"))
+        original = PracticeItem(plan_id=pid, question_id=other.id, kp_id=other.kp_id, ordinal=5, latest_self_grade="mastered")
+        db.add(original); db.flush(); original_item_id=original.id
     ready = run_task(session_factory, task(session_factory).task_id, PlanningProvider())
     assert ready.draft["questions"][0]["question_id"] != str(other.id)
-    result = confirm_task(session_factory, ready.task_id, ConfirmTask(draft_version=ready.draft_version))
-    assert result.metrics["commit"]["plan_id"] == str(pid)
+    with pytest.raises(AppError) as error:
+        confirm_task(session_factory, ready.task_id, ConfirmTask(draft_version=ready.draft_version))
+    assert error.value.code == "plan_already_generated"
     with session_factory() as db:
         items = db.scalars(select(PracticeItem).where(PracticeItem.plan_id == pid).order_by(PracticeItem.ordinal)).all()
-        assert [i.ordinal for i in items] == [5, 6]
+        assert [i.ordinal for i in items] == [5]
+        assert [i.id for i in items] == [original_item_id]
         assert items[0].latest_self_grade == "mastered"
-        assert db.get(DailyPlan, pid).status == "active"
+        assert db.get(DailyPlan, pid).status == "completed"
+        assert db.scalar(select(func.count()).select_from(PracticeItem)) == 1
 
 
 def test_confirmation_rejects_plan_created_after_preview(session_factory):
@@ -313,8 +358,16 @@ def test_isolated_seed_questions_have_explicit_synthetic_trust_only_in_test_fixt
         questions = db.scalars(select(Question)).all()
     assert questions
     assert all(q.question_provenance == "trusted_practice" and q.content_trust == "verified"
-        and q.answer_provenance == "verified_reference" for q in questions), [
+        and q.answer_provenance == "human_verified" for q in questions), [
             (q.question_provenance, q.content_trust, q.answer_provenance) for q in questions]
+
+
+def test_find_questions_returns_source_category_from_stored_lineage(session_factory):
+    _tools,questions=prepared_tools(session_factory)
+    assert questions
+    assert all(question["source_category"] in {
+        "exam_curated","exam_variant","development_original","personal_ai_practice",
+        "personal_practice","unclassified_public"} for question in questions)
 
 
 def test_agent_loop_creates_only_validated_draft_and_replay_does_not_call_model(session_factory):
@@ -323,6 +376,7 @@ def test_agent_loop_creates_only_validated_draft_and_replay_does_not_call_model(
     result = run_task(session_factory, created.task_id, provider)
     assert result.status == "ready"
     assert result.draft["total_minutes"] <= 90 and result.draft["can_commit"] is True
+    assert "服务端已校验方案" in result.message and "只有你确认后才会创建或追加今日试卷" in result.message
     assert [t["tool"] for t in result.trace] == ["search_knowledge", "get_learning_state", "find_questions", "validate_plan"]
     assert result.metrics["calls"][-1]["usage_observed"] is False
     assert run_task(session_factory, created.task_id, provider).model_dump() == result.model_dump()
@@ -331,6 +385,26 @@ def test_agent_loop_creates_only_validated_draft_and_replay_does_not_call_model(
         for model in [DailyPlan, PracticeItem, QuestionAttempt, LearningEvent]:
             assert db.scalar(select(func.count()).select_from(model)) == 0
         assert all(s.state == "unseen" for s in db.scalars(select(KpState)))
+
+
+def test_model_cannot_claim_a_validated_draft_was_committed(session_factory):
+    class FalseCommitProvider(PlanningProvider):
+        def tool_turn(self, messages, tools, *, timeout):
+            if self.calls < 3:
+                return super().tool_turn(messages, tools, timeout=timeout)
+            self.calls += 1
+            return {"message": {"content": json.dumps({
+                "message": "已为你创建并加入今日学习。", "needs_clarification": False})},
+                "usage": {"total_tokens": 10}, "model": "test-tool-model"}
+
+    result = run_task(session_factory, task(session_factory).task_id, FalseCommitProvider())
+    assert result.status == "ready" and result.draft is not None
+    assert "已为你创建并加入今日学习" not in result.message
+    assert "方案尚未加入今日学习" in result.message
+    assert result.metrics["deterministic_response_override"] == "uncommitted_plan_claim_corrected"
+    with session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(DailyPlan)) == 0
+        assert db.scalar(select(func.count()).select_from(PracticeItem)) == 0
 
 
 def test_unknown_question_and_wrong_scope_are_rejected(session_factory):
@@ -346,7 +420,15 @@ def test_program_rejects_invalid_plans(session_factory, case):
     tools, questions = prepared_tools(session_factory, budget=5 if case == "over_budget" else 90,
                                      goal="只做填空题" if case == "wrong_type" else "安排基础题" if case == "wrong_difficulty" else "")
     q = next(q for q in questions if q["minutes"] > 5) if case == "over_budget" else questions[0]
-    if case == "wrong_difficulty": q = next(q for q in questions if q["difficulty"] == "advanced")
+    if case == "wrong_difficulty":
+        # find_questions now filters out difficulty conflicts before returning
+        # candidates. Simulate an observed-but-disallowed ID to exercise the
+        # independent validation guard as well.
+        with session_factory() as db:
+            advanced = db.scalar(select(Question).where(Question.difficulty == "advanced",
+                Question.kp_id == UUID(questions[0]["kp_id"])))
+            q = {"question_id": str(advanced.id)}
+        tools.questions.add(advanced.id)
     if case == "missing_state": tools.state_read.clear()
     ids = [q["question_id"]] * (2 if case == "duplicate" else 1)
     result = tools.execute("validate_plan", {"question_ids": ids})
@@ -444,9 +526,13 @@ def test_recommendation_uses_server_facts_when_plan_has_pending_items_and_no_new
                 stem=f"隔离 Planner 事实测试第{index + 1}题，选择正确选项。",
                 options={"A": "选项甲", "B": "选项乙"}, correct_answer="A",
                 explanation="隔离测试解析。", estimated_minutes=4, difficulty="medium")
-            mark_isolated_question_trusted(question)
+            mark_isolated_question_trusted(question, db=db)
             question.answer_provenance = "ai_generated"
             question.answer_reliability = "ai_generated_consistent"
+            question.answer_reviewed_by = None
+            question.answer_reviewed_at = None
+            question.answer_verification_event_id = None
+            question.current_answer_verification = None
             question.grading_config = {"verified": False, "practice_method": "single_choice"}
             db.add(question); questions.append(question)
         db.flush()
@@ -565,7 +651,8 @@ def test_model_replans_after_tool_reports_over_budget(session_factory):
                 return super().tool_turn(messages, tools, timeout=timeout)
             self.calls += 1
             if self.calls == 3:
-                self.questions = json.loads(messages[-1]["content"])["questions"]
+                from backend.services.learning_task_context import expand_records
+                self.questions = expand_records(json.loads(messages[-1]["content"]))["questions"]
                 chosen = max(self.questions, key=lambda q: q["minutes"])
             elif self.calls == 4:
                 assert "time_budget_exceeded" in json.loads(messages[-1]["content"])["errors"]
@@ -609,8 +696,8 @@ def test_failed_model_call_is_recorded_without_assuming_zero_cost(session_factor
     result = run_task(session_factory, task(session_factory).task_id, FailingProvider())
     assert result.status == "failed"
     assert result.metrics["rounds"] == 1
-    assert result.metrics["model_calls"] == 2
-    assert result.metrics["failed_calls"] == 2
+    assert result.metrics["model_calls"] == 1
+    assert result.metrics["failed_calls"] == 1
     assert result.metrics["successful_calls"] == 0
     call = result.metrics["calls"][0]
     assert call["status"] == "error" and call["usage"] is None
@@ -618,7 +705,7 @@ def test_failed_model_call_is_recorded_without_assuming_zero_cost(session_factor
     assert "prompt" not in call and call["error_code"] == "generation_failed"
 
 
-def test_agent_recovers_one_transient_connection_failure_with_shared_deadline(session_factory):
+def test_agent_recovers_only_after_explicit_retry_without_new_task(session_factory):
     class TransientProvider(PlanningProvider):
         def __init__(self): super().__init__(); self.failed = False; self.timeouts = []
         def tool_turn(self, messages, tools, *, timeout):
@@ -628,12 +715,17 @@ def test_agent_recovers_one_transient_connection_failure_with_shared_deadline(se
                 raise AppError("generation_failed", retryable=True)
             return super().tool_turn(messages, tools, timeout=timeout)
     provider = TransientProvider()
-    result = run_task(session_factory, task(session_factory).task_id, provider)
+    requested = task(session_factory)
+    failed = run_task(session_factory, requested.task_id, provider)
+    assert failed.status == 'failed' and len(provider.timeouts)==1
+    result = run_task(session_factory, requested.task_id, provider)
     assert result.status == "ready"
-    assert result.metrics["model_calls"] == 5 and result.metrics["rounds"] == 4
-    assert result.metrics["failed_calls"] == 1 and result.metrics["successful_calls"] == 4
-    assert result.metrics["calls"][0]["attempt"] == 1 and result.metrics["calls"][1]["attempt"] == 2
-    assert provider.timeouts[1] <= provider.timeouts[0] <= 12
+    assert result.task_id==requested.task_id
+    assert result.metrics["model_calls"] == 4 and result.metrics["rounds"] == 4
+    assert result.metrics["failed_calls"] == 0 and result.metrics["successful_calls"] == 4
+    assert result.metrics['attempt_history'][0]['metrics']['failed_calls']==1
+    assert all(c['attempt']==1 for c in result.metrics['calls'])
+    assert all(0<t<=12 for t in provider.timeouts)
 
 
 def test_scope_initialization_failure_does_not_leave_task_running(session_factory, monkeypatch):

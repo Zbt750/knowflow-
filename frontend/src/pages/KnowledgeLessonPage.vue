@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import StudyMascot from '../components/StudyMascot.vue';
 import { computed, watch } from "vue";
 import { useRoute } from "vue-router";
 
@@ -60,9 +61,12 @@ watch(lesson, (value) => {
         </template>
       </nav>
       <p class="lesson-source">{{ lesson.is_assessable ? "系统讲解" : "章节导读" }} · {{ lesson.subject }}</p>
+      <div class="lesson-reading-layout">
       <article class="lesson-article" data-testid="lesson-article">
         <MarkdownContent :text="lesson.markdown" />
       </article>
+      <aside class="lesson-companion"><StudyMascot pose="teach"/><p>慢慢推导，理解每一步。</p></aside>
+      </div>
       <footer v-if="lesson.is_assessable" class="lesson-next">
         <p>读完后可以独立复做例题，再去题库检验理解。</p>
         <div class="lesson-next-actions">

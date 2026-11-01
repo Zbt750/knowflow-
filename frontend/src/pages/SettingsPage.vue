@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import StudyMascot from '../components/StudyMascot.vue';
 import { computed, onMounted, ref } from "vue";
 import { ApiError } from "../api/client";
 import { fetchHealth, type HealthResponse } from "../api/health";
@@ -103,6 +104,8 @@ onMounted(() => void refresh());
   <section class="page settings-page">
     <header class="settings-heading">
       <div>
+        <p class="settings-kicker">奶蛙自习室 · 设置</p>
+        <h2>照顾好你的学习空间。</h2>
         <p>管理问答模型，查看本地服务状态。</p>
       </div>
       <button type="button" :disabled="loading || saving" @click="refresh()">{{ loading ? "检查中…" : "刷新状态" }}</button>
@@ -112,6 +115,8 @@ onMounted(() => void refresh());
     <p v-else-if="loading && !health" class="state state--loading">正在读取配置状态…</p>
 
     <template v-if="health">
+      <div class="settings-grid">
+      <div class="settings-primary">
       <section class="settings-section">
         <h2>问答模型</h2>
         <dl>
@@ -139,6 +144,12 @@ onMounted(() => void refresh());
       </section>
 
       <VisionSettings />
+      </div>
+      <aside class="settings-aside">
+      <div class="settings-aside-intro">
+        <StudyMascot pose="wave" class="settings-companion"/>
+        <p>本地学习空间<br /><span>先确认服务状态，再安心开始学习。</span></p>
+      </div>
       <section class="settings-section">
         <h2>本地服务</h2>
         <dl>
@@ -149,6 +160,8 @@ onMounted(() => void refresh());
         </dl>
         <p class="settings-note">资料索引或问答异常时，可先在这里确认服务状态，再到 <RouterLink to="/materials">资料库</RouterLink> 查看具体资料。</p>
       </section>
+      </aside>
+      </div>
     </template>
   </section>
 </template>

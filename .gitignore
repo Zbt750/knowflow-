@@ -111,6 +111,7 @@ Thumbs.db
 /docs/*comparison*
 /docs/phase3*
 /docs/phase4*
+!/docs/PHASE45A3_FIRST_HUMAN_VERIFIED_GOLDEN_SLICE.md
 /docs/knowledge-assets-audit*
 /docs/q0*
 /docs/reference-build-changes.md

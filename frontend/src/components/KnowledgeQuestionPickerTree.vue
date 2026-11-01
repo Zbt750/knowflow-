@@ -2,12 +2,14 @@
 import type { KnowledgeNodeView } from "../types/practice";
 import QuestionSource from "./QuestionSource.vue";
 import MarkdownContent from "./MarkdownContent.vue";
+import {emptyPracticeInventoryMessage} from '../lib/practiceTree';
 
 interface PickerQuestion {
   id: string;
   stem: string;
   is_variant: boolean;
   question_source?: import("../types/practice").QuestionSourceView | null;
+  trust?: import("../types/practice").QuestionTrustView | null;
 }
 
 const props = defineProps<{
@@ -19,11 +21,15 @@ const props = defineProps<{
   selectedQuestionIds: readonly string[];
   autoExpandBranches: boolean;
   level: number;
+  wrongKpIds?: ReadonlySet<string>;
 }>();
 
 const emit = defineEmits<{
   "toggle-node": [node: KnowledgeNodeView];
   "toggle-question": [questionId: string];
+  'return-paper': [];
+  'review-wrong': [kpId: string];
+  'choose-other': [];
 }>();
 
 function hasChildren(node: KnowledgeNodeView): boolean {
@@ -88,6 +94,10 @@ function isExpanded(node: KnowledgeNodeView): boolean {
         :selected-question-ids="selectedQuestionIds"
         :auto-expand-branches="autoExpandBranches"
         :level="level + 1"
+        :wrong-kp-ids="wrongKpIds"
+        @return-paper="emit('return-paper')"
+        @review-wrong="emit('review-wrong', $event)"
+        @choose-other="emit('choose-other')"
         @toggle-node="emit('toggle-node', $event)"
         @toggle-question="emit('toggle-question', $event)"
       />
@@ -109,14 +119,17 @@ function isExpanded(node: KnowledgeNodeView): boolean {
                 :checked="selectedQuestionIds.includes(question.id)"
                 @change="emit('toggle-question', question.id)"
               />
-              <div><MarkdownContent class="question-picker-tree__stem" :text="question.stem" /><QuestionSource :source="question.question_source" /></div>
+              <div><MarkdownContent class="question-picker-tree__stem" :text="question.stem" /><QuestionSource :source="question.question_source" :trust="question.trust" :is-variant="question.is_variant" /></div>
               <span v-if="question.is_variant" class="tag">变式题</span>
             </label>
           </li>
         </ul>
-        <p v-else-if="questions[node.id]" class="question-picker-tree__state">
-          该知识点暂无可追加练习题。
-        </p>
+        <div v-else-if="questions[node.id]" class="question-picker-tree__state">
+          <p>{{ emptyPracticeInventoryMessage(node) }}</p>
+          <button type="button" data-testid="empty-return-paper" @click="emit('return-paper')">返回今日卷 · 阅览全卷</button>
+          <button v-if="wrongKpIds?.has(node.id)" type="button" data-testid="empty-review-wrong" @click="emit('review-wrong', node.id)">回看本知识点错题</button>
+          <button type="button" data-testid="empty-choose-other" @click="emit('choose-other')">选择其他知识点</button>
+        </div>
       </div>
     </li>
   </ul>

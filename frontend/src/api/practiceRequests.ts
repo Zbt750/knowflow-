@@ -5,6 +5,6 @@ export type PracticeRequest={id:string;status:"draft"|"pending"|"planning"|"prop
   planner_task_id:string|null;daily_plan_id:string|null;error_code:string|null};
 export const fetchPracticeRequest=(id:string)=>api.get<PracticeRequest>(`/api/practice-requests/${id}`);
 export const listPracticeRequests=()=>api.get<PracticeRequest[]>("/api/practice-requests");
-export const sendPracticeRequest=(id:string,source_conversation_id:string)=>api.post<PracticeRequest>(`/api/practice-requests/${id}/send`,{source_conversation_id});
+export const sendPracticeRequest=(id:string,source_conversation_id:string,target_study_session_id?:string)=>api.post<PracticeRequest>(`/api/practice-requests/${id}/send`,{source_conversation_id,target_study_session_id});
 export const declinePracticeRequest=(id:string)=>api.post<PracticeRequest>(`/api/practice-requests/${id}/decline`,{});
 export const planPracticeRequest=(id:string,study_session_id:string)=>api.post<{request:PracticeRequest;task:LearningTask}>(`/api/practice-requests/${id}/plan`,{study_session_id});

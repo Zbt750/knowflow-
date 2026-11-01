@@ -1,9 +1,15 @@
 <script setup lang="ts">
+import StudyMascot from '../components/StudyMascot.vue';
+import {notifyPracticeRequestsChanged} from '../lib/practiceRequestChanges';
+import { assistantTerminal, type AssistantStatus } from '../lib/assistantTerminal';
+import { restoreComposerDraft } from '../lib/composerDraft';
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ApiError } from "../api/client";
 import {
   createChatSession,
+  cancelGenerationConfirmation,
+  createDeepQA,
   deleteChatSession,
   fetchChatMessages,
   listChatSessions,
@@ -18,11 +24,23 @@ import {
 } from "../api/chat";
 import { studyContextFromRoute, assistantConversationLink, rememberAssistantConversation } from "../lib/studyContext";
 import PracticeRequestCard from "../components/PracticeRequestCard.vue";
+import PersonalQuestionResult from "../components/PersonalQuestionResult.vue";
+import GenerationFailureNotice from '../components/GenerationFailureNotice.vue';
+import PersonalGenerationConfirmation from "../components/PersonalGenerationConfirmation.vue";
 import type { LearningTask } from "../api/learningTasks";
 import { countReadyMaterials } from "../api/materials";
+import { transcribeQuestionImage } from "../api/vision";
+import { generatePersonalQuestions, type GenerationResult } from "../api/personalQuestions";
+import { fetchKnowledgeTree } from "../api/study";
+import type { KnowledgeNodeView } from "../types/practice";
+import { photoFileError } from "../lib/photoInput";
 import { useAsyncTask } from "../composables/useAsyncTask";
 import MarkdownContent from "../components/MarkdownContent.vue";
 import AppIcon from "../components/AppIcon.vue";
+import { chatAnswerText } from "../lib/chatAnswerText";
+import { readDeepQADraft, removeDeepQADraft } from "../lib/deepQADraft";
+import { assistantFailureMessage, assistantTurnFromHistory, createAssistantTurn, retryAssistantTurn, savedAssistantTurn, type AssistantTurn } from "../lib/assistantTurn";
+import { resolveGenerationConfirmationReply } from "../lib/generationConfirmationReply";
 
 defineOptions({ name: "ChatPage" });
 const props=withDefaults(defineProps<{privateMode?:boolean}>(),{privateMode:false});
@@ -35,10 +53,128 @@ const sessionId = ref<string | null>(null);
 const sessions = ref<ChatSession[]>([]);
 const messages = ref<ChatMessage[]>([]);
 const question = ref("");
+// 普通问答的图片题入口：只做临时转写，识别文本由用户核对后再发送。
+const questionImageInput = ref<HTMLInputElement | null>(null);
+const questionImageBusy = ref(false);
+const questionImageNotice = ref<string | null>(null);
+const questionImageError = ref<string | null>(null);
+const questionImageController = ref<AbortController | null>(null);
+// 图片识别 → 个人变式练习；模式必须由用户显式选择或确认降级。
+const variantOpen = ref(false);
+const variantKps = ref<Array<{ id: string; name: string }>>([]);
+const variantKpsLoading = ref(false);
+const variantKpId = ref("");
+const variantCount = ref(1);
+const variantDifficulty = ref<"basic" | "improved" | "comprehensive">("basic");
+const variantType = ref<"single_choice" | "fill_blank" | "calculation" | "proof" | "subjective">("single_choice");
+const variantMode = ref<"ai_enhanced" | "ai_generated">("ai_enhanced");
+const variantBusy = ref(false);
+const variantError = ref<string | null>(null);
+const variantNeedsFallback = ref(false);
+const variantResult = ref<GenerationResult | null>(null);
+function pickQuestionImage() {
+  questionImageError.value = null;
+  questionImageInput.value?.click();
+}
+async function onQuestionImage(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0] ?? null;
+  input.value = "";
+  if (!file || questionImageBusy.value) return;
+  const invalid = photoFileError(file);
+  if (invalid) { questionImageError.value = invalid; return; }
+  questionImageBusy.value = true;
+  questionImageError.value = null;
+  questionImageNotice.value = null;
+  const controller = new AbortController();
+  questionImageController.value = controller;
+  try {
+    const result = await transcribeQuestionImage(file, controller.signal);
+    const text = (result.text || "").trim();
+    if (!text) { questionImageError.value = "图片里没有识别到可用文字，请换一张更清晰的图片。"; return; }
+    question.value = question.value.trim() ? question.value.trimEnd() + "\n\n" + text : text;
+    questionImageNotice.value = "已识别图片中的题目文字，请核对后发送；图片不会保存。";
+    await nextTick();
+  } catch (error) {
+    questionImageError.value = error instanceof ApiError ? error.message : "图片识别失败，请换一张图片或改用文字输入。";
+  } finally {
+    if (questionImageController.value === controller) questionImageController.value = null;
+    questionImageBusy.value = false;
+  }
+}
+
+function flattenVariantNodes(nodes: KnowledgeNodeView[]): Array<{ id: string; name: string }> {
+  const output: Array<{ id: string; name: string }> = [];
+  for (const node of nodes) {
+    if (node.is_assessable && !node.is_reference_only && !(node.children?.length)) output.push({ id: node.id, name: node.name });
+    if (node.children?.length) output.push(...flattenVariantNodes(node.children));
+  }
+  return output;
+}
+
+async function openVariantPanel(): Promise<void> {
+  variantOpen.value = true;
+  variantError.value = null;
+  variantResult.value = null;
+  variantNeedsFallback.value = false;
+  if (variantKps.value.length) return;
+  variantKpsLoading.value = true;
+  try {
+    const tree = await fetchKnowledgeTree();
+    variantKps.value = flattenVariantNodes(tree.nodes);
+  } catch {
+    variantError.value = "无法加载知识点，请稍后重试。";
+  } finally {
+    variantKpsLoading.value = false;
+  }
+}
+
+function closeVariantPanel(): void {
+  if (variantBusy.value) return;
+  variantOpen.value = false;
+}
+
+async function submitVariant(): Promise<void> {
+  const text = question.value.trim();
+  if (!text) { variantError.value = "请先识别或输入题目文字。"; return; }
+  if (!variantKpId.value) { variantError.value = "请选择知识点。"; return; }
+  variantBusy.value = true;
+  variantError.value = null;
+  variantNeedsFallback.value = false;
+  try {
+    const result = await generatePersonalQuestions({
+      request_key: crypto.randomUUID(),
+      generation_mode: variantMode.value,
+      targets: [{ kp_id: variantKpId.value, question_type: variantType.value, count: variantCount.value, difficulty: variantDifficulty.value }],
+      reference_text: text,
+      reference_source: { type: "image_transcription" },
+      user_requirement: "基于图片题目生成个人变式练习，不照抄原题，不给答案。",
+    });
+    variantResult.value = result;
+    if (!result.question_ids.length) variantError.value = result.message || "本次没有生成可用题目。";
+  } catch (error) {
+    variantError.value = error instanceof ApiError ? error.message : "生成变式练习失败，请稍后重试。";
+    variantNeedsFallback.value = error instanceof ApiError
+      && error.code === "personal_generation_unsupported" && variantMode.value === "ai_enhanced";
+  } finally {
+    variantBusy.value = false;
+  }
+}
+
+async function fallbackVariant(): Promise<void> {
+  variantMode.value = "ai_generated";
+  await submitVariant();
+}
+const pendingDeepQA = ref<ReturnType<typeof readDeepQADraft>>(null);
 const learningContext = computed(() => props.privateMode?{surface:'materials' as const,origin:'material' as const,
-  material_id:privateScopeIds.value.length===1?privateScopeIds.value[0]:undefined}:studyContextFromRoute(route.query));
+  material_id:privateScopeIds.value.length===1?privateScopeIds.value[0]:undefined}:pendingDeepQA.value
+    ? {...pendingDeepQA.value.context,conversation_id:undefined,task_id:undefined,surface:'chat' as const}
+    :studyContextFromRoute(route.query));
 const requestedAction = ref<AssistanceAction>("auto");
-const retryTarget = ref<ChatMessage | null>(null);
+const turnRequests = new Map<string, AssistantTurn>();
+const uncertainTurn = ref<AssistantTurn | null>(null);
+const uncertainCanRetry = ref(false);
+const retryChecking = ref(false);
 const quotedAnswers = ref<Array<{ id: string; text: string }>>([]);
 const answerSelection = ref<{ text: string; left: number; top: number } | null>(null);
 // 统一状态（阶段 E）：页面的「加载中 / 失败」这一对状态由 pageTask 承载，
@@ -85,13 +221,17 @@ const selectedMode = ref<ChatMode>(props.privateMode?"user":"builtin");
 const compactSidebar = ref(typeof window !== "undefined" && window.matchMedia("(max-width: 980px)").matches);
 const updateSidebarMode = () => { compactSidebar.value = window.matchMedia("(max-width: 980px)").matches; };
 const readyByMode = ref<Record<ChatMode, number>>({ user: 0, builtin: 0 });
+const materialErrors = reactive<Record<ChatMode, string>>({ user: '', builtin: '' });
+const materialsLoading = reactive<Record<ChatMode, boolean>>({ user: false, builtin: false });
+const sessionsError = ref('');
+const messagesError = ref('');
 const scrollBox = ref<HTMLElement | null>(null);
-const openCitationIds = ref(new Set<string>());
 const expandedMessageIds = ref(new Set<string>());
 const feedbackNotice = ref("");
 let controller: AbortController | null = null;
 const router = useRouter();
 const route = useRoute();
+const chatPurpose = () => props.privateMode ? 'materials' as const : 'qa' as const;
 
 const PINNED_SESSIONS_KEY = "kaoyan-chat-pinned-sessions";
 const pinnedSessionIds = ref(new Set<string>());
@@ -237,38 +377,31 @@ function formatResponseDuration(durationMs: number | null | undefined): string {
   return `耗时 ${Math.floor(seconds / 60)} 分 ${(seconds % 60).toFixed(1)} 秒`;
 }
 function isExpanded(messageId: string): boolean {
-  return expandedMessageIds.value.has(messageId);
+  // 集合记录用户主动折叠的回答；教学正文默认完整显示，历史也一致。
+  return !expandedMessageIds.value.has(messageId);
 }
 function toggleExpanded(messageId: string): void {
   const next = new Set(expandedMessageIds.value);
   next.has(messageId) ? next.delete(messageId) : next.add(messageId);
   expandedMessageIds.value = next;
 }
-function citationsOpen(messageId: string): boolean {
-  return openCitationIds.value.has(messageId);
-}
-function toggleCitations(messageId: string): void {
-  const next = new Set(openCitationIds.value);
-  next.has(messageId) ? next.delete(messageId) : next.add(messageId);
-  openCitationIds.value = next;
-}
-function openCitation(citation: Citation): void {
-  void router.push({
-    path: "/materials",
-    query: { material_id: citation.material_id, chunk_id: citation.chunk_id },
-  });
-}
 async function scrollToBottom(): Promise<void> {
   await nextTick();
   if (scrollBox.value) scrollBox.value.scrollTop = scrollBox.value.scrollHeight;
 }
 
+async function refreshMaterial(mode: ChatMode): Promise<void> {
+  if (materialsLoading[mode]) return;
+  materialsLoading[mode] = true;
+  materialErrors[mode] = '';
+  try { readyByMode.value[mode] = await countReadyMaterials(mode); }
+  catch (caught) {
+    console.warn('chat material readiness failed', mode, caught);
+    materialErrors[mode] = `${mode === 'user' ? '用户' : '内置'}资料列表加载失败，不影响查看已有聊天记录。`;
+  } finally { materialsLoading[mode] = false; }
+}
 async function refreshMaterials(): Promise<void> {
-  const [user, builtin] = await Promise.all([
-    countReadyMaterials("user"),
-    countReadyMaterials("builtin"),
-  ]);
-  readyByMode.value = { user, builtin };
+  await Promise.all([refreshMaterial('user'), refreshMaterial('builtin')]);
 }
 /**
  * 取历史会话。
@@ -278,7 +411,12 @@ async function refreshMaterials(): Promise<void> {
  * 后端同时不再返回没有任何消息的空会话，所以列表里每一条都能点开看。
  */
 async function refreshSessions(): Promise<void> {
-  sessions.value = await listChatSessions(selectedMode.value);
+  sessionsError.value = '';
+  try { sessions.value = await listChatSessions(selectedMode.value,props.privateMode ? undefined : 'qa'); }
+  catch (caught) {
+    console.warn('chat session list failed', caught);
+    sessionsError.value = '会话列表暂时无法加载，请重试。';
+  }
 }
 let sessionLoadVersion = 0;
 const sessionLoading = ref(false);
@@ -288,6 +426,7 @@ async function openSession(session: ChatSession): Promise<void> {
   if(props.privateMode&&session.mode!=='user')return;
   const version = ++sessionLoadVersion;
   sessionLoading.value = true;
+  messagesError.value = '';
   error.value = "";
   feedbackNotice.value = "";
   clearQuotedAnswerContext();
@@ -297,7 +436,7 @@ async function openSession(session: ChatSession): Promise<void> {
     ...(session.material_scope_ids?.length?{material_ids:session.material_scope_ids.join(',')}:{})}});
   messages.value = [];
   try {
-    const items = await fetchChatMessages(session.session_id);
+    const items = await fetchChatMessages(session.session_id, chatPurpose());
     if (version !== sessionLoadVersion || sessionId.value !== session.session_id) return;
     messages.value = items;
     if (!props.privateMode) {
@@ -313,7 +452,8 @@ async function openSession(session: ChatSession): Promise<void> {
       }
     }
   } catch (caught) {
-    if (version === sessionLoadVersion) error.value = caught instanceof ApiError ? caught.message : "无法读取会话，请稍后重试";
+    console.warn('chat messages failed', session.session_id, caught);
+    if (version === sessionLoadVersion) messagesError.value = '会话消息暂时无法加载，请重试。';
     return;
   } finally {
     if (version === sessionLoadVersion) sessionLoading.value = false;
@@ -327,7 +467,7 @@ async function syncRouteSession(): Promise<void> {
   const requestedId = typeof route.query.session_id === "string" ? route.query.session_id : null;
   if (!requestedId || requestedId === sessionId.value || sending.value) return;
   try {
-    const allSessions = await listChatSessions();
+    const allSessions = await listChatSessions(undefined,props.privateMode ? undefined : 'qa');
     if (route.query.session_id !== requestedId || sending.value) return;
     const target = allSessions.find((item) => item.session_id === requestedId);
     if (!target) {
@@ -348,7 +488,7 @@ async function syncRouteSession(): Promise<void> {
  * 为什么不在这里建会话：见 `changeScope` 的说明。会话统一推迟到
  * `send()` 里「用户真的发出第一条问题」时才创建。
  */
-function startDraft(): void {
+function startDraft(preserveHandoff = false): void {
   if (sending.value) return;
   ++sessionLoadVersion;
   sessionLoading.value = false;
@@ -357,8 +497,12 @@ function startDraft(): void {
   clearQuotedAnswerContext();
   sessionId.value = null;
   messages.value = [];
+  if (!preserveHandoff) {
+    pendingDeepQA.value = null;
+    if (route.query.study_draft) void router.replace({ path: "/chat" });
+  }
   if (route.query.session_id) void router.replace({ path: props.privateMode?"/materials/qa":"/chat",query:props.privateMode?{material_ids:privateScopeIds.value.join(',')}:{} });
-  retryTarget.value = null; requestedAction.value = "auto";
+  requestedAction.value = "auto";
 }
 /**
  * 切换资料范围。
@@ -382,7 +526,7 @@ async function renameSession(target: ChatSession): Promise<void> {
   const title = nextTitle?.trim();
   if (!title || title === target.title) return;
   try {
-    const updated = await renameChatSession(target.session_id, title);
+    const updated = await renameChatSession(target.session_id, title, chatPurpose());
     sessions.value = sessions.value.map((item) => item.session_id === updated.session_id ? updated : item);
   } catch (caught) {
     error.value = caught instanceof ApiError ? caught.message : "会话改名失败";
@@ -399,7 +543,7 @@ async function deleteSession(target: ChatSession): Promise<void> {
   if (sending.value) return;
   if (!window.confirm(`删除会话「${target.title}」？\n\n此操作不可恢复：该会话的问答记录与引用会被永久删除。`)) return;
   try {
-    await deleteChatSession(target.session_id);
+    await deleteChatSession(target.session_id, chatPurpose());
     sessions.value = sessions.value.filter((item) => item.session_id !== target.session_id);
     if (pinnedSessionIds.value.has(target.session_id)) togglePinnedSession(target);
     // 删掉的正是当前打开的那条 → 自动切到下一条；一条都不剩就回到空白草稿。
@@ -421,16 +565,67 @@ async function copyAnswer(content: string): Promise<void> {
   }
 }
 
-async function send(): Promise<void> {
-  if (sessionLoading.value) {
+const invalidGenerationCards = new Set<string>();
+async function confirmGeneration(message: ChatMessage, kpId: string): Promise<void> {
+  if (sending.value || !message.personal_generation_confirmation) return;
+  await send(kpId, message);
+}
+async function confirmGenerationTargets(message: ChatMessage, targets: NonNullable<NonNullable<ChatMessage['personal_generation_confirmation']>['proposed_targets']>): Promise<void> {
+  if (sending.value || !message.personal_generation_confirmation) return;
+  await send(undefined, message, undefined,
+    targets.map(({kp_id,question_type,count,difficulty})=>({kp_id,question_type,count,difficulty})));
+}
+function onGenerationNodeSelection(message: ChatMessage, kpId: string | null): void {
+  const confirmation = message.personal_generation_confirmation;
+  if (!confirmation) return;
+  message.personal_generation_confirmation = { ...confirmation, selected_kp_id: kpId };
+  error.value = "";
+}
+async function cancelGeneration(message: ChatMessage): Promise<void> {
+  if (sending.value || !sessionId.value) return;
+  sending.value = true;
+  try { await cancelGenerationConfirmation(sessionId.value, message.message_id, chatPurpose()); message.personal_generation_confirmation = null; error.value = ''; }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : '暂时无法取消，请稍后重试。'; }
+  finally { sending.value = false; }
+}
+async function send(confirmedKpId?: string, confirmation?: ChatMessage, existingTurn?: AssistantTurn,
+  confirmedTargets?: Array<{kp_id:string;question_type:string;count:number;difficulty:string}>): Promise<void> {
+  // Enter 与按钮使用相同的就绪边界。否则初始化异步返回的 startDraft()
+  // 会清空已通过 Enter 发出的消息，后端明明存了确认卡，页面却是空白。
+  if (sessionLoading.value || loading.value || !pageInitialized.value) {
     error.value = "正在读取会话，请稍后发送。输入内容已保留。";
     return;
   }
-  if (sending.value || (!question.value.trim() && !quotedAnswers.value.length)) return;
-  const quoteContext = quotedAnswers.value.map((item) =>
+  if (sending.value || (!existingTurn && !confirmation && !question.value.trim() && !quotedAnswers.value.length)) return;
+  const latestAssistant = [...messages.value].reverse().find((item) => item.role === "assistant");
+  if (!existingTurn && !confirmation && latestAssistant?.personal_generation_confirmation) {
+    const reply = resolveGenerationConfirmationReply(question.value, latestAssistant.personal_generation_confirmation);
+    if (reply.kind === "confirm") {
+      question.value = "";
+      error.value = "";
+      await send(reply.kpId, latestAssistant);
+      return;
+    }
+    if (reply.kind === "confirm-targets") {
+      question.value = "";
+      error.value = "";
+      await send(undefined, latestAssistant, undefined,
+        reply.targets.map(({kp_id,question_type,count,difficulty})=>({kp_id,question_type,count,difficulty})));
+      return;
+    }
+    if (reply.kind === "needs-node") {
+      error.value = "请先在出题卡中选择知识点，或直接回复“确定 + 完整知识点名称”。输入内容已保留。";
+      return;
+    }
+    if (reply.kind === 'unmatched-node') {
+      error.value = `未找到知识点「${reply.requested}」。请从出题卡选择现有节点，或取消；没有生成题目。输入已保留。`;
+      return;
+    }
+  }
+  const quoteContext = (existingTurn || confirmation ? [] : quotedAnswers.value).map((item) =>
     "引用的回答片段：\n" + item.text.split("\n").map((line) => "> " + line).join("\n"),
   ).join("\n\n");
-  const text = [quoteContext, question.value.trim()].filter(Boolean).join("\n\n");
+  const text = existingTurn?.question ?? confirmation?.personal_generation_confirmation?.question ?? [quoteContext, question.value.trim()].filter(Boolean).join("\n\n");
   if (Array.from(text).length > 4000) {
     error.value = "问题与引用合计不能超过 4000 字，请缩短问题或移除部分引用。输入内容已保留。";
     return;
@@ -438,6 +633,7 @@ async function send(): Promise<void> {
   const draft = question.value;
   const draftQuotes = [...quotedAnswers.value];
   let accepted = false;
+  let rejectedBeforeAcceptance = false;
   error.value = "";
   feedbackNotice.value = "";
   sending.value = true;
@@ -446,8 +642,21 @@ async function send(): Promise<void> {
   let id = sessionId.value;
   if (id === null) {
     try {
-      const created = await createChatSession("新对话", selectedMode.value,{purpose:props.privateMode?'materials':'qa',material_scope_ids:props.privateMode?privateScopeIds.value:[]});
-      id = created.session_id;
+      if (pendingDeepQA.value && !props.privateMode) {
+        const draft = pendingDeepQA.value;
+        const sourceId = draft.sourceSessionId ?? (await createChatSession("今日学习", "builtin", { purpose: "study" })).session_id;
+        // 只有实际发送问题时才把学习交接和问答会话落库。
+        draft.sourceSessionId = sourceId;
+        const response = await createDeepQA(sourceId, { ...draft.context, conversation_id: sourceId }, text, draft.requestKey);
+        id = response.session_id;
+        messages.value = await fetchChatMessages(id, 'qa');
+        removeDeepQADraft(draft.requestKey);
+        pendingDeepQA.value = null;
+        await router.replace(assistantConversationLink(id, response.study_context));
+      } else {
+        const created = await createChatSession("新对话", selectedMode.value,{purpose:props.privateMode?'materials':'qa',material_scope_ids:props.privateMode?privateScopeIds.value:[]});
+        id = created.session_id;
+      }
       sessionId.value = id;
     } catch (caught) {
       sending.value = false;
@@ -456,29 +665,38 @@ async function send(): Promise<void> {
       return;
     }
   }
-  question.value = "";
-  clearQuotedAnswerContext();
-  const action = requestedAction.value;
+  if (!existingTurn && !confirmation) { question.value = ""; clearQuotedAnswerContext(); }
+  const action = existingTurn?.options.qa_action ?? (confirmation ? 'auto' : requestedAction.value);
   const latestTask = [...messages.value].reverse().find(m => m.planner_task_id)?.planner_task_id;
-  const context = { ...(retryTarget.value?.study_context ?? learningContext.value), conversation_id: id,
-    task_id: retryTarget.value?.study_context?.task_id ?? latestTask ?? undefined };
-  const retryId = retryTarget.value?.message_id;
+  const context = existingTurn?.options.study_context ?? { ...learningContext.value, conversation_id: id, task_id: latestTask ?? undefined };
+  const request = existingTurn ?? createAssistantTurn(id, text, { assistant: true, purpose: chatPurpose(), study_context: context,
+    qa_action: action, personal_generation_confirmed_kp_id: confirmedKpId,
+    personal_generation_confirmed_targets: confirmedTargets,
+    personal_generation_confirmation_message_id: confirmation?.message_id }, messages.value);
+  uncertainTurn.value = null;
+  uncertainCanRetry.value = false;
   if (selectedMode.value === "builtin") rememberAssistantConversation(id);
   const localUserId = `local-user-${Date.now()}`;
   const localAssistantId = `streaming-${Date.now()}`;
-  messages.value.push({ message_id: localUserId, role: "user", content: text, status: "completed", matched_kp_id: null, citations: [] });
-  const assistant = reactive<ChatMessage>({ message_id: localAssistantId, role: "assistant", content: "", status: "generating", matched_kp_id: null, citations: [] });
-  messages.value.push(assistant);
-  activeStreamMessageId.value = localAssistantId;
+  if (!existingTurn && !confirmation) messages.value.push({ message_id: localUserId, role: "user", content: text, status: "completed", matched_kp_id: null, citations: [] });
+  const assistant = reactive<ChatMessage>({ message_id: existingTurn?.replyId ?? localAssistantId, role: "assistant", content: "", status: "generating", matched_kp_id: null, citations: [] });
+  const previousReplyIndex = existingTurn?.replyId ? messages.value.findIndex(message => message.message_id === existingTurn.replyId) : -1;
+  if (previousReplyIndex >= 0) messages.value[previousReplyIndex] = assistant;
+  else messages.value.push(assistant);
+  activeStreamMessageId.value = assistant.message_id;
   streamStage.value = "retrieving";
   startStreamTimer();
   controller = new AbortController();
   await scrollToBottom();
+  let wireStatus: AssistantStatus = 'generating';
   try {
     await streamChatAnswer(id, text, async (event, data) => {
+      if (wireStatus !== 'generating') return;
+      wireStatus = assistantTerminal(wireStatus, event, data);
       if (event === "meta") {
         accepted = true;
         assistant.message_id = String(data.message_id);
+        request.replyId = assistant.message_id;
         activeStreamMessageId.value = assistant.message_id;
         streamStage.value = "generating";
       }
@@ -493,10 +711,19 @@ async function send(): Promise<void> {
       }
       if (event === "planner") assistant.planner_task_id = String(data.task_id);
       if (event === "practice_request") assistant.practice_request_id = String(data.id);
+      if (event === 'personal_generation') assistant.personal_generation=data as unknown as ChatMessage['personal_generation'];
+      if (event === 'personal_training') assistant.personal_training=data as unknown as ChatMessage['personal_training'];
+      if (event === 'personal_generation_confirmation') assistant.personal_generation_confirmation=data as unknown as ChatMessage['personal_generation_confirmation'];
       if (event === "web_sources") assistant.web_sources = data.sources as ChatMessage['web_sources'];
       if (event === "information_source") assistant.qa_information_route = String(data.source);
       if (event === "done") {
-        assistant.status = data.status === "failed" ? "failed" : "completed";
+        notifyPracticeRequestsChanged();
+        assistant.status = wireStatus;
+        if (wireStatus === 'failed') {
+          assistant.assistant_error_code = String(data.code ?? '');
+          assistant.retryable = data.retryable !== false;
+          error.value = assistantFailureMessage(assistant.assistant_error_code);
+        } else if (wireStatus === 'completed') error.value = '';
         if (typeof data.answer === "string") assistant.content = data.answer;
         assistant.answer_source = (data.answer_source as ChatMessage["answer_source"]) ?? null;
         assistant.response_duration_ms = typeof data.response_duration_ms === "number" ? data.response_duration_ms : null;
@@ -506,8 +733,16 @@ async function send(): Promise<void> {
         assistant.citations = (data.citations as Citation[] | undefined) ?? assistant.citations;
       }
       if (event === "error") {
-        if(data.message_id){accepted=true;assistant.message_id=String(data.message_id);}
+        if (data.code === 'personal_generation_confirmation_invalid' && confirmation) {
+          invalidGenerationCards.add(confirmation.message_id);
+          rejectedBeforeAcceptance = true;
+          question.value = restoreComposerDraft(question.value, text);
+          uncertainTurn.value = null;
+        }
+        if(data.message_id){accepted=true;assistant.message_id=String(data.message_id);request.replyId=assistant.message_id;}
         assistant.status = "failed";
+        assistant.assistant_error_code = String(data.code ?? '');
+        assistant.retryable = data.retryable !== false;
         // 规格 2.5：llm_not_configured → 明确「尚未配置问答模型」并给出配置指引；
         // generation_failed / retrieval_failed → 该条消息标记失败，只提供普通重试。
         const code = String(data.code ?? "");
@@ -520,10 +755,9 @@ async function send(): Promise<void> {
               ? "资料检索超过 30 秒，已停止本次请求。请确认资料已完成索引，或缩小问题范围后重试。"
             : code === "retrieval_failed"
               ? "检索暂时失败（向量库或模型不可用），可以稍后重试这次提问。"
-              : String(data.message ?? "回答生成失败");
+              : assistantFailureMessage(code, String(data.message ?? "回答生成失败"));
       }
-    }, controller.signal, { assistant: true, study_context: context,
-      qa_action: action, retry_of_message_id: retryId });
+    }, controller.signal, request.options);
     if (assistant.status === "generating") {
       assistant.status = "failed";
       error.value = "回答连接已结束，但没有收到完成状态，请重试。";
@@ -535,6 +769,12 @@ async function send(): Promise<void> {
     } else {
       assistant.status = "failed";
       if (caught instanceof ApiError) {
+        if (caught.code === 'personal_generation_confirmation_invalid' && confirmation) {
+          invalidGenerationCards.add(confirmation.message_id);
+          question.value = restoreComposerDraft(question.value, text);
+          uncertainTurn.value = null;
+        }
+        rejectedBeforeAcceptance = !accepted && caught.status !== null;
         error.value =
           caught.code === "llm_not_configured"
             ? "尚未配置问答模型：请打开左下角设置，填写并保存模型配置。"
@@ -542,23 +782,36 @@ async function send(): Promise<void> {
               ? "自动恢复后仍达到模型输出上限。已保留未完成内容，请检查设置中的模型与输出预算后重试。"
             : caught.code === "retrieval_timeout"
               ? "资料检索超过 30 秒，已停止本次请求。请确认资料已完成索引，或缩小问题范围后重试。"
-            : caught.message;
+            : assistantFailureMessage(caught.code, caught.message);
       } else {
         error.value = "无法连接问答服务";
       }
     }
   } finally {
-    if ((!accepted || assistant.status === "failed") && !question.value && !quotedAnswers.value.length) {
+    if (rejectedBeforeAcceptance && !confirmation && !existingTurn && !question.value && !quotedAnswers.value.length) {
       question.value = draft;
       quotedAnswers.value = draftQuotes;
     }
-    if (assistant.status === "failed" && accepted && selectedMode.value === "builtin") retryTarget.value = { ...assistant, study_context: context, qa_action: action };
-    else if (assistant.status === "completed") { retryTarget.value = null; requestedAction.value = "auto"; }
+    if (assistant.status === "completed") requestedAction.value = "auto";
     activeStreamMessageId.value = null;
     stopStreamTimer();
     controller = null;
     await refreshSessions().catch(() => undefined);
-    await fetchChatMessages(id).then((items) => { if (sessionId.value === id) messages.value = items; }).catch(() => undefined);
+    if (request.replyId) turnRequests.set(request.replyId, request);
+    // Read after a disconnected stream before offering any resend. A successful
+    // server response may have been saved even when its terminal frame was lost.
+    let restored: ChatMessage[] | null = null;
+    await fetchChatMessages(id, chatPurpose()).then((items) => {
+      for (const item of items) if (invalidGenerationCards.has(item.message_id)) item.personal_generation_confirmation = null;
+      restored = items; if (sessionId.value === id) messages.value = items;
+    }).catch(() => undefined);
+    const saved = restored ? savedAssistantTurn(request, restored) : undefined;
+    if (saved) turnRequests.set(saved.message_id, { ...request, replyId: saved.message_id });
+    if (saved?.status === 'completed') error.value = '';
+    else if (assistant.status === 'failed' && !rejectedBeforeAcceptance && saved?.status !== 'failed') {
+      uncertainTurn.value = request;
+      error.value = saved?.status === 'generating' ? '连接已中断，这条请求仍在处理；请读取状态。' : `${error.value} 原提问已保留，请先读取状态再重试。`;
+    }
     await scrollToBottom();
     sending.value = false;
   }
@@ -567,41 +820,80 @@ function cancel(): void {
   controller?.abort();
 }
 async function askLearningAction(action: AssistanceAction): Promise<void> {
-  requestedAction.value = action; retryTarget.value = null;
+  requestedAction.value = action;
   question.value = ({ hint_1: "给我一点提示，不要告诉答案", hint_2: "请提示下一步，不要给最终结果", solution: "请讲解当前题的完整参考解答", process_review: "请辅助检查我这道题的作答过程；缺少步骤时先问我" } as Record<string,string>)[action];
   await send();
 }
 async function retryLearningMessage(message: ChatMessage) {
-  const index = messages.value.findIndex(m => m.message_id === message.message_id);
-  const user = messages.value.slice(0,index).reverse().find(m => m.role === "user");
-  if (!user) return;
-  if (sessionId.value && message.study_context) await router.replace(assistantConversationLink(sessionId.value,message.study_context));
-  retryTarget.value = message; requestedAction.value = message.qa_action ?? "auto"; question.value = user.content; clearQuotedAnswerContext();
-  await send();
+  if (!sessionId.value || sending.value || retryChecking.value || message.retryable === false) return;
+  const original = turnRequests.get(message.message_id) ?? assistantTurnFromHistory(sessionId.value, message, messages.value);
+  if (!original) { error.value = '无法恢复原提问，请重新提出问题。'; return; }
+  let retry: AssistantTurn | undefined;
+  retryChecking.value = true;
+  try {
+    const history = await fetchChatMessages(original.sessionId, chatPurpose());
+    const saved = savedAssistantTurn(original, history);
+    if (sessionId.value === original.sessionId) messages.value = history;
+    if (saved?.status === 'completed' || saved?.status === 'cancelled') { error.value = ''; return; }
+    if (saved?.status === 'generating') { uncertainTurn.value = original; error.value = '这条请求仍在处理，请稍后读取状态；不会重复发送。'; return; }
+    if (saved?.retryable === false) { error.value = '该请求已结束，可编辑原提问后再明确发送新请求。'; return; }
+    retry = retryAssistantTurn(original, saved);
+  } catch { uncertainTurn.value = original; error.value = '暂时无法确认原请求状态，已保留提问；请先读取状态。'; }
+  finally { retryChecking.value = false; }
+  if (retry) await send(undefined, undefined, retry);
 }
-onMounted(async () => {
+function editFailedMessage(message: ChatMessage) {
+  if (!sessionId.value || sending.value) return;
+  if (question.value.trim() || quotedAnswers.value.length) { error.value = '输入框已有新的草稿，请先保留或发送该草稿，再编辑原提问。'; return; }
+  const original = turnRequests.get(message.message_id) ?? assistantTurnFromHistory(sessionId.value, message, messages.value);
+  if (!original) { error.value = '无法恢复原提问，请重新输入。'; return; }
+  question.value = original.question;
+  requestedAction.value = 'auto';
+  error.value = '原提问已放入输入框。修改后发送会开始一次新的请求。';
+}
+async function recoverUncertainTurn() {
+  const original = uncertainTurn.value;
+  if (!original || sending.value || retryChecking.value) return;
+  if (uncertainCanRetry.value) { await send(undefined, undefined, original); return; }
+  retryChecking.value = true;
+  try {
+    const history = await fetchChatMessages(original.sessionId, chatPurpose());
+    const saved = savedAssistantTurn(original, history);
+    if (sessionId.value === original.sessionId) messages.value = history;
+    if (saved?.status === 'completed' || saved?.status === 'cancelled') { uncertainTurn.value = null; error.value = ''; return; }
+    if (saved?.status === 'generating') { error.value = '这条请求仍在处理，请稍后读取状态；不会重复发送。'; return; }
+    if (saved?.status === 'failed') { turnRequests.set(saved.message_id, retryAssistantTurn(original, saved)); uncertainTurn.value = null; error.value = '原回复未完成，可点击该回复下的重试按钮。'; return; }
+    uncertainCanRetry.value = true;
+    error.value = '未读取到已保存的回复，可使用原请求重试。';
+  } catch { error.value = '暂时无法确认原请求状态，已保留提问；请先读取状态。'; }
+  finally { retryChecking.value = false; }
+}
+async function initializeConversations() {
   try {
     await pageTask.run(async () => {
-      await refreshMaterials();
       // 先不带 mode 取一次历史：**最近用过的那条会话的模式**就是用户上次待的地方，
       // 用它作为默认范围。这样刷新页面会回到原处，而不是每次跳回另一个范围。
-      const recent = await listChatSessions();
+      const recent = await listChatSessions(undefined,props.privateMode ? undefined : 'qa');
       const fallback: ChatMode = props.privateMode?"user":"builtin";
       const sharedId = typeof route.query.session_id === "string" ? route.query.session_id : null;
-      const initial = sharedId ? recent.find((item) => item.session_id === sharedId) : props.privateMode&&privateScopeIds.value.length?undefined:recent.find(item=>item.mode===fallback);
+      pendingDeepQA.value = props.privateMode ? null : readDeepQADraft(route.query.study_draft);
+      const nodeEntry = !props.privateMode && studyContextFromRoute(route.query).knowledge_node_ids?.length;
+      const initial = sharedId ? recent.find((item) => item.session_id === sharedId) : pendingDeepQA.value||nodeEntry||props.privateMode&&privateScopeIds.value.length?undefined:recent.find(item=>item.mode===fallback);
       selectedMode.value = fallback;
       await refreshSessions();
       // 分享链接优先打开指定会话；普通访问仍回到最近使用的会话。
       if (initial) await openSession(initial);
-      else startDraft();
+      else startDraft(Boolean(pendingDeepQA.value));
+      if (pendingDeepQA.value) question.value = pendingDeepQA.value.problem;
       if (sharedId && !initial) error.value = "分享的会话不存在或已删除";
     });
     // 页面级加载失败：把统一状态给出的文案（含非 ApiError 的兜底）接到页面提示上。
-    if (pageTask.state.value === "error") error.value = pageTask.errorMessage.value ?? "无法加载问答页面";
+    if (pageTask.state.value === "error") sessionsError.value = '会话列表暂时无法加载，请重试。';
   } finally {
     pageInitialized.value = true;
   }
-});
+}
+onMounted(() => { void refreshMaterials(); void initializeConversations(); });
 onMounted(() => {
   loadPinnedSessions();
   window.addEventListener("resize", updateSidebarMode);
@@ -611,8 +903,20 @@ onMounted(() => {
   window.addEventListener("keydown", onContextMenuEscape);
 });
 watch(() => route.query.session_id, () => { void syncRouteSession(); });
+// 从知识树切换节点时开未落库的草稿，不恢复另一节点的旧确认卡。
+watch(()=>route.query.knowledge_node_id,(id,previous)=>{
+  if(id!==previous && id && route.path==='/chat' && !route.query.session_id && pageInitialized.value && !props.privateMode)startDraft();
+});
+watch(() => route.query.study_draft, (id) => {
+  const draft = readDeepQADraft(id);
+  if (!draft || props.privateMode || sending.value) return;
+  startDraft(true); pendingDeepQA.value = draft; question.value = draft.problem;
+});
 watch(()=>privateScopeIds.value.join(','),(value,old)=>{if(props.privateMode&&value!==old&&!route.query.session_id)startDraft();});
-onActivated(() => { void syncRouteSession(); });
+onActivated(() => {
+  if(!props.privateMode && route.path==='/chat' && route.query.knowledge_node_id && !route.query.session_id && pageInitialized.value)startDraft();
+  else void syncRouteSession();
+});
 onBeforeUnmount(() => {
   controller?.abort();
   stopStreamTimer();
@@ -630,7 +934,7 @@ onBeforeUnmount(() => {
     <aside class="conversation-sidebar" aria-label="会话历史">
       <div class="sidebar-head">
         <h2>对话</h2>
-        <button class="icon-button" type="button" title="新建对话" :disabled="sending || loading" @click="startDraft">＋</button>
+        <button class="icon-button" type="button" title="新建对话" :disabled="sending || loading" @click="startDraft()">＋</button>
       </div>
       <RouterLink v-if="privateMode" to="/materials">返回我的资料</RouterLink>
       <div class="history-label">历史会话</div>
@@ -648,7 +952,18 @@ onBeforeUnmount(() => {
           <button type="button" class="conversation-item" @click="openSession(item)">
             <span class="conversation-title">{{ item.title }}</span>
             <span v-if="pinnedSessionIds.has(item.session_id)" class="conversation-pinned">置顶</span>
-            <small>{{ modeLabel(item.mode) }}</small>
+          </button>
+          <button
+            type="button"
+            class="conversation-delete"
+            :aria-label="'删除会话：' + item.title"
+            :title="'删除会话：' + item.title"
+            :disabled="sending"
+            @click.stop="deleteSession(item)"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+              <path d="M7 3.5h6m-9 2h12m-10.5 0 .7 10.1c.1.8.7 1.4 1.5 1.4h4.6c.8 0 1.4-.6 1.5-1.4l.7-10.1M8 8v6m4-6v6" />
+            </svg>
           </button>
           <button v-if="compactSidebar" type="button" class="conversation-more" :aria-label="'会话操作：' + item.title" @click="openCompactMenu($event, item)">⋯</button>
         </div>
@@ -658,13 +973,23 @@ onBeforeUnmount(() => {
     </Teleport>
 
     <main class="chat-main">
+      <div v-for="mode in (['user', 'builtin'] as const)" :key="mode" v-show="materialErrors[mode]" role="status" :data-testid="`materials-error-${mode}`">
+        {{ materialErrors[mode] }} <button type="button" :disabled="materialsLoading[mode]" @click="refreshMaterial(mode)">重试资料</button>
+      </div>
+      <div v-if="sessionsError" role="alert" data-testid="sessions-load-error">{{ sessionsError }} <button type="button" :disabled="loading" @click="initializeConversations">重试会话列表</button></div>
+      <div v-if="messagesError" role="alert" data-testid="messages-load-error">{{ messagesError }} <button type="button" @click="openSession({session_id: sessionId!, mode: selectedMode} as ChatSession)">重试会话消息</button></div>
       <header class="chat-header">
-        <p class="chat-source" data-testid="chat-source">{{privateMode?'所选私人资料问答':'学习问答'}}</p>
+        <div>
+          <p class="chat-source" data-testid="chat-source">奶蛙 · 学习问答</p>
+          <h2>和奶蛙一起，把问题想明白。</h2>
+          <p class="chat-header-hint">提问、追问，或一起梳理学习思路。</p>
+        </div>
         <span v-if="selectedMode === 'builtin' && learningContext.question_id">当前学习题目 <button :disabled="sending" @click="router.replace({ path: '/chat', query: sessionId ? { session_id: sessionId, clear_context: '1' } : {} })">退出题目上下文</button></span>
       </header>
 
 
       <p v-if="error" class="chat-notice chat-notice--error" role="alert">{{ error }} <RouterLink v-if="error.includes('尚未配置问答模型')" to="/settings">查看设置</RouterLink></p>
+      <p v-if="uncertainTurn && uncertainTurn.sessionId === sessionId" class="chat-notice" data-testid="chat-turn-recovery">已保留提问：{{ uncertainTurn.question }} <button :disabled="sending || retryChecking" @click="recoverUncertainTurn">{{ uncertainCanRetry ? '重试这条请求' : '读取这条请求状态' }}</button></p>
       <p v-if="feedbackNotice" class="chat-notice chat-notice--success">{{ feedbackNotice }}</p>
       <p v-if="privateMode&&!privateScopeIds.length" class="chat-notice chat-notice--setup">
         请先到<RouterLink to="/materials">资料库选择资料</RouterLink>，再开始限定问答。历史会话仍可阅读；没有明确资料范围时不能发送新问题。
@@ -672,101 +997,53 @@ onBeforeUnmount(() => {
 
       <section ref="scrollBox" class="messages" aria-live="polite" :aria-busy="sending" @mouseup="onAnswerTextSelection" @keyup="onAnswerTextSelection">
         <div v-if="loading || sessionLoading" class="empty-state">{{ loading ? "正在读取会话和资料状态…" : "正在读取对话…" }}</div>
+        <div v-else-if="messagesError" class="empty-state">消息尚未恢复，请使用上方重试按钮。</div>
         <div v-else-if="messages.length === 0" class="empty-state">
-          <strong>从一个资料内的问题开始</strong>
-          <span>例如：这份资料中，阶段 D 的 SSE 事件顺序是什么？</span>
-          <small>没有相关内容时，会显示资料范围或索引状态。</small>
+          <StudyMascot pose="chin" class="chat-companion"/>
+          <strong>从一个问题开始</strong>
+          <span>问一道题、一个知识点，或让奶蛙一起梳理学习思路。</span>
         </div>
 
         <article v-for="message in messages" :key="message.message_id" class="message-row" :class="`message-row--${message.role}`">
-          <div class="message-avatar" aria-hidden="true">{{ message.role === "user" ? "你" : "AI" }}</div>
           <div class="message-body">
-            <div class="message-meta">{{ message.role === "user" ? "你的问题" : privateMode?'资料问答助手':'学习问答助手' }}</div>
-            <p v-if="message.role === 'assistant' && (message.answer_source === 'general' || message.answer_source === 'mixed' || ['web','current_question','evidence'].includes(message.qa_information_route??''))" class="message-meta" data-testid="answer-source">
-              {{message.qa_information_route==='web'?(message.web_sources?.length?'网络来源 + 模型解释':'联网不可用 · 未核验实时信息'):message.qa_information_route==='current_question'||message.qa_information_route==='evidence'?'当前题目与学习记录':message.answer_source === 'general' ? '通用知识参考 · 非资料结论' : '资料依据 + 通用知识参考'}}
-            </p>
+            <div v-if="message.role === 'assistant'" class="assistant-message-heading"><StudyMascot pose="pencil" /><strong>奶蛙</strong></div>
             <div v-if="message.role === 'assistant' && message.status === 'generating'" class="response-progress" role="status" data-testid="response-progress">
               <span v-if="message.message_id === activeStreamMessageId" class="response-progress__dots" aria-hidden="true"><i></i><i></i><i></i></span>
               <span>{{ message.message_id === activeStreamMessageId ? streamStageLabel : "这次回答尚未完成。" }}</span>
               <span v-if="message.message_id === activeStreamMessageId" class="response-progress__time" aria-hidden="true">{{ streamElapsedSeconds }} 秒</span>
             </div>
             <div v-if="message.status !== 'generating' || Boolean(message.content)" class="message-bubble" :class="{ 'message-bubble--collapsed': messageIsLong(message) && !isExpanded(message.message_id), 'message-bubble--selectable': message.role === 'assistant' && message.status === 'completed' }">
-              <MarkdownContent v-if="message.role === 'assistant' && message.content" :text="message.content" />
+              <MarkdownContent v-if="message.role === 'assistant' && message.content" :text="chatAnswerText(message.content)" />
               <MarkdownContent v-else-if="message.content && message.content.includes('\n> ')" :text="message.content" />
               <p v-else>{{ message.content || (message.status === 'cancelled' ? '已停止生成。' : '回答生成失败。') }}</p>
             </div>
             <button v-if="messageIsLong(message)" type="button" class="text-action" @click="toggleExpanded(message.message_id)">
               {{ isExpanded(message.message_id) ? "收起回答" : "展开完整回答" }}
             </button>
-            <!--
-              归因依据。
-              归因结果决定「推荐哪些追练题」，所以它不能只给结论：
-              这里明确告诉用户是哪一个引用片段（[C1]）把这次回答归到了哪个叶子知识点，
-              用户据此就能自己判断这次归因对不对，而不是只能被动接受。
-              只显示，不计算 —— 依据字段全部来自后端并已落库。
-              只在「内置资料」模式显示：「我的资料」模式按契约不产生归因与追练推荐。
-            -->
-            <div
-              v-if="message.role === 'assistant' && message.matched_kp && selectedMode === 'builtin'"
-              class="attribution-box"
-              data-testid="attribution-box"
-            >
-              <span class="attribution-box__label">归因依据</span>
-              <template v-if="message.matched_kp.attribution_label">
-                这次回答被归到叶子知识点
-                <strong data-testid="attribution-kp">{{
-                  message.matched_kp.kp_name || message.matched_kp.kp_id
-                }}</strong>
-                ，依据是正文引用的
-                <code data-testid="attribution-label">[{{ message.matched_kp.attribution_label }}]</code>
-                （检索命中第 {{ message.matched_kp.source_rank }} 位<template
-                  v-if="message.matched_kp.cosine !== null"
-                  >，语义相关度 {{ message.matched_kp.cosine.toFixed(2) }}</template
-                >）。
-                <button
-                  type="button"
-                  class="text-action attribution-box__open"
-                  @click="toggleCitations(message.message_id)"
-                >
-                  查看该片段
-                </button>
-              </template>
-              <template v-else>
-                这次回答被归到叶子知识点
-                <strong data-testid="attribution-kp">{{
-                  message.matched_kp.kp_name || message.matched_kp.kp_id
-                }}</strong>
-                ，依据是检索命中第 {{ message.matched_kp.source_rank }} 位的资料片段（该片段未被正文引用）。
-              </template>
-            </div>
-            <div v-if="message.role === 'assistant' && message.citations.length" class="citation-box">
-              <button type="button" class="citation-toggle" :aria-expanded="citationsOpen(message.message_id)" @click="toggleCitations(message.message_id)">
-                引用 {{ message.citations.length }} 个资料片段 <span>{{ citationsOpen(message.message_id) ? "⌃" : "⌄" }}</span>
-              </button>
-              <ol v-if="citationsOpen(message.message_id)" class="citation-list">
-                <li v-for="citation in message.citations" :key="citation.label">
-                  <code>[{{ citation.label }}]</code>
-                  <button type="button" class="citation-card" @click="openCitation(citation)">
-                    <strong>{{ citation.material_title }}</strong>
-                    <span>{{ citation.heading_path.join(" › ") || "未标注章节" }} · 第 {{ citation.ordinal + 1 }} 块</span>
-                    <p>{{ citation.preview }}</p>
-                    <small>chunk: {{ citation.chunk_id }}</small>
-                  </button>
-                </li>
-              </ol>
-            </div>
             <PracticeRequestCard v-if="message.practice_request_id&&!privateMode" :request-id="message.practice_request_id" />
-            <details v-if="message.web_sources?.length"><summary>网络来源</summary><a v-for="source in message.web_sources" :key="source.url" :href="source.url" target="_blank" rel="noopener noreferrer">{{source.title}}</a></details>
-            <button v-if="message.role === 'assistant' && message.status === 'failed'" :disabled="sending" @click="retryLearningMessage(message)">重试这条回复</button>
+            <PersonalQuestionResult v-if="message.personal_generation?.question_ids.length && !privateMode" :generation="message.personal_generation" />
+            <GenerationFailureNotice v-if="message.personal_generation && !privateMode" :generation="message.personal_generation" />
+            <section v-if="message.personal_training && !privateMode" class="personal-training-chat-result" data-testid="personal-training-chat-result" aria-label="专项训练操作结果">
+              <p>{{ message.personal_training.summary }}</p>
+              <RouterLink v-if="message.personal_training.training_id && (message.personal_training.item_count ?? 0) > 0 && ['active', 'paused', 'completed'].includes(message.personal_training.status ?? '')" :to="{ path: '/study', query: { mode: 'personal', owner_session_id: message.personal_training.owner_session_id, training_id: message.personal_training.training_id } }">进入专项练习</RouterLink>
+              <ul v-else-if="message.personal_training.trainings?.length">
+                <li v-for="training in message.personal_training.trainings.filter(item => ['active', 'paused', 'completed'].includes(item.status))" :key="training.training_id">
+                  <RouterLink :to="{ path: '/study', query: { mode: 'personal', owner_session_id: message.personal_training.owner_session_id, training_id: training.training_id } }">进入专项练习 · {{ training.summary }}</RouterLink>
+                </li>
+              </ul>
+            </section>
+            <PersonalGenerationConfirmation v-if="!privateMode && message.personal_generation_confirmation && message.message_id === messages.filter(item => item.role === 'assistant').at(-1)?.message_id" :confirmation="message.personal_generation_confirmation" :busy="sending" @selection-change="onGenerationNodeSelection(message, $event)" @confirm="confirmGeneration(message, $event)" @confirm-targets="confirmGenerationTargets(message, $event)" @cancel="cancelGeneration(message)" />
+            <button v-if="message.role === 'assistant' && message.status === 'failed' && message.retryable !== false" :disabled="sending || retryChecking" @click="retryLearningMessage(message)">重试这条回复</button>
+            <button v-else-if="message.role === 'assistant' && message.status === 'failed'" :disabled="sending" @click="editFailedMessage(message)">编辑原提问</button>
             <div v-if="message.role === 'assistant' && message.status === 'completed'" class="message-actions">
               <span class="response-duration" :title="message.response_duration_ms == null ? '旧回答没有保存耗时' : '包含资料检索与回答生成的总耗时'">{{ formatResponseDuration(message.response_duration_ms) }}</span>
-              <button type="button" class="text-action" @click="copyAnswer(message.content)">复制</button>
+              <button type="button" class="text-action" @click="copyAnswer(chatAnswerText(message.content))">复制</button>
             </div>
           </div>
         </article>
       </section>
 
-      <form class="composer" @submit.prevent="send">
+      <form class="composer" @submit.prevent="send()">
         <div v-if="quotedAnswers.length" class="composer-quotes" aria-label="已引用的回答内容" data-testid="composer-quotes">
           <blockquote v-for="item in quotedAnswers" :key="item.id" class="composer-quote">
             <span class="composer-quote__label">引用回答</span>
@@ -781,8 +1058,23 @@ onBeforeUnmount(() => {
           <button :disabled="sending" @click="askLearningAction('solution')">讲解答案</button>
           <button :disabled="sending" @click="askLearningAction('process_review')">检查思路</button>
         </div>
-        <textarea id="chat-question" v-model="question" :disabled="sending || loading" maxlength="4000" rows="1" placeholder="输入问题，或先选中回答内容作为引用…" @keydown.enter.exact.prevent="send" />
-        <div class="composer-footer"><small>{{privateMode?'仅依据所选私人资料，资料不足会明确告知':'通用知识、系统资料与学习记录分别说明来源'}}</small><div><button v-if="sending" type="button" @click="cancel">停止生成</button><button class="send-button" type="submit" :disabled="!canSend">发送</button></div></div>
+        <textarea id="chat-question" v-model="question" :disabled="sending || loading" maxlength="4000" rows="1" placeholder="输入问题，或先选中回答内容作为引用…" @keydown.enter.exact="!$event.isComposing && ($event.preventDefault(), send())" />
+        <div class="composer-footer"><small>{{privateMode?'围绕所选资料提问':'Enter 发送 · Shift + Enter 换行'}}</small><div><button type="button" :disabled="sending || loading || questionImageBusy" @click="pickQuestionImage">{{ questionImageBusy ? '识别中…' : '图片提问' }}</button><button v-if="sending" type="button" @click="cancel">停止生成</button><button class="send-button" type="submit" :disabled="!canSend">发送</button></div></div>
+        <input ref="questionImageInput" class="sr-only" type="file" accept="image/jpeg,image/png,image/webp" aria-label="选择题目图片" @change="onQuestionImage" />
+        <p v-if="questionImageNotice" class="image-entry-notice" role="status">{{ questionImageNotice }}<button type="button" data-testid="image-variant-open" @click="openVariantPanel">生成变式练习</button></p>
+        <p v-if="questionImageError" class="form-error" role="alert">{{ questionImageError }}</p>
+        <section v-if="variantOpen" class="variant-panel" data-testid="image-variant-panel" aria-label="从图片题目生成变式练习">
+          <header><strong>从图片题目生成个人变式练习</strong><button type="button" :disabled="variantBusy" @click="closeVariantPanel">关闭</button></header>
+          <label>知识点<select v-model="variantKpId" data-testid="variant-kp" :disabled="variantKpsLoading||variantBusy"><option value="">{{variantKpsLoading?'加载中…':'请选择知识点'}}</option><option v-for="kp in variantKps" :key="kp.id" :value="kp.id">{{kp.name}}</option></select></label>
+          <label>题量<select v-model.number="variantCount" data-testid="variant-count" :disabled="variantBusy"><option v-for="n in 5" :key="n" :value="n">{{n}} 道</option></select></label>
+          <label>难度<select v-model="variantDifficulty" data-testid="variant-difficulty" :disabled="variantBusy"><option value="basic">基础</option><option value="improved">提高</option><option value="comprehensive">综合</option></select></label>
+          <label>题型<select v-model="variantType" data-testid="variant-type" :disabled="variantBusy"><option value="single_choice">单选</option><option value="fill_blank">填空</option><option value="calculation">计算</option><option value="proof">证明</option><option value="subjective">主观</option></select></label>
+          <label>生成方式<select v-model="variantMode" data-testid="variant-mode" :disabled="variantBusy"><option value="ai_enhanced">智能选题（优先复用题族）</option><option value="ai_generated">通用生成（模型出题）</option></select></label>
+          <div class="variant-actions"><button type="button" class="primary" :disabled="variantBusy||!variantKpId" data-testid="variant-submit" @click="submitVariant">{{variantBusy?'生成中…':'生成变式练习'}}</button><button type="button" :disabled="variantBusy" @click="closeVariantPanel">取消</button></div>
+          <p v-if="variantError" class="form-error" role="alert" data-testid="variant-error">{{variantError}}</p>
+          <button v-if="variantNeedsFallback" type="button" data-testid="variant-fallback" :disabled="variantBusy" @click="fallbackVariant">改用通用生成（ai_generated）</button>
+          <p v-if="variantResult?.question_ids.length" class="notice" data-testid="variant-result">已生成 {{variantResult.question_ids.length}} 道个人变式题并保存到个人题库；不会进入公共题库或今日卷。</p>
+        </section>
       </form>
     </main>
     <Teleport to="body">
@@ -842,9 +1134,11 @@ onBeforeUnmount(() => {
 .conversation-item:hover:not(:disabled) { background: transparent; }
 .conversation-title { overflow: hidden; font-size: 11px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-item small, .history-empty { color: var(--text-tertiary); font-size: 9px; }
-.conversation-delete { display: grid; flex: 0 0 23px; width: 23px; min-height: 23px; margin-right: 3px; padding: 0; place-items: center; border: 0; color: transparent; background: transparent; }
-.conversation-row:hover .conversation-delete, .conversation-row:focus-within .conversation-delete { color: #8d8f93; }
+.conversation-delete { display: grid; flex: 0 0 28px; width: 28px; min-height: 28px; margin-right: 3px; padding: 0; place-items: center; border: 0; border-radius: 8px; color: var(--text-tertiary); background: transparent; }
+.conversation-delete svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; }
 .conversation-delete:hover:not(:disabled) { color: var(--danger); background: #f7e8e6; }
+.conversation-delete:focus-visible { color: var(--danger); outline: 2px solid color-mix(in srgb, var(--danger) 35%, transparent); outline-offset: 1px; }
+.conversation-delete:disabled { cursor: not-allowed; opacity: .45; }
 .history-empty { margin: 10px 7px; }
 
 .chat-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #fff; }
@@ -942,7 +1236,7 @@ onBeforeUnmount(() => {
   .scope-picker { width: min(300px, 100%); margin: 5px 0; }
   .conversation-list { display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
   .conversation-row { flex: 0 0 150px; }
-  .conversation-delete { color: #999; }
+  .conversation-delete { flex-basis: 30px; width: 30px; min-height: 30px; color: var(--text-tertiary); }
   .chat-header { min-height: 62px; padding: 9px 12px; }
   .chat-header > div > p:last-child { display: none; }
   .messages { padding: 14px 12px 9px; }
@@ -1034,6 +1328,10 @@ onBeforeUnmount(() => {
 .conversation-menu button:hover { background: #edf4fc; }
 .conversation-menu .conversation-menu__danger { color: var(--danger); }
 .conversation-menu .conversation-menu__danger:hover { background: #fff1f0; }
+.personal-training-chat-result { display: grid; gap: 8px; margin: 10px 0 4px; padding: 12px 14px; border: 1px solid #dbe6d8; border-radius: 10px; background: #f5f8f1; color: #425344; font-size: 13px; line-height: 1.55; }
+.personal-training-chat-result p { margin: 0; white-space: pre-line; }
+.personal-training-chat-result a { width: fit-content; color: #3c674c; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.personal-training-chat-result ul { display: grid; gap: 6px; margin: 0; padding-left: 18px; }
 @media (max-width: 760px) {
   .conversation-row { flex: 0 0 176px; }
   .conversation-item { min-height: 48px; }

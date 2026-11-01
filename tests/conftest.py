@@ -9,24 +9,41 @@ import pytest
 # 项目根目录：tests/ 的上一级。
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# 本机测试库默认值；CI 或其它机器可用同名环境变量覆盖。
-DEFAULT_TEST_DATABASE_URL = (
-    "postgresql+psycopg://kaoyan:kaoyan_dev_pw@127.0.0.1:5433/kaoyan_test"
-)
+def _validate_isolated_test_database(test_url: str | None, owned_port: str | None) -> str:
+    """Require an explicitly owned loopback test cluster; never fall back to dev."""
+    from sqlalchemy.engine import make_url
+
+    if not test_url:
+        raise RuntimeError("TEST_DATABASE_URL must be explicitly set by an isolated test runner")
+    try:
+        url = make_url(test_url)
+        port = int(url.port or 0)
+        marker = int(owned_port or 0)
+    except Exception as exc:
+        raise RuntimeError("Invalid isolated test database configuration") from exc
+    if (url.get_backend_name() != "postgresql" or url.host not in {"127.0.0.1", "localhost", "::1"}
+            or port <= 18000 or port == 5433 or marker != port
+            or not (url.database or "").endswith("_test")):
+        raise RuntimeError("Refusing database test run: URL must target its explicitly owned loopback _test cluster (port != 5433)")
+    return test_url
 
 
 def _configure_test_environment() -> str:
     """在导入任何 backend 模块之前固定测试环境；返回活动测试库 URL。"""
-    # APP_ENV=test 让 Settings 只允许使用 _test 库，绝不可能连到开发库。
+    # APP_ENV=test is a second guard; explicit URL ownership is checked first.
     os.environ["APP_ENV"] = "test"
-    test_url = os.environ.get("TEST_DATABASE_URL") or DEFAULT_TEST_DATABASE_URL
+    owned_port = os.environ.get("KAOYAN_OWNED_TEST_PORT") or os.environ.get("PHASE45E_OWNED_TEST_PORT")
+    test_url = _validate_isolated_test_database(os.environ.get("TEST_DATABASE_URL"), owned_port)
     os.environ["TEST_DATABASE_URL"] = test_url
-    # DATABASE_URL 必须存在（Settings 必填），但它不会在 test 环境被使用。
-    os.environ.setdefault("DATABASE_URL", test_url.replace("_test", ""))
+    # Keep both settings pointed at the same isolated database; never derive a dev URL.
+    os.environ["DATABASE_URL"] = test_url
     return test_url
 
 
 TEST_DATABASE_URL = _configure_test_environment()
+if os.environ.get('PHASE45I_CLOSE_OFFLINE')=='1':
+    from scripts.phase45i_offline_guard import install
+    install()
 
 # 环境变量先就位，再导入应用代码。
 from backend.app import create_app  # noqa: E402
@@ -62,6 +79,17 @@ def migrated_test_database() -> None:
 @pytest.fixture(scope="session")
 def test_database_url() -> str:
     return TEST_DATABASE_URL
+
+
+def pytest_sessionfinish(session,exitstatus):
+    if os.environ.get('PHASE45I_CLOSE_OFFLINE')!='1':return
+    import json
+    from scripts.phase45i_offline_guard import BLOCKED
+    output=Path(os.environ['PHASE45I_CLOSE_OUTPUT']).resolve()
+    if not output.is_relative_to(PROJECT_ROOT/'storage/quality-audits'):
+        raise RuntimeError('Private closeout report directory required')
+    (output/'offline-network-guard.json').write_text(json.dumps({'exitstatus':int(exitstatus),
+        'blocked_network_attempts':BLOCKED,'configured_models':'offline fixtures only'},indent=2),encoding='utf-8')
 
 
 @pytest.fixture

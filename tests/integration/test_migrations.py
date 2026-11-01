@@ -31,6 +31,7 @@ BATCH_B_TABLES = {
 
 # 第三批：只保存年份/题号/来源的历年真题关联，不复制题干。
 BATCH_C_TABLES = {"exam_question_references"}
+BATCH_D_TABLES = {"question_answer_verification_events"}
 
 # 旧稿表名不得复活。
 FORBIDDEN_TABLES = {"daily_plan_items", "practice_sessions"}
@@ -86,6 +87,12 @@ def test_alembic_upgrade_head_creates_learning_tables_from_empty_database() -> N
         assert BATCH_A_TABLES <= tables, f"缺少表: {sorted(BATCH_A_TABLES - tables)}"
         assert BATCH_B_TABLES <= tables, f"缺少表: {sorted(BATCH_B_TABLES - tables)}"
         assert BATCH_C_TABLES <= tables, f"缺少表: {sorted(BATCH_C_TABLES - tables)}"
+        assert BATCH_D_TABLES <= tables, f"缺少表: {sorted(BATCH_D_TABLES - tables)}"
+        question_columns = {c["name"] for c in inspector.get_columns("questions")}
+        assert "answer_verification_event_id" in question_columns
+        verification_checks = inspector.get_check_constraints("question_answer_verification_events")
+        assert any("event_type" in check["sqltext"] and "revoked" in check["sqltext"]
+                   for check in verification_checks), verification_checks
         assert "practice_requests" in tables
         session_columns={c["name"] for c in inspector.get_columns("chat_sessions")}
         assert {"purpose","study_date","material_scope_ids"}<=session_columns

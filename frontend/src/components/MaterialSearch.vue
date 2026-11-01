@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import StudyMascot from "./StudyMascot.vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ApiError } from "../api/client";
 import { fetchChatMessages, streamChatAnswer, type ChatMessage, type Citation } from "../api/chat";
@@ -33,7 +34,7 @@ async function syncDay(restore = false) {
   if (!mounted) return;
   const changed = current.session_id !== session.value?.session_id;
   session.value = current;
-  if (changed || restore) messages.value = await fetchChatMessages(current.session_id);
+  if (changed || restore) messages.value = await fetchChatMessages(current.session_id, 'material_search');
   scopeDraft.value = [...current.selected_file_ids];
 }
 
@@ -103,7 +104,7 @@ async function refreshAfterFilesChanged() {
   }
   if (valid.length !== selected.length) await applyScope(valid);
   // Deleted citation rows are omitted by the backend; retain the answer text.
-  if (mounted && session.value) messages.value = await fetchChatMessages(session.value.session_id);
+  if (mounted && session.value) messages.value = await fetchChatMessages(session.value.session_id, 'material_search');
 }
 
 async function openCitation(citation: Citation) {
@@ -140,7 +141,7 @@ async function send() {
       }
       if (event === "error") { reply.status = "failed"; error.value = String(data.message ?? "资料搜索未完成"); }
       void nextTick(() => results.value?.scrollTo({ top: results.value.scrollHeight }));
-    }, controller.signal);
+    }, controller.signal, { purpose: 'material_search' });
     if (!done && !error.value) error.value = "回答尚未完成，请刷新当天记录后重试。";
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") { if (reply) reply.status = "cancelled"; }
@@ -184,6 +185,7 @@ onBeforeUnmount(() => { mounted = false; controller?.abort(); document.removeEve
       <article v-for="message in messages" :key="message.message_id" :class="['search-result', `search-result--${message.role}`]" :data-testid="`material-search-${message.role}`">
         <p v-if="message.role === 'user'" class="search-query">{{ message.content }}</p>
         <template v-else>
+          <div class="search-answer-heading"><StudyMascot pose="read" /><strong>奶蛙</strong></div>
           <p v-if="message.status === 'generating' && !message.content" role="status">正在搜索资料并整理答案…</p>
           <MarkdownContent v-if="message.content" :text="message.content" />
           <details v-if="message.citations.length" class="search-sources"><summary>依据 {{ new Set(message.citations.map(c => c.material_id)).size }} 份资料</summary><button v-for="citation in message.citations" :key="citation.label" type="button" :disabled="deletedSources.has(citation.material_id)" @click="openCitation(citation)">{{ deletedSources.has(citation.material_id) ? '来源已删除' : `[${citation.label}] ${citation.material_title}${citation.heading_path.length ? ' · ' + citation.heading_path.join(' / ') : ''}` }}</button></details>
@@ -199,6 +201,9 @@ onBeforeUnmount(() => { mounted = false; controller?.abort(); document.removeEve
 
 <style scoped>
 .material-search { margin-bottom: 30px; }
+.search-answer-heading { display:flex;align-items:center;gap:8px;margin-bottom:9px;color:var(--text-secondary);font-size:13px; }
+.search-answer-heading .study-mascot { width:34px;height:32px; }
+.search-result--assistant { border-left:2px solid #dce5d4;padding:12px 16px;background:#fffefb;border-radius:0 12px 12px 0; }
 .search-heading { display:flex; justify-content:space-between; align-items:center; gap:18px; margin-bottom:14px; }
 .search-heading h2 { font-size:20px; font-weight:600; margin:0; }
 .search-heading p { color:var(--text-secondary); font-size:13px; margin:5px 0 0; }

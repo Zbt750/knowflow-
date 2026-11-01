@@ -31,19 +31,24 @@ class EvidencePlanner:
     """Conditional protocol double. Does not demonstrate model planning quality."""
     def __init__(self): self.turn = 0
     def tool_turn(self, messages, tools, *, timeout):
+        from backend.services.learning_task_context import expand_records
+        # The production tool protocol may losslessly pack repeated records.
+        # This offline double must decode it, just like the protocol evaluator;
+        # otherwise it reports a Python TypeError as a fake provider failure.
+        last_result = expand_records(json.loads(messages[-1]["content"]))
         self.turn += 1
         if self.turn == 1:
             body = json.loads(messages[1]["content"])
             self.budget = body["budget_minutes"]
             actions = [("search_knowledge", {"query": body["goal"].split("，")[0]})]
         elif self.turn == 2:
-            ids = [n["kp_id"] for n in json.loads(messages[-1]["content"])["nodes"]]
+            ids = [n["kp_id"] for n in last_result["nodes"]]
             actions = [("get_learning_state", {"kp_ids": ids})]
         elif self.turn == 3:
-            self.state = json.loads(messages[-1]["content"])["states"][0]
+            self.state = last_result["states"][0]
             actions = [("find_questions", {"kp_ids": [self.state["kp_id"]]})]
         elif self.turn == 4:
-            candidates = [q for q in json.loads(messages[-1]["content"])["questions"]
+            candidates = [q for q in last_result["questions"]
                           if not q["in_today_plan"] and q["minutes"] <= self.budget]
             recent = self.state["recent_attempts"]
             pending = self.state["pending_review_question_ids"]
@@ -60,7 +65,7 @@ class EvidencePlanner:
             chosen = next((q for q in candidates if q["question_id"] in preferred), None)
             actions = [("validate_plan", {"question_ids": [chosen["question_id"]] if chosen else [], "rationale": reason})]
         else:
-            valid = json.loads(messages[-1]["content"]).get("valid", False)
+            valid = last_result.get("valid", False)
             return {"message": {"content": json.dumps({"message": "草案已校验，等待确认" if valid else "预算或题量不足，需要调整", "needs_clarification": not valid})}}
         return {"message": {"tool_calls": [{"id": f"p5-{self.turn}-{i}", "type": "function",
             "function": {"name": name, "arguments": json.dumps(args)}} for i, (name, args) in enumerate(actions)]}}
@@ -68,7 +73,7 @@ class EvidencePlanner:
 
 def seed_slice(factory, case):
     """Only the caller's new isolated schema. Never attests/changes the source asset."""
-    from sqlalchemy import delete, text
+    from sqlalchemy import delete, text, update
     from backend.models.base import Base
     from backend.models.learning import KnowledgePoint, Question, KpState, KpMasteryPolicy
     from backend.services.golden_learning_slice import GoldenSlice
@@ -79,6 +84,7 @@ def seed_slice(factory, case):
         database, schema, marker = db.execute(text("SELECT current_database(), current_schema(), obj_description(oid, 'pg_namespace') FROM pg_namespace WHERE nspname=current_schema()")).one()
         if not database.endswith("_test") or not re.fullmatch(r"agent_eval_[0-9a-f]{16}", schema) or marker != "kaoyan-agent-eval:v1":
             raise ValueError("P5 fixture requires a marked isolated evaluation schema")
+        db.execute(update(Question).values(answer_verification_event_id=None))
         for table in reversed(Base.metadata.sorted_tables): db.execute(delete(table))
         node = KnowledgePoint(code=topic.kp_code, name=topic.name, subject="408" if topic.subject == "408" else "数学二",
                               is_active=True, is_assessable=True, is_reference_only=False)
@@ -91,9 +97,16 @@ def seed_slice(factory, case):
             if c.source_id not in kept: continue
             q = Question(id=uuid5(NAMESPACE_URL, "p5-isolated:" + c.source_id), kp_id=node.id,
                 **c.model_dump(exclude={"source_id", "kp_code", "grading_method"}),
+                question_provenance="trusted_practice",source_status="not_applicable",content_trust="verified",
+                content_reviewed_by="isolated-synthetic-test-fixture",content_reviewed_at=datetime.now(timezone.utc),
                 grading_config={"verified": True, "method": c.grading_method,
                                 "version": "p5-SIMULATED-VERIFICATION-NOT-HUMAN-REVIEW"})
-            db.add(q)
+            db.add(q);db.flush()
+            from backend.services.answer_verification import verify_answer,answer_version_sha256
+            verify_answer(db,question_id=q.id,verification_type="human_verified",
+                verifier="isolated-synthetic-test-fixture",method="TEST_FIXTURE simulated answer verification",
+                note="Synthetic state-machine fixture only; not an actual human review.",
+                idempotency_key="p5-fixture-"+str(q.id),expected_answer_sha256=answer_version_sha256(q))
     return topic
 
 

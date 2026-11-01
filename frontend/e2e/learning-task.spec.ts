@@ -67,7 +67,9 @@ test("奶蛙连续调整同一任务，收起重开不重新调用",async({page}
 for(const lost of [false,true]) test(`确认后原地显示新卷${lost?"，响应丢失恢复回执":""}`,async({page})=>{
   const s=await setup(page);s.lostConfirm=lost;await open(page);await send(page);await expect(page.getByTestId("task-confirm")).toBeEnabled();expect(s.planReads).toBe(0);expect(s.confirms).toBe(0);
   await page.getByTestId("task-confirm").click();await expect(page.getByTestId("focus-stem")).toHaveText("安排后的练习题");
-  await expect(page.getByTestId("study-frog-launcher").locator("img")).toHaveAttribute("src",/study-frog-prone/);await expect(page.getByTestId("task-confirm")).toHaveCount(0);expect(s.confirms).toBe(1);
+  // The launcher uses the approved SVG sprite renderer; a committed task selects
+  // its wave pose. The old prone <img> no longer exists in the product.
+  await expect(page.getByTestId("study-frog-launcher").locator("svg.study-mascot")).toHaveAttribute("viewBox", "128 15 335 365");await expect(page.getByTestId("task-confirm")).toHaveCount(0);expect(s.confirms).toBe(1);
 });
 test("草案保留证据边界提醒，不自动写卷",async({page})=>{
   const s=await setup(page);s.warnings=["AI参考答案不等于可靠毕业证据。"];
@@ -85,9 +87,14 @@ test("草案默认摘要，刷新恢复原任务及会话，不重新调用",asy
   await page.getByText("查看安排步骤",{exact:true}).click();await expect(page.getByTestId("task-result")).toContainText("查找可练题 · 完成");
   await page.reload();await page.getByTestId("study-frog-launcher").click();await expect(page.getByTestId("task-confirm")).toBeEnabled();await expect(page.getByTestId("frog-message-user")).toHaveCount(1);expect(s.requests).toHaveLength(1);expect(s.confirms).toBe(0);
 });
-test("运行失败保留目标，修改要求后可以重试",async({page})=>{
-  const s=await setup(page);s.failTurn=true;await open(page);await send(page);await expect(page.getByTestId("task-goal")).toHaveValue("洛必达比较弱");await expect(page.getByTestId("task-result")).toContainText("本次未完成");
+test("运行失败保留已发送目标和显式重试入口，编辑新要求作为新回合",async({page})=>{
+  const s=await setup(page);s.failTurn=true;await open(page);await send(page);await expect(page.getByTestId("task-goal")).toHaveValue("");await expect(page.getByTestId("task-result")).toContainText("本次未完成");
+  await expect(page.getByTestId('frog-turn-error')).toContainText('已保留提问：洛必达比较弱');
+  await expect(page.getByRole('button',{name:'重试这条回复',exact:true})).toBeVisible();
+  await expect(page.getByTestId('frog-message-user')).toHaveCount(1);
   s.failTurn=false;await send(page,"改成基础题");await expect(page.getByTestId("task-confirm")).toBeEnabled();expect(s.requests[1].question).toBe("改成基础题");
+  expect(s.requests[1].retry_of_message_id).toBeUndefined();expect(s.requests[1].request_key).not.toBe(s.requests[0].request_key);
+  await expect(page.getByTestId('frog-message-user')).toHaveCount(2);
 });
 test("恢复运行任务后可取消，迟到读取不能覆盖取消状态",async({page})=>{
   const s=await setup(page);s.task=view("running");

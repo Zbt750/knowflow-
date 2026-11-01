@@ -520,6 +520,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/learning-review-needs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Learning Review Needs */
+        get: operations["read_learning_review_needs_api_learning_review_needs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/knowledge/lessons/{code}": {
         parameters: {
             query?: never;
@@ -829,6 +846,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/question-bank": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Bank */
+        get: operations["read_bank_api_question_bank_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/personal-questions/generate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generate Questions */
+        post: operations["generate_questions_api_personal_questions_generate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/personal-questions/batches/{request_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Batch Status */
+        get: operations["batch_status_api_personal_questions_batches__request_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/personal-questions/{question_id}/visibility": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Hide */
+        patch: operations["hide_api_personal_questions__question_id__visibility_patch"];
+        trace?: never;
+    };
+    "/api/personal-questions/append": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append */
+        post: operations["append_api_personal_questions_append_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/practice-requests/{request_id}": {
         parameters: {
             query?: never;
@@ -945,6 +1047,8 @@ export interface components {
              * Format: uuid
              */
             practice_item_id: string;
+            /** Question Version Id */
+            question_version_id?: string | null;
             /** Result */
             result: string;
             /** Reason */
@@ -1004,6 +1108,10 @@ export interface components {
              * @default false
              */
             can_retry: boolean;
+            /** Reference Result */
+            reference_result?: ("right" | "wrong" | "unknown") | null;
+            /** Feedback Notice */
+            feedback_notice?: string | null;
         };
         /** AppendExamReferencesRequest */
         AppendExamReferencesRequest: {
@@ -1060,6 +1168,14 @@ export interface components {
             retry_of_message_id?: string | null;
             /** Current Work */
             current_work?: string | null;
+            /**
+             * Personal Generation Mode
+             * @default ai_generated
+             * @enum {string}
+             */
+            personal_generation_mode: "ai_generated" | "ai_enhanced" | "deterministic_fast";
+            /** Personal Generation Confirmed Kp Id */
+            personal_generation_confirmed_kp_id?: string | null;
         };
         /** AvailabilityNode */
         AvailabilityNode: {
@@ -1246,6 +1362,9 @@ export interface components {
              * @default 0
              */
             unmapped_pending_review_count: number;
+            learning_progress?: components["schemas"]["LearningProgress"] | null;
+            post_graduation?: components["schemas"]["PostGraduationPractice"] | null;
+            graduation_progress?: components["schemas"]["GraduationProgress"] | null;
             /**
              * Note
              * @default 按题型与学习角色描述当前证据，不代表全面掌握；最终答案正确不证明推导或程序过程正确。
@@ -1400,11 +1519,91 @@ export interface components {
         GeneratePlanRequest: {
             /** Selected Kp Ids */
             selected_kp_ids: string[];
+            /** Confirm Legacy Set Transition Ids */
+            confirm_legacy_set_transition_ids?: string[];
             /**
              * Budget
              * @default standard
              */
             budget: string;
+        };
+        /** GenerationTarget */
+        GenerationTarget: {
+            /**
+             * Kp Id
+             * Format: uuid
+             */
+            kp_id: string;
+            /**
+             * Question Type
+             * @default single_choice
+             * @enum {string}
+             */
+            question_type: "single_choice" | "fill_blank" | "calculation" | "proof" | "subjective";
+            /**
+             * Count
+             * @default 1
+             */
+            count: number;
+            /**
+             * Difficulty
+             * @default basic
+             * @enum {string}
+             */
+            difficulty: "basic" | "improved" | "comprehensive";
+        };
+        /** GraduationProgress */
+        GraduationProgress: {
+            /**
+             * Version
+             * @default frozen_question_set_v1
+             * @constant
+             */
+            version: "frozen_question_set_v1";
+            /**
+             * Configured
+             * @default false
+             */
+            configured: boolean;
+            /**
+             * Graduated
+             * @default false
+             */
+            graduated: boolean;
+            /** Graduated At */
+            graduated_at?: string | null;
+            /**
+             * Completed Question Count
+             * @default 0
+             */
+            completed_question_count: number;
+            /**
+             * Required Question Count
+             * @default 0
+             */
+            required_question_count: number;
+            /** Questions */
+            questions?: components["schemas"]["GraduationQuestionStatus"][];
+            /**
+             * Note
+             * @default 题目进度只汇总该节点冻结的公共正式题；新题和个人 AI 题不会自动加入。
+             */
+            note: string;
+        };
+        /** GraduationQuestionStatus */
+        GraduationQuestionStatus: {
+            /**
+             * Question Id
+             * Format: uuid
+             */
+            question_id: string;
+            /** Ordinal */
+            ordinal: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
         };
         /** HealthResponse */
         HealthResponse: {
@@ -1436,6 +1635,11 @@ export interface components {
             llm_configured: boolean;
             /** Llm Model */
             llm_model?: string | null;
+        };
+        /** HiddenRequest */
+        HiddenRequest: {
+            /** Hidden */
+            hidden: boolean;
         };
         /** KnowledgeLessonResponse */
         KnowledgeLessonResponse: {
@@ -1487,6 +1691,13 @@ export interface components {
              */
             materials_ready: boolean;
             capability_profile?: components["schemas"]["CapabilityProfile"] | null;
+            /**
+             * Personal Questions
+             * @default {}
+             */
+            personal_questions: {
+                [key: string]: unknown;
+            };
         };
         /**
          * KnowledgeNodeView
@@ -1561,6 +1772,12 @@ export interface components {
             variation_objective_question_count: number;
             /** Summary */
             summary?: string | null;
+            post_graduation?: components["schemas"]["PostGraduationPractice"] | null;
+            /**
+             * Post Graduation Review Count
+             * @default 0
+             */
+            post_graduation_review_count: number;
             /** Learning Goal */
             learning_goal?: string | null;
             /** State */
@@ -1614,6 +1831,24 @@ export interface components {
                 [key: string]: number;
             };
             /**
+             * Policy Version
+             * @default 1
+             */
+            policy_version: number;
+            /**
+             * Graduation Set Binding Status
+             * @default unstarted
+             * @enum {string}
+             */
+            graduation_set_binding_status: "unstarted" | "legacy_history_unbound" | "bound";
+            /**
+             * Required Question Origins
+             * @default {}
+             */
+            required_question_origins: {
+                [key: string]: number;
+            };
+            /**
              * Excluded Question Types
              * @default []
              */
@@ -1633,6 +1868,75 @@ export interface components {
         KnowledgeTreeResponse: {
             /** Nodes */
             nodes: components["schemas"]["KnowledgeNodeView"][];
+        };
+        /** LearningProgress */
+        LearningProgress: {
+            /**
+             * Version
+             * @default learning_progress_v1
+             * @constant
+             */
+            version: "learning_progress_v1";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "NOT_STARTED" | "PRACTICING" | "NEEDS_CONSOLIDATION" | "IMPROVING" | "RETEST_RECOMMENDED" | "STABLE_PRACTICE";
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string;
+            /** Reliability Note */
+            reliability_note: string;
+            /**
+             * Next Action
+             * @enum {string}
+             */
+            next_action: "read_lesson" | "practice" | "consolidate" | "delayed_retest" | "validate_with_other_questions" | "spaced_review";
+            /** Next Step */
+            next_step: string;
+            /** Limitations */
+            limitations?: string[];
+            /**
+             * Observed Attempt Count
+             * @default 0
+             */
+            observed_attempt_count: number;
+            /**
+             * Distinct Question Count
+             * @default 0
+             */
+            distinct_question_count: number;
+            /**
+             * Assisted Correct Question Count
+             * @default 0
+             */
+            assisted_correct_question_count: number;
+            /**
+             * Reference Wrong Count
+             * @default 0
+             */
+            reference_wrong_count: number;
+            /**
+             * Reliable Wrong Count
+             * @default 0
+             */
+            reliable_wrong_count: number;
+            /**
+             * Unknown Count
+             * @default 0
+             */
+            unknown_count: number;
+            /**
+             * History Truncated
+             * @default false
+             */
+            history_truncated: boolean;
+            /**
+             * Strict Graduation Unchanged
+             * @default true
+             */
+            strict_graduation_unchanged: boolean;
         };
         /** LessonBreadcrumb */
         LessonBreadcrumb: {
@@ -1888,6 +2192,8 @@ export interface components {
             id: string;
             /** Question Id */
             question_id?: string | null;
+            /** Question Version Id */
+            question_version_id?: string | null;
             /** Exam Reference Id */
             exam_reference_id?: string | null;
             /** Question Stem */
@@ -1919,6 +2225,12 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Bank Scope
+             * @default public
+             * @enum {string}
+             */
+            bank_scope: "public" | "personal";
             /** Question Type */
             question_type: string;
             /** Difficulty */
@@ -1939,6 +2251,7 @@ export interface components {
             question_source?: components["schemas"]["QuestionSourceView"] | null;
             /**
              * @default {
+             *       "bank_scope": "public",
              *       "question_provenance": "legacy_unknown",
              *       "content_trust": "unreviewed",
              *       "source_status": "unknown",
@@ -1947,10 +2260,13 @@ export interface components {
              *       "mapping_status": "unknown",
              *       "source_attestation_current": false,
              *       "answer_attestation_current": false,
+             *       "answer_verification_current": false,
+             *       "auto_review_current": false,
              *       "practice_eligible": false,
              *       "grading_capability": "unsupported",
              *       "evidence_capability": "self_report_only",
-             *       "blocking_reasons": []
+             *       "blocking_reasons": [],
+             *       "objective_feedback_eligible": false
              *     }
              */
             trust: components["schemas"]["QuestionTrustView"];
@@ -1980,6 +2296,44 @@ export interface components {
             /** Next Review At */
             next_review_at?: string | null;
         };
+        /** PersonalAppendRequest */
+        PersonalAppendRequest: {
+            /** Plan Id */
+            plan_id?: string | null;
+            /** Question Ids */
+            question_ids: string[];
+        };
+        /** PersonalGenerationRequest */
+        PersonalGenerationRequest: {
+            /**
+             * Request Key
+             * Format: uuid
+             */
+            request_key: string;
+            /**
+             * Generation Mode
+             * @default ai_generated
+             * @enum {string}
+             */
+            generation_mode: "ai_generated" | "ai_enhanced" | "deterministic_fast";
+            /** Targets */
+            targets: components["schemas"]["GenerationTarget"][];
+            /**
+             * Surface
+             * @default chat
+             * @enum {string}
+             */
+            surface: "study" | "chat" | "knowledge";
+            /** Plan Id */
+            plan_id?: string | null;
+            /**
+             * Append To Today
+             * @default false
+             */
+            append_to_today: boolean;
+            /** Reference Question Id */
+            reference_question_id?: string | null;
+        };
         /**
          * PlanItemView
          * @description 今日练习卷里的一道题或一个外部原卷任务。
@@ -1995,6 +2349,7 @@ export interface components {
             id: string;
             /** Ordinal */
             ordinal: number;
+            display_number?: number | null;
             /**
              * Kp Id
              * Format: uuid
@@ -2004,6 +2359,8 @@ export interface components {
             kp_name: string;
             /** Question Id */
             question_id?: string | null;
+            /** Question Version Id */
+            question_version_id?: string | null;
             question_source?: components["schemas"]["QuestionSourceView"] | null;
             question_trust?: components["schemas"]["QuestionTrustView"] | null;
             /** Question Type */
@@ -2065,6 +2422,87 @@ export interface components {
              */
             study_session_id: string;
         };
+        /** PostGraduationPractice */
+        PostGraduationPractice: {
+            /**
+             * Version
+             * @default post-graduation-practice-v1
+             * @constant
+             */
+            version: "post-graduation-practice-v1";
+            /**
+             * Applicable
+             * @default false
+             */
+            applicable: boolean;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "NOT_APPLICABLE" | "INSUFFICIENT" | "GOOD" | "CONSOLIDATE" | "REVIEW";
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string;
+            /** Next Action */
+            next_action: string;
+            /**
+             * Foundation Unchanged
+             * @default true
+             */
+            foundation_unchanged: boolean;
+            /** Graduated At */
+            graduated_at?: string | null;
+            /** Last Reliable Practice At */
+            last_reliable_practice_at?: string | null;
+            /**
+             * Observed Attempt Count
+             * @default 0
+             */
+            observed_attempt_count: number;
+            /**
+             * Reliable Attempt Count
+             * @default 0
+             */
+            reliable_attempt_count: number;
+            /**
+             * Distinct Question Count
+             * @default 0
+             */
+            distinct_question_count: number;
+            /**
+             * Independent Correct Count
+             * @default 0
+             */
+            independent_correct_count: number;
+            /**
+             * Independent Wrong Count
+             * @default 0
+             */
+            independent_wrong_count: number;
+            /**
+             * Assisted Correct Count
+             * @default 0
+             */
+            assisted_correct_count: number;
+            /**
+             * Excluded Attempt Count
+             * @default 0
+             */
+            excluded_attempt_count: number;
+            /**
+             * History Truncated
+             * @default false
+             */
+            history_truncated: boolean;
+            /**
+             * Evidence Summary
+             * @default
+             */
+            evidence_summary: string;
+            /** Limitations */
+            limitations?: string[];
+        };
         /**
          * PracticeItemAnswer
          * @description 答案与解析；纯读取，不写 revealed_at，不影响掌握度与毕业。
@@ -2080,6 +2518,8 @@ export interface components {
              * Format: uuid
              */
             question_id: string;
+            /** Question Version Id */
+            question_version_id?: string | null;
             /** Stem */
             stem: string;
             /** Options */
@@ -2319,6 +2759,11 @@ export interface components {
         /** QuestionTrustView */
         QuestionTrustView: {
             /**
+             * Bank Scope
+             * @default public
+             */
+            bank_scope: string;
+            /**
              * Question Provenance
              * @default legacy_unknown
              * @enum {string}
@@ -2329,7 +2774,7 @@ export interface components {
              * @default unreviewed
              * @enum {string}
              */
-            content_trust: "unreviewed" | "needs_review" | "source_attested" | "verified";
+            content_trust: "unreviewed" | "needs_review" | "source_attested" | "verified" | "auto_verified";
             /**
              * Source Status
              * @default unknown
@@ -2341,7 +2786,7 @@ export interface components {
              * @default unknown
              * @enum {string}
              */
-            answer_provenance: "verified_reference" | "ai_generated" | "legacy_transcription" | "unknown";
+            answer_provenance: "verified_reference" | "human_verified" | "ai_generated" | "server_generated" | "legacy_transcription" | "unknown" | "auto_verified";
             /**
              * Answer Reliability
              * @default unknown
@@ -2363,6 +2808,26 @@ export interface components {
              * @default false
              */
             answer_attestation_current: boolean;
+            /**
+             * Answer Verification Current
+             * @default false
+             */
+            answer_verification_current: boolean;
+            /** Answer Verification Type */
+            answer_verification_type?: ("verified_reference" | "human_verified" | "auto_verified") | null;
+            /** Answer Verification Event Id */
+            answer_verification_event_id?: string | null;
+            /**
+             * Auto Review Current
+             * @default false
+             */
+            auto_review_current: boolean;
+            /** Auto Review Event Id */
+            auto_review_event_id?: string | null;
+            /** Auto Review Version */
+            auto_review_version?: string | null;
+            /** Auto Review Snapshot Sha256 */
+            auto_review_snapshot_sha256?: string | null;
             /**
              * Practice Eligible
              * @default false
@@ -2388,6 +2853,19 @@ export interface components {
              * @default []
              */
             blocking_reasons: string[];
+            /** Teaching Use */
+            teaching_use?: string | null;
+            /**
+             * Objective Feedback Eligible
+             * @default false
+             */
+            objective_feedback_eligible: boolean;
+            /** Presentation Label */
+            presentation_label?: string | null;
+            /** Explanation Label */
+            explanation_label?: string | null;
+            /** Teaching Rule Version */
+            teaching_rule_version?: string | null;
         };
         /** RecognitionResponse */
         RecognitionResponse: {
@@ -2443,6 +2921,11 @@ export interface components {
              * @default []
              */
             missing_types: string[];
+            /**
+             * Requires Graduation Set Confirmation
+             * @default false
+             */
+            requires_graduation_set_confirmation: boolean;
         };
         /** RenameSessionRequest */
         RenameSessionRequest: {
@@ -2658,6 +3141,7 @@ export interface components {
             };
             /** Draft Version */
             draft_version?: string | null;
+            append_result?: { [key: string]: unknown } | null;
         };
         /**
          * TodayActive
@@ -2679,6 +3163,8 @@ export interface components {
             total_count: number;
             /** Items */
             items: components["schemas"]["PlanItemView"][];
+            /** Retry Wrong Items */
+            retry_wrong_items?: components["schemas"]["PlanItemView"][];
             /** Focus Item Id */
             focus_item_id?: string | null;
             /** Summary Kps */
@@ -5834,6 +6320,110 @@ export interface operations {
             };
         };
     };
+    read_learning_review_needs_api_learning_review_needs_get: {
+        parameters: {
+            query?: {
+                subject?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method Not Allowed */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     read_knowledge_lesson_api_knowledge_lessons__code__get: {
         parameters: {
             query?: never;
@@ -8045,6 +8635,534 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskView"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method Not Allowed */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    read_bank_api_question_bank_get: {
+        parameters: {
+            query?: {
+                scope?: "public" | "personal";
+                kp_id?: string | null;
+                search?: string;
+                include_hidden?: boolean;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method Not Allowed */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    generate_questions_api_personal_questions_generate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonalGenerationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method Not Allowed */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    batch_status_api_personal_questions_batches__request_key__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method Not Allowed */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    hide_api_personal_questions__question_id__visibility_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                question_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HiddenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Method Not Allowed */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    append_api_personal_questions_append_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonalAppendRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Bad Request */

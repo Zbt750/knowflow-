@@ -35,11 +35,12 @@ async function selectOnlyKnowledgePoint(page: import("@playwright/test").Page, c
 test.describe("阶段 A：外壳与连通性", () => {
   test("五个真实 Vue 路由都可打开，且系统状态真实反映后端连接", async ({ page }) => {
     await page.goto("/study");
-    await expect(page.locator(".app-header > strong")).toHaveText("今日学习");
+    await expect(page.locator(".app-breadcrumb > strong")).toHaveText("今日学习");
     await expect(page.locator(".workspace-main h1")).toHaveText("今日学习");
-    await expect(page).toHaveTitle("今日学习 · 考研知识库");
-    await expect(page.locator(".primary-nav a span").first()).toBeHidden();
-    await expect(page.locator(".brand-mark")).toHaveCount(0);
+    await expect(page).toHaveTitle("今日学习 · 奶蛙自习室");
+    // 当前桌面侧栏默认展开，导航标签和奶蛙品牌入口应可读；收起行为在本用例后续单独验证。
+    await expect(page.locator(".primary-nav a span").first()).toBeVisible();
+    await expect(page.locator(".brand")).toContainText("奶蛙自习室");
 
     const sidebar = page.locator(".app-sidebar");
     const sidebarWidth = () => sidebar.evaluate((element) => Math.round(element.getBoundingClientRect().width));
@@ -71,9 +72,9 @@ test.describe("阶段 A：外壳与连通性", () => {
 
     await page.getByRole("link", { name: "知识树" }).click();
     await expect(page).toHaveURL(/\/knowledge$/);
-    await expect(page.locator(".app-header > strong")).toHaveText("知识树");
+    await expect(page.locator(".app-breadcrumb > strong")).toHaveText("知识树");
     await expect(page.locator(".workspace-main h1")).toHaveText("知识树");
-    await expect(page).toHaveTitle("知识树 · 考研知识库");
+    await expect(page).toHaveTitle("知识树 · 奶蛙自习室");
 
     await page.getByRole("link", { name: "资料" }).click();
     // 资料页进入时会**自动选中第一份资料**并把 material_id 同步进 URL
@@ -83,22 +84,22 @@ test.describe("阶段 A：外壳与连通性", () => {
     // 用 testid 而不是标题文本：标题会随文案调整，testid 是页面身份的稳定标识。
     await expect(page.getByTestId("materials-page")).toBeVisible();
     await expect(page.locator(".workspace-main h1")).toHaveText("资料库");
-    await expect(page).toHaveTitle("资料库 · 考研知识库");
+    await expect(page).toHaveTitle("资料库 · 奶蛙自习室");
 
     await page.getByRole("link", { name: "问答" }).click();
     await expect(page).toHaveURL(/\/chat$/);
-    await expect(page.locator(".app-header > strong")).toHaveText("问答");
+    await expect(page.locator(".app-breadcrumb > strong")).toHaveText("问答");
     await expect(page.locator(".workspace-main h1")).toHaveText("问答");
-    await expect(page).toHaveTitle("问答 · 考研知识库");
+    await expect(page).toHaveTitle("问答 · 奶蛙自习室");
     await expect.poll(sidebarWidth).toBe(resizedWidth);
-    await expect(page.getByTestId("scope-switch")).toBeVisible();
+    await expect(page.getByTestId("chat-source")).toHaveText("奶蛙 · 学习问答");
     await expect(page.getByRole("button", { name: "重新检查" })).toBeVisible();
 
     await page.getByRole("link", { name: "设置" }).click();
     await expect(page).toHaveURL(/\/settings$/);
-    await expect(page.locator(".app-header > strong")).toHaveText("设置");
+    await expect(page.locator(".app-breadcrumb > strong")).toHaveText("设置");
     await expect(page.locator(".workspace-main h1")).toHaveText("设置");
-    await expect(page).toHaveTitle("设置 · 考研知识库");
+    await expect(page).toHaveTitle("设置 · 奶蛙自习室");
     await expect(page.getByRole("heading", { name: "问答模型" })).toBeVisible();
   });
 
@@ -149,20 +150,20 @@ test.describe("阶段 B：知识树页面", () => {
 
     const tree = page.getByTestId("knowledge-tree");
     await expect(tree).toBeVisible();
-    await expect(tree.locator(".tree-edges path").first()).toBeVisible();
+    await expect(tree.locator(".canvas-branches > path").first()).toBeVisible();
     const treeBox = await tree.boundingBox();
-    const detailBox = await page.locator(".detail").boundingBox();
-    expect(treeBox && detailBox && treeBox.y < detailBox.y).toBeTruthy();
+    const workspaceBox = await page.locator(".knowledge-layout").boundingBox();
+    expect(treeBox && workspaceBox && Math.abs(treeBox.width - workspaceBox.width) < 2).toBeTruthy();
 
-    // 未选中叶子时明确提示父节点不可考核。
-    await expect(page.getByTestId("knowledge-empty")).toBeVisible();
+    // 没有选择时画布铺满，只有实际选中节点才打开详情栏。
+    await expect(page.locator(".knowledge-layout > .detail")).toHaveCount(0);
 
     // 父节点有章节导读，但不提供考核。
     await page.getByTestId("tree-node-math.calculus").click();
     await expect(page.getByTestId("knowledge-parent-summary")).toBeVisible();
     await expect(page.getByTestId("node-assessment")).toHaveCount(0);
     await expect(page.getByTestId("knowledge-lesson-link")).toContainText("章节导读");
-    await expect(tree).toContainText("已毕业");
+    await expect(tree).toContainText("知识结构");
 
     await revealLeaf(page, [
       "math.calculus",
@@ -172,8 +173,8 @@ test.describe("阶段 B：知识树页面", () => {
 
     await expect(page.getByTestId("detail-title")).toHaveText("洛必达法则");
     await page.getByTestId("knowledge-advanced").locator("summary").click();
-    await expect(page.getByTestId("effective-count")).toBeVisible();
-    await expect(page.getByTestId("manual-credit")).toBeVisible();
+    await expect(page.getByTestId("graduation-set-progress")).toContainText("已真正完成 0 /");
+    await expect(page.getByTestId("graduation-set-items")).toBeVisible();
 
     // 概览 Tab 才有整体自评按钮。
     await expect(page.getByTestId("node-assessment")).toBeVisible();
@@ -237,7 +238,7 @@ test.describe("阶段 B：知识树页面", () => {
     // 明确说明不增加客观确认。
     await expect(notice).toContainText("不增加客观确认");
     await page.getByTestId("knowledge-advanced").locator("summary").click();
-    await expect(page.getByTestId("manual-credit")).toHaveText("0");
+    await expect(page.getByTestId("graduation-set-progress")).toContainText("已真正完成 0 /");
 
     // 练习记录里绝不能出现两条伪造的作答。
     await page.getByTestId("tab-attempts").click();
@@ -248,7 +249,7 @@ test.describe("阶段 B：知识树页面", () => {
     await page.getByTestId("node-self-partial").click();
     await expect(page.getByTestId("node-notice")).toContainText("不增加客观确认", { timeout: 15_000 });
     await page.getByTestId("knowledge-advanced").locator("summary").click();
-    await expect(page.getByTestId("manual-credit")).toHaveText("0");
+    await expect(page.getByTestId("graduation-set-progress")).toContainText("已真正完成 0 /");
     await page.getByTestId("tab-attempts").click();
     await expect(page.getByTestId("attempt-history")).toContainText("还没有练习记录");
   });
@@ -308,7 +309,9 @@ test.describe("阶段 B：今日学习主流程", () => {
     await expect(answer).toBeVisible();
     const focusStemBox = await page.getByTestId("focus-stem").boundingBox();
     const focusAnswerBox = await answer.boundingBox();
-    expect(focusStemBox && focusAnswerBox && focusAnswerBox.x > focusStemBox.x + 100).toBeTruthy();
+    // The approved practice UI keeps explanation beneath the question instead
+    // of a competing right column. It must remain readable and not overlap.
+    expect(focusStemBox && focusAnswerBox && focusAnswerBox.y >= focusStemBox.y + focusStemBox.height).toBeTruthy();
     await page.setViewportSize({ width: 375, height: 667 });
     const narrowFocusStemBox = await page.getByTestId("focus-stem").boundingBox();
     const narrowFocusAnswerBox = await answer.boundingBox();
@@ -352,9 +355,14 @@ test.describe("阶段 B：今日学习主流程", () => {
     await expect(firstPaperQuestion.locator(".answer-box")).toHaveCount(0);
     await firstPaperQuestion.getByRole("button", { name: "查看答案详解" }).click();
     await expect(firstPaperQuestion.locator(".answer-box")).toBeVisible();
-    const paperStemBox = await firstPaperQuestion.locator(".stem").boundingBox();
-    const paperAnswerBox = await firstPaperQuestion.locator(".answer-box").boundingBox();
-    expect(paperStemBox && paperAnswerBox && paperAnswerBox.x > paperStemBox.x + 100).toBeTruthy();
+    const paperMainBox = await firstPaperQuestion.locator(".paper-question-main").boundingBox();
+    const paperAnswerPaneBox = await firstPaperQuestion.locator(".paper-answer-pane").boundingBox();
+    expect(paperMainBox && paperAnswerPaneBox).toBeTruthy();
+    if (!paperMainBox || !paperAnswerPaneBox) throw new Error("全卷题目或答案区域没有可见布局");
+    // 桌面宽度足够时答案可在右侧；容器较窄时允许自然折到题目下方，但不能重叠。
+    const separatedHorizontally = paperAnswerPaneBox.x >= paperMainBox.x + paperMainBox.width - 1;
+    const separatedVertically = paperAnswerPaneBox.y >= paperMainBox.y + paperMainBox.height - 1;
+    expect(separatedHorizontally || separatedVertically).toBeTruthy();
     await page.setViewportSize({ width: 375, height: 667 });
     const narrowStemBox = await firstPaperQuestion.locator(".stem").boundingBox();
     const narrowAnswerBox = await firstPaperQuestion.locator(".answer-box").boundingBox();

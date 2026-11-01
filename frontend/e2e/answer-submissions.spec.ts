@@ -202,7 +202,7 @@ test("专注模式答错不自动跳题，可看解析再继续", async ({ page 
   await expect(page.getByTestId("focus-stem")).not.toHaveText(stem);
 });
 
-test("同题自行改正保留两次记录，刷新不消除错题复测", async ({ page }) => {
+test("全卷提交锁定，不能原位改正，刷新保持原始答案与错题记录", async ({ page }) => {
   const itemId = await prepareNumericQuestion();
   await page.goto("/study");
   await page.getByTestId("full-paper").click();
@@ -216,34 +216,37 @@ test("同题自行改正保留两次记录，刷新不消除错题复测", async
   await expect(history).toHaveCount(0);
   let attempts = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`)).json();
   expect(attempts.items).toHaveLength(1);
-  await page.getByTestId(`paper-retry-answer-${itemId}`).click();
-  await expect(input).toBeEnabled();
-  await expect(input).toHaveValue("");
-  await input.fill("1");
-  await page.getByTestId(`paper-submit-answer-${itemId}`).click();
-  await expect(page.getByTestId(`paper-submission-${itemId}`)).toHaveText("✓");
+  await expect(page.getByTestId(`paper-retry-answer-${itemId}`)).toHaveCount(0);
+  await expect(input).toBeDisabled();
+  await expect(input).toHaveValue("3");
+  const blocked = await apiFetch(`/api/practice-items/${itemId}/answer-submissions`, {
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({raw_answer:"1",idempotency_key:`locked-${itemId}`,expected_previous_attempt_id:previous.attempt_id}),
+  });
+  expect(blocked.status).toBe(409);
+  expect((await blocked.json()).error.code).toBe("practice_item_already_assessed");
   await expect(history).toHaveCount(0);
   attempts = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`)).json();
-  expect(attempts.items).toHaveLength(2);
+  expect(attempts.items).toHaveLength(1);
   const after = await (await apiFetch("/api/plans/today")).json();
   const target = after.items.find((item: any) => item.id === itemId);
   expect(after.completed_count).toBe(before.completed_count);
-  expect(target.answer_submission.previous_attempt_id).toBe(previous.attempt_id);
-  expect(target.answer_submission.sequence_category).toBe("self_corrected");
+  expect(target.answer_submission).toEqual(previous);
+  expect(target.answer_submission.can_retry).toBe(false);
   expect(target.answer_submission.effective_confirmation_count).toBe(0);
   const node = await (await apiFetch(`/api/knowledge/${target.kp_id}`)).json();
   expect(node.node.pending_review_count).toBe(1);
   await page.reload();
   await page.getByTestId("full-paper").click();
-  await expect(page.getByTestId(`paper-raw-answer-${itemId}`)).toHaveValue("1");
+  await expect(page.getByTestId(`paper-raw-answer-${itemId}`)).toHaveValue("3");
   await expect(page.getByTestId(`paper-retry-answer-${itemId}`)).toHaveCount(0);
   await expect(page.getByTestId(`attempt-history-${itemId}`)).toHaveCount(0);
   attempts = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`)).json();
-  expect(attempts.items).toHaveLength(2);
+  expect(attempts.items).toHaveLength(1);
   expect(attempts.items[0].raw_answer).toBe("3");
 });
 
-test("专注模式取消重试恢复旧答案，看解析后完成仍是辅助证据", async ({ page }) => {
+test("专注模式明确显示正误，查看解析不会解锁已提交答案", async ({ page }, testInfo) => {
   const itemId = await prepareNumericQuestion();
   const submitted = await apiFetch(`/api/practice-items/${itemId}/answer-submissions`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -254,33 +257,28 @@ test("专注模式取消重试恢复旧答案，看解析后完成仍是辅助�
   await page.getByTestId("practice-result-summary").locator(":scope > summary").click();
   await page.getByTestId("wrong-answer-review").locator("summary").click();
   await page.getByTestId(`revisit-wrong-${itemId}`).click();
-  await page.getByTestId("retry-answer").click();
-  await page.getByTestId("raw-answer").fill("999");
-  await page.getByTestId("cancel-answer-retry").click();
+  await expect(page.getByTestId("retry-answer")).toHaveCount(0);
+  await expect(page.getByTestId("answer-result-label")).toHaveText("答案错误");
   await expect(page.getByTestId("raw-answer")).toHaveValue("3");
   await expect(page.getByTestId("raw-answer")).toBeDisabled();
   let history = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`)).json();
   expect(history.items).toHaveLength(1);
   await page.getByTestId("answer-explanation").click();
   await expect(page.getByTestId("focus-answer")).toBeVisible();
-  await page.getByTestId("retry-answer").click();
-  await expect(page.getByTestId("focus-answer")).toHaveCount(0);
-  await page.getByTestId("raw-answer").fill("1");
-  await page.getByTestId("submit-answer").click();
-  await expect(page.getByTestId("answer-submission-notice")).toHaveText("✓");
+  await expect(page.getByTestId("retry-answer")).toHaveCount(0);
+  await expect(page.getByTestId("raw-answer")).toBeDisabled();
+  await expect(page.getByTestId("submit-answer")).toHaveCount(0);
+  await expect(page.getByTestId("answer-submission-notice")).toHaveText("×");
   await expect(page.getByTestId("focus-stem")).toHaveText("求极限 lim(x->0) (e^x - 1) / x 的值。");
   history = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`)).json();
-  expect(history.items).toHaveLength(2);
-  expect(history.items[1].sequence_category).toBe("solution_assisted_correct");
-  expect(history.items[1].effective_confirmation_count).toBe(0);
+  expect(history.items).toHaveLength(1);
+  expect(history.items[0].sequence_category).toBe("incorrect");
+  expect(history.items[0].effective_confirmation_count).toBe(0);
+  await page.screenshot({path:testInfo.outputPath('study-answer-locked.png'),fullPage:true});
 });
 
-test("重试响应丢失不重复保存，保留前驱作答与提交键", async ({ page }) => {
+test("首次提交响应丢失后可幂等恢复，不追加第二份作答", async ({ page }) => {
   const itemId = await prepareNumericQuestion();
-  const first = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ idempotency_key: `retry-loss-first-${itemId}`, raw_answer: "3" }),
-  })).json();
   const bodies: any[] = [];
   await page.route(`**/api/practice-items/${itemId}/answer-submissions`, async route => {
     if (route.request().method() !== "POST") { await route.continue(); return; }
@@ -293,7 +291,6 @@ test("重试响应丢失不重复保存，保留前驱作答与提交键", async
   });
   await page.goto("/study");
   await page.getByTestId("full-paper").click();
-  await page.getByTestId(`paper-retry-answer-${itemId}`).click();
   await page.getByTestId(`paper-raw-answer-${itemId}`).fill("1");
   await page.getByTestId(`paper-submit-answer-${itemId}`).click();
   await expect(page.getByText("提交未确认，请重试；同一答案不会重复记入。")).toBeVisible();
@@ -301,37 +298,30 @@ test("重试响应丢失不重复保存，保留前驱作答与提交键", async
   await expect(page.getByTestId(`paper-submission-${itemId}`)).toHaveText("✓");
   expect(bodies).toHaveLength(2);
   expect(bodies[0]).toEqual(bodies[1]);
-  expect(bodies[0].expected_previous_attempt_id).toBe(first.attempt_id);
+  expect(bodies[0].expected_previous_attempt_id).toBeNull();
   const history = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`)).json();
-  expect(history.items).toHaveLength(2);
+  expect(history.items).toHaveLength(1);
 });
 
-test("另一窗口先提交后，过期重试不会覆盖最新记录", async ({ page }) => {
+test("另一窗口先提交后，旧窗口不会覆盖已锁定答案", async ({ page }) => {
   const itemId = await prepareNumericQuestion();
-  const first = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ idempotency_key: `stale-first-${itemId}`, raw_answer: "3" }),
-  })).json();
   await page.goto("/study");
   await page.getByTestId("full-paper").click();
-  await page.getByTestId(`paper-retry-answer-${itemId}`).click();
   await page.getByTestId(`paper-raw-answer-${itemId}`).fill("1");
   const other = await apiFetch(`/api/practice-items/${itemId}/answer-submissions`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ idempotency_key: `stale-other-${itemId}`, raw_answer: "4", expected_previous_attempt_id: first.attempt_id }),
+    body: JSON.stringify({ idempotency_key: `stale-other-${itemId}`, raw_answer: "4" }),
   });
   expect(other.ok).toBeTruthy();
   await page.getByTestId(`paper-submit-answer-${itemId}`).click();
   await expect(page.getByTestId(`paper-raw-answer-${itemId}`)).toBeDisabled();
   await expect(page.getByTestId(`paper-raw-answer-${itemId}`)).toHaveValue("4");
   const history = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`)).json();
-  expect(history.items).toHaveLength(2);
-  expect(history.items[1].raw_answer).toBe("4");
-  await page.getByTestId(`paper-retry-answer-${itemId}`).click();
-  await page.getByTestId(`paper-raw-answer-${itemId}`).fill("1");
-  await page.getByTestId(`paper-submit-answer-${itemId}`).click();
-  await expect(page.getByTestId(`paper-submission-${itemId}`)).toHaveText("✓");
+  expect(history.items).toHaveLength(1);
+  expect(history.items[0].raw_answer).toBe("4");
+  await expect(page.getByTestId(`paper-retry-answer-${itemId}`)).toHaveCount(0);
+  await page.reload();await page.getByTestId('full-paper').click();
+  await expect(page.getByTestId(`paper-raw-answer-${itemId}`)).toHaveValue('4');
   const finalHistory = await (await apiFetch(`/api/practice-items/${itemId}/answer-submissions`)).json();
-  expect(finalHistory.items).toHaveLength(3);
-  expect(finalHistory.items[2].previous_attempt_id).toBe(history.items[1].attempt_id);
+  expect(finalHistory.items).toEqual(history.items);
 });

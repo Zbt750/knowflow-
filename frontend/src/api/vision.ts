@@ -10,3 +10,9 @@ export function recognizeWork(itemId: string, file: File, signal: AbortSignal): 
   const form = new FormData(); form.append("file", file); form.append("consent", "true");
   return api.upload(`/api/practice-items/${itemId}/recognize-work`, form, signal);
 }
+
+/** 普通问答页的通用图片题转写：不绑定练习项，识别文本由用户核对后再发送。 */
+export function transcribeQuestionImage(file: File, signal: AbortSignal): Promise<Recognition> {
+  const form = new FormData(); form.append("file", file); form.append("consent", "true");
+  return api.upload("/api/qa/image-transcribe", form, signal);
+}

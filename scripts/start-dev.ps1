@@ -30,6 +30,24 @@
 #        最常见的原因，值得在启动前就说清楚。
 #     4. 每次等待都报"等了多久"，超时时报最后一次的错误。
 # ---------------------------------------------------------------------------
+# 2026-10-16 改动，起因是一次"脚本说 PG 启动失败、但页面还能用"的排障：
+#
+#   现象：1/3 报「启动失败（等了 60 秒）」，日志尾部只有 autovacuum 警告；
+#         同一时刻后端 /api/health 却是 database=connected。
+#
+#   根因：PostgreSQL 进程其实一直活着（15:40 启动），但已经不再接受新连接
+#         ——pg_isready 全程 no response，后端日志里刷了 63 次
+#         "server closed the connection unexpectedly"，autovacuum 连一个 worker
+#         都拉不起来（225 次 "took too long to start"）。旧提示把这误报成"启动失败"。
+#
+#   本次改动：
+#     1. pg_isready 带 -U/-d（从 .env 的 DATABASE_URL 解析，回退 kaoyan）。
+#        不带 -U 时它默认用 Windows 用户名当角色名，会往 PG 日志里刷
+#        FATAL: role "ZBT" does not exist，也和后端连的账号不是同一个。
+#     2. 区分「没起来」与「在监听但拒绝新连接」：后者直接判定实例卡死，
+#        并打印具体修复命令，不再只丢一句"启动失败"。
+#     3. 端口已在监听时缩短等待（15 秒）：卡死时等满 60 秒也不会有结果。
+# ---------------------------------------------------------------------------
 
 $ErrorActionPreference = 'Continue'
 
@@ -43,6 +61,25 @@ $pgLog = Join-Path $storageDir 'postgres-dev.log'
 $backendLog = Join-Path $storageDir 'backend-dev.log'
 $frontendLog = Join-Path $storageDir 'frontend-dev.log'
 
+# pg_isready 不指定 -U 时，默认拿「当前 Windows 用户名」当角色名。本集群里没有这个角色，
+# 于是每次探测都会往 PG 日志写一条 FATAL: role "ZBT" does not exist —— 既刷噪音，
+# 又让探测用的身份和后端实际连接的身份（.env 里的 DATABASE_URL）不是同一个。
+function Get-PgIdentity {
+    $userName = 'kaoyan'
+    $dbName = 'kaoyan'
+    $envPath = Join-Path $root '.env'
+    if (Test-Path $envPath) {
+        $line = Get-Content $envPath -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match '^\s*DATABASE_URL\s*=' } | Select-Object -First 1
+        if ($line -and ($line -match '://([^:/@]+)(:[^@]*)?@[^/]+/([A-Za-z0-9_]+)')) {
+            $userName = $Matches[1]
+            $dbName = $Matches[3]
+        }
+    }
+    return @{ User = $userName; Db = $dbName }
+}
+$pgIdent = Get-PgIdentity
+
 function Test-Port([int]$Port) {
     return [bool](Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
 }
@@ -50,8 +87,11 @@ function Test-Port([int]$Port) {
 # 端口被监听不等于数据库可用：PostgreSQL 启动过程中会先监听端口，但此时连接会被拒绝
 # （"the database system is starting up"），后端 lifespan 的 SELECT 1 会直接失败退出。
 # 因此必须用 pg_isready 判定“真的能接受连接”。
+# 注意必须带 -U/-d：用后端一致的账号探测，且 2026-10-16 之前不带 -U 会往 PG 日志刷
+# FATAL: role "ZBT" does not exist。
+# -t 5 显式给超时：默认 3 秒，机器繁忙时可能不够而误判成 no response。
 function Test-PgReady([int]$Port = 5433) {
-    & (Join-Path $pgBin 'pg_isready.exe') -h 127.0.0.1 -p $Port *> $null
+    & (Join-Path $pgBin 'pg_isready.exe') -h 127.0.0.1 -p $Port -U $pgIdent.User -d $pgIdent.Db -t 5 *> $null
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -183,10 +223,27 @@ if (Test-PgReady 5433) {
                                 '-o', '"-p 5433 -c listen_addresses=127.0.0.1"', 'start') `
                 -WorkingDirectory $root -WindowStyle Hidden | Out-Null
         }
-        if (Wait-PgReady 5433) {
+        # 端口已在监听 => 不是冷启动。若是卡死，等满 60 秒也不会有结果，缩短等待更快出结论。
+        $pgWait = 60
+        if (Test-Port 5433) { $pgWait = 15 }
+        if (Wait-PgReady 5433 $pgWait) {
             Write-Host '  已启动'
         } else {
-            Write-Host '  启动失败（等了 60 秒）' -ForegroundColor Red
+            if (Test-Port 5433) {
+                # 2026-10-16：区分「没起来」与「起来了但拒绝新连接」。
+                # 后者是实例卡死：pg_isready 报 no response、后端日志报
+                # "server closed the connection unexpectedly"，但已建立的连接仍能用，
+                # 所以页面看起来是正常的 —— 旧提示会把这种情况误报成"启动失败"。
+                Write-Host "  5433 在监听，但 $pgWait 秒内始终不接受新连接 —— 这个实例很可能已经卡死。" -ForegroundColor Red
+                Write-Host '  自检：backend-dev.log 里若出现 server closed the connection unexpectedly，即是此症。' -ForegroundColor Yellow
+                Write-Host '  修复（在项目根执行这两条）：' -ForegroundColor Yellow
+                Write-Host "    & '$pgBin\pg_ctl.exe' -D '$pgData' -m fast stop"
+                Write-Host "    & '$pgBin\pg_ctl.exe' -D '$pgData' -l '$pgLog' -o `"-p 5433 -c listen_addresses=127.0.0.1`" start"
+                Write-Host '  若 stop 迟迟不返回，用 .pgdata\postmaster.pid 第一行的 PID 强制结束' -ForegroundColor Yellow
+                Write-Host '  （会走崩溃恢复，数据由 WAL 兜底）：taskkill /F /PID <那个 PID>'
+            } else {
+                Write-Host "  启动失败（等了 $pgWait 秒）" -ForegroundColor Red
+            }
             Show-LogTail $pgLog 20
             $failed += 'PostgreSQL'
         }
@@ -201,7 +258,27 @@ $launchBackend = -not (Test-Port 8000)
 if (-not $launchBackend) {
     $probe = Get-DevBackendProbe
     if ($probe.Ok) {
-        Write-Host '  已在运行且健康检查通过（端口 8000）'
+        $backendPids = @(Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique)
+        $owner = $(if ($backendPids.Count -eq 1) { Get-CimInstance Win32_Process -Filter "ProcessId=$($backendPids[0])" } else { $null })
+        if ($owner -and (Test-DevBackendOwner $root $owner)) {
+            if (Test-DevBackendSnapshotCurrent $root $owner) {
+                Write-Host '  已在运行且健康检查通过（端口 8000）'
+            } else {
+                Write-Host '  后端源码与启动快照不一致，正在重启本项目后端以加载最新代码…' -ForegroundColor Yellow
+                try {
+                    Stop-Process -Id $owner.ProcessId -Force -ErrorAction Stop
+                    for ($i = 0; $i -lt 80 -and (Test-Port 8000); $i++) { Start-Sleep -Milliseconds 100 }
+                    $launchBackend = -not (Test-Port 8000)
+                    if (-not $launchBackend) { throw '旧后端端口尚未释放' }
+                } catch {
+                    Write-Host "  无法安全重启后端：$($_.Exception.Message)" -ForegroundColor Red
+                    $failed += '后端'
+                }
+            }
+        } else {
+            Write-Host '  端口 8000 健康，但无法核对启动进程归属；为安全起见不自动停止。' -ForegroundColor Yellow
+        }
     } elseif ($probe.ErrorCode -eq 'instance_lock_lost') {
         $backendPids = @(Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty OwningProcess -Unique)
@@ -286,6 +363,10 @@ if ($failed.Count -eq 0) {
     Write-Host "    前端  $frontendLog"
     Write-Host '  注意：后端失败也可能只是慢 —— 用下面的命令确认它其实起没起：' -ForegroundColor Yellow
     Write-Host '    curl http://127.0.0.1:8000/api/health'
+    if ($failed -contains 'PostgreSQL') {
+        Write-Host '  提示：PostgreSQL 卡死时，已经建立的连接仍然可用，页面可能暂时看着正常；' -ForegroundColor Yellow
+        Write-Host '        但只要有新连接（刷新数据、重启后端）就会失败。请先按上面第 1 步给的两条命令重启它。' -ForegroundColor Yellow
+    }
 }
 
 Write-Host ''

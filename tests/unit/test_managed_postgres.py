@@ -1,9 +1,13 @@
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
 
-from desktop.postgres import DataDirectoryLock, ManagedPostgres
+from desktop.postgres import (
+    DataDirectoryLock, ManagedPostgres, PostgresCommandFailure,
+    _diagnostic_text, _process_alive, _run, _terminate_process_tree,
+)
 from desktop.runtime_paths import RuntimePaths
 
 
@@ -88,6 +92,71 @@ def test_safe_shutdown_targets_only_owned_directory(manager, monkeypatch):
     assert manager._owned_identity is None
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "cp936"])
+def test_identity_supports_exact_chinese_path_in_windows_pid_file(tmp_path, monkeypatch, encoding):
+    paths = RuntimePaths.windows(resources=tmp_path / "resources", local_app_data=tmp_path / "学习资料")
+    managed = ManagedPostgres(paths, tmp_path / "postgres/bin", port=18761)
+    managed.cluster.mkdir(parents=True)
+    content = f"123\n{managed.cluster}\n100\n18761\n\n127.0.0.1\n\nready\n"
+    (managed.cluster / "postmaster.pid").write_bytes(content.encode(encoding))
+    monkeypatch.setattr("desktop.postgres.locale.getencoding", lambda: "cp936")
+    assert managed._identity() == (123, 100)
+
+
+@pytest.mark.parametrize("bad_field", ["path", "port", "invalid_bytes"])
+def test_identity_encoding_fallback_preserves_owner_checks(tmp_path, monkeypatch, bad_field):
+    paths = RuntimePaths.windows(resources=tmp_path / "resources", local_app_data=tmp_path / "学习资料")
+    managed = ManagedPostgres(paths, tmp_path / "postgres/bin", port=18761)
+    managed.cluster.mkdir(parents=True)
+    directory = tmp_path / "other" if bad_field == "path" else managed.cluster
+    port = 18762 if bad_field == "port" else 18761
+    content = f"123\n{directory}\n100\n{port}\n".encode("cp936")
+    if bad_field == "invalid_bytes":
+        content = b"123\n\x81\n100\n18761\n"
+    (managed.cluster / "postmaster.pid").write_bytes(content)
+    monkeypatch.setattr("desktop.postgres.locale.getencoding", lambda: "cp936")
+    assert managed._identity() is None
+
+
+@pytest.mark.parametrize("status,expected",[(False,False),(True,True),(None,None)])
+def test_cluster_process_status_checks_only_pid_bound_to_exact_cluster(tmp_path,monkeypatch,status,expected):
+    paths=RuntimePaths.windows(resources=tmp_path/"resources",local_app_data=tmp_path/"user")
+    managed=ManagedPostgres(paths,tmp_path/"postgres/bin",port=18761)
+    managed.cluster.mkdir(parents=True)
+    (managed.cluster/"postmaster.pid").write_text(f"-32256\n{managed.cluster}\n1\n5432\n")
+    calls=[]
+    monkeypatch.setattr("desktop.postgres._process_alive",lambda pid:calls.append(pid) or status)
+    assert managed.cluster_process_status() is expected
+    assert calls==[32256]
+
+
+def test_diagnostics_decode_windows_local_code_page_without_replacement(monkeypatch):
+    monkeypatch.setattr("desktop.postgres._subprocess_encodings", lambda:("utf-8","cp936"))
+    message="错误：测试权限".encode("cp936")
+    assert _diagnostic_text(message)=="错误：测试权限"
+
+
+def test_windows_timeout_cleanup_targets_only_the_spawned_pid_tree(monkeypatch):
+    calls=[]
+    monkeypatch.setattr("desktop.postgres.subprocess.run",lambda command,**kwargs:
+        calls.append((command,kwargs)) or SimpleNamespace(returncode=0,stderr=b""))
+    process=SimpleNamespace(pid=24680,wait=lambda timeout:0,kill=lambda:pytest.fail("root was already stopped"))
+    result=_terminate_process_tree(process,windows=True)
+    command=calls[0][0]
+    assert command[-4:]==["/PID","24680","/T","/F"]
+    assert result=={"root_process_id":24680,"tree_kill_exit_code":0}
+
+
+def test_real_local_timeout_is_counted_and_owned_process_is_stopped(tmp_path):
+    with pytest.raises(PostgresCommandFailure) as caught:
+        _run([sys.executable,"-c","import time; time.sleep(10)"],timeout=0.2,
+            stage="local_timeout_probe",cwd=tmp_path)
+    diagnostic=caught.value.diagnostic
+    assert diagnostic["stage"]=="local_timeout_probe" and diagnostic["timed_out"] is True
+    assert diagnostic["process_id"]==diagnostic["descendant_cleanup"]["root_process_id"]
+    assert _process_alive(diagnostic["process_id"]) is False
+
+
 def test_preflight_port_invalid_is_readonly(manager):
     manager.port = 5433
     with pytest.raises(ValueError, match="port_invalid"):
@@ -125,7 +194,7 @@ def test_database_failure_stops_only_this_new_process(manager, monkeypatch):
     with pytest.raises(ValueError, match="database_unavailable"):
         manager.start()
     assert [args[-1] for args, _kwargs in calls] == ["start", "stop"]
-    assert all(kwargs["capture"] is False for _args, kwargs in calls)
+    assert all(kwargs["capture"] is True for _args, kwargs in calls)
     assert manager.lock.handle is None and manager._owned_identity is None
 
 
@@ -144,14 +213,78 @@ def test_port_collision_does_not_initialize_or_stop_existing_pg(manager, monkeyp
 
 
 def test_argv_does_not_hold_password_and_pg_environment_filtered(monkeypatch):
-    from desktop.postgres import _run
     monkeypatch.setenv("PGSERVICE", "untrusted")
     monkeypatch.setenv("PGHOST", "remote.example")
     captured = {}
-    def fake_run(command, **kwargs):
+    def fake_popen(command, **kwargs):
         captured.update(command=command, **kwargs)
-        return SimpleNamespace(returncode=0)
-    monkeypatch.setattr("desktop.postgres.subprocess.run", fake_run)
-    _run(["pg_dump", "--no-password"], extra_env={"PGPASSWORD": "synthetic-fixture-password"})
+        kwargs["stdout"].write(b"stdout fixture")
+        kwargs["stderr"].write(b"stderr fixture")
+        return SimpleNamespace(pid=123, wait=lambda timeout: 0)
+    monkeypatch.setattr("desktop.postgres.subprocess.Popen", fake_popen)
+    result = _run(["pg_dump", "--no-password"], extra_env={"PGPASSWORD": "synthetic-fixture-password"})
     assert "synthetic-fixture-password" not in str(captured["command"])
     assert {k: v for k, v in captured["env"].items() if k.startswith("PG")} == {"PGPASSWORD": "synthetic-fixture-password"}
+    assert result.stdout == b"stdout fixture" and result.stderr == b"stderr fixture"
+    assert captured["stdout"] != __import__("subprocess").PIPE
+
+
+def test_subprocess_oserror_keeps_stage_and_windows_code_without_raw_exception(monkeypatch, tmp_path):
+    def fail(*_args, **_kwargs):
+        raise PermissionError(13, "access denied", str(tmp_path / "initdb.exe"))
+    monkeypatch.setattr("desktop.postgres.subprocess.Popen", fail)
+    with pytest.raises(PostgresCommandFailure) as caught:
+        _run([str(tmp_path / "initdb.exe"), "--pwfile=private.tmp"], stage="initdb", cwd=tmp_path)
+    assert caught.value.code == "desktop_postgres_command_failed"
+    assert caught.value.diagnostic["stage"] == "initdb"
+    assert caught.value.diagnostic["failure_phase"] == "process_launch"
+    assert caught.value.diagnostic["os_error_type"] == "PermissionError"
+    assert caught.value.diagnostic["errno"] == 13
+    assert caught.value.diagnostic["filename"] == "initdb.exe"
+    assert "private.tmp" not in str(caught.value.diagnostic)
+
+
+def test_subprocess_timeout_keeps_captured_stderr_and_marks_unknown_completion(monkeypatch, tmp_path):
+    def fail(*_args, **kwargs):
+        kwargs["stdout"].write(b"partial stdout")
+        kwargs["stderr"].write(b"FATAL: timeout")
+        process = SimpleNamespace(pid=987, wait=lambda **_kwargs: (_ for _ in ()).throw(
+            __import__("subprocess").TimeoutExpired("initdb", 90)), kill=lambda: None)
+        monkeypatch.setattr("desktop.postgres._terminate_process_tree", lambda _process:
+            {"root_process_id": 987, "tree_kill_exit_code": 0})
+        return process
+    monkeypatch.setattr("desktop.postgres.subprocess.Popen", fail)
+    with pytest.raises(PostgresCommandFailure) as caught:
+        _run(["initdb.exe"], timeout=90, stage="initdb", cwd=tmp_path)
+    assert caught.value.diagnostic["timed_out"] is True
+    assert caught.value.diagnostic["timeout_seconds"] == 90
+    assert caught.value.diagnostic["stdout_tail"] == "partial stdout"
+    assert caught.value.diagnostic["stderr_tail"] == "FATAL: timeout"
+    assert caught.value.diagnostic["descendant_cleanup"]["root_process_id"] == 987
+
+
+def test_initdb_nonzero_preserves_redacted_stderr_and_removes_private_password_file(manager, monkeypatch):
+    manager.paths.ensure_data_dirs()
+    manager._passwords = {"kaoyan_admin": "never-log-this-password", "kaoyan_app": "unused"}
+    monkeypatch.setattr("desktop.postgres._private_file", lambda _path: None)
+    monkeypatch.setattr("desktop.postgres._run", lambda *_args, **_kwargs:
+        SimpleNamespace(returncode=1, stdout=b"", stderr=b"FATAL: password=never-log-this-password"))
+    with pytest.raises(PostgresCommandFailure) as caught:
+        manager._initialize()
+    assert caught.value.code == "desktop_postgres_initialization_failed"
+    assert caught.value.diagnostic["stage"] == "initdb"
+    assert caught.value.diagnostic["returncode"] == 1
+    assert "[REDACTED]" in caught.value.diagnostic["stderr_tail"]
+    assert "never-log-this-password" not in str(caught.value.diagnostic)
+    assert not list((manager.paths.data / "config").glob("pg-init-*.tmp"))
+
+
+def test_output_capture_permission_error_is_distinct_from_process_launch(monkeypatch, tmp_path):
+    def fail(*_args, **_kwargs):
+        raise PermissionError(13,"access denied",str(tmp_path/"capture.tmp"))
+    monkeypatch.setattr("desktop.postgres.tempfile.TemporaryFile",fail)
+    with pytest.raises(PostgresCommandFailure) as caught:
+        _run(["initdb.exe"],stage="initdb",cwd=tmp_path)
+    assert caught.value.diagnostic["failure_phase"]=="capture_file_setup"
+    assert caught.value.diagnostic["os_error_type"]=="PermissionError"
+    assert caught.value.diagnostic["errno"]==13

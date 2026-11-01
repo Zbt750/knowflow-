@@ -5,6 +5,7 @@ import { useRoute } from "vue-router";
 import AppIcon from "./components/AppIcon.vue";
 import ErrorBoundary from "./components/ErrorBoundary.vue";
 import SystemStatus from "./components/SystemStatus.vue";
+import StudyMascot from "./components/StudyMascot.vue";
 
 const route = useRoute();
 const isLessonPage = computed(() => /^\/knowledge\/[^/]+\/lesson$/.test(route.path));
@@ -20,10 +21,10 @@ const currentPage = computed(() => isLessonPage.value
   ? { label: "知识讲解" }
   : route.path.startsWith("/settings")
   ? { label: "设置" }
-  : navItems.find((item) => route.path.startsWith(item.to)) ?? navItems[0]);
+  : navItems.find((item) => route.path.startsWith(item.to)) ?? {label:'页面不存在'});
 
 watch(() => currentPage.value.label, (label) => {
-  document.title = `${label} · 考研知识库`;
+  document.title = `${label} · 奶蛙自习室`;
 }, { immediate: true });
 
 const DEFAULT_SIDEBAR_WIDTH = 196;
@@ -140,14 +141,27 @@ onBeforeUnmount(stopSidebarResize);
         >
           <AppIcon :name="isSidebarCollapsed ? 'sidebar-expand' : 'sidebar-collapse'" :size="18" />
         </button>
-        <RouterLink class="brand" to="/study" aria-label="考研知识库，前往今日学习">
-          <strong>考研知识库</strong>
+        <RouterLink class="brand" to="/study" aria-label="奶蛙自习室，前往今日学习">
+          <StudyMascot pose="wave" class="brand-mascot" />
+          <span class="brand-copy"><strong>奶蛙自习室</strong><small>一点一点，学会。</small></span>
         </RouterLink>
       </div>
 
       <nav class="primary-nav" aria-label="主导航">
+        <span class="nav-caption">学习</span>
         <RouterLink
-          v-for="item in navItems"
+          v-for="item in navItems.slice(0, 3)"
+          :key="item.to"
+          :to="item.to"
+          :aria-label="item.label === '资料库' ? '资料' : item.label"
+          :title="item.label"
+        >
+          <AppIcon :name="item.icon" :size="19" />
+          <span>{{ item.label }}</span>
+        </RouterLink>
+        <span class="nav-caption nav-caption--secondary">资料与交流</span>
+        <RouterLink
+          v-for="item in navItems.slice(3)"
           :key="item.to"
           :to="item.to"
           :aria-label="item.label === '资料库' ? '资料' : item.label"
@@ -163,7 +177,9 @@ onBeforeUnmount(stopSidebarResize);
       <div class="sidebar-footer">
         <RouterLink to="/settings" class="settings-link" aria-label="设置" title="设置">
           <AppIcon name="settings" :size="19" />
+          <span>设置</span>
         </RouterLink>
+        <p><span class="sidebar-footer__dot"></span>本地学习空间<br />保留每一次真实的进步。</p>
       </div>
 
       <div
@@ -184,15 +200,15 @@ onBeforeUnmount(stopSidebarResize);
 
     <div class="app-main">
       <header class="app-header">
-        <strong>{{ currentPage.label }}</strong>
+        <div class="app-breadcrumb"><span>自适应考研学习知识库</span><span aria-hidden="true">›</span><strong>{{ currentPage.label }}</strong></div>
         <SystemStatus />
       </header>
 
-      <main class="workspace-main" :class="{ 'workspace-main--chat': route.path.startsWith('/chat') }">
+      <main class="workspace-main" :class="{ 'workspace-main--chat': route.path.startsWith('/chat'), 'workspace-main--knowledge': route.path === '/knowledge' }">
         <h1 v-if="!isLessonPage" class="sr-only">{{ currentPage.label }}</h1>
         <RouterView v-slot="{ Component }">
           <ErrorBoundary>
-            <KeepAlive :include="['ChatPage']">
+            <KeepAlive :include="['ChatPage', 'KnowledgePage']">
               <component :is="Component" :key="route.path" />
             </KeepAlive>
           </ErrorBoundary>

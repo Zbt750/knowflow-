@@ -12,6 +12,10 @@ def submission_grading_basis(evidence: dict) -> str:
         return "ai_consistent_reference_v1"
     if reliability == "verified_objective":
         return "objective_v1"
+    # New receipts record their reliability explicitly. A legacy node projection
+    # must not upgrade an ungraded/auxiliary submission's own grading basis.
+    if isinstance(evidence.get("version"), int) and evidence["version"] >= 4:
+        return "ungraded"
     if (evidence.get("assessment_basis") == "objective_v1"
         and isinstance(evidence.get("grading_config"), dict)
         and evidence["grading_config"].get("verified") is True

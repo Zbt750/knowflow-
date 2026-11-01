@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import KnowledgeTreeCanvas from "../components/KnowledgeTreeCanvas.vue";
+import { matchingAncestorIds, knowledgePath, toggleKnowledgeBranch } from "../lib/knowledgeNavigation";
+import StudyMascot from '../components/StudyMascot.vue';
+import { computed, defineAsyncComponent, nextTick, onMounted, onActivated, onDeactivated, shallowRef, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { ApiError } from "../api/client";
 import AppIcon from "../components/AppIcon.vue";
 import QuestionSource from "../components/QuestionSource.vue";
-import MarkdownContent from "../components/MarkdownContent.vue";
-import KnowledgeCapabilities from "../components/KnowledgeCapabilities.vue";
 import { learningKnowledgeTree } from "../lib/learningKnowledgeTree";
 import {
   appendQuestions,
@@ -33,8 +34,16 @@ import type {
   NodeSelfAssessmentResponse,
 } from "../types/practice";
 import { useAsyncTask } from "../composables/useAsyncTask";
+import { hidePersonal, readBank, type PersonalQuestion } from "../api/personalQuestions";
 
 type Tab = "overview" | "questions" | "attempts" | "materials";
+defineOptions({ name: 'KnowledgePage' });
+// These render only after a node is selected; navigation does not wait for
+// Markdown parsing or detail projections to be downloaded and initialized.
+const MarkdownContent = defineAsyncComponent(() => import('../components/MarkdownContent.vue'));
+const KnowledgeCapabilities = defineAsyncComponent(() => import('../components/KnowledgeCapabilities.vue'));
+const LearningProgressSummary = defineAsyncComponent(() => import('../components/LearningProgressSummary.vue'));
+const PostGraduationPractice = defineAsyncComponent(() => import('../components/PostGraduationPractice.vue'));
 
 const addingQuestionId = ref<string | null>(null);
 const questionNotice = ref("");
@@ -46,7 +55,16 @@ async function addOnlineQuestion(questionId: string, kpId: string) {
   questionError.value = "";
   try {
     let today = await fetchToday();
-    if (!isTodayActive(today)) today = await generateTodayPlan([kpId], "light");
+    if (!isTodayActive(today)) {
+      const nodeDetail = await fetchKnowledgeNode(kpId);
+      const needsTransition = nodeDetail.node.graduation_set_binding_status === "legacy_history_unbound"
+        && nodeDetail.node.policy_version === 3;
+      const confirmation = needsTransition
+        ? `今天还没有学习卷。继续后会为“${nodeDetail.node.name}”创建今日学习卷并加入这道题。该节点有历史练习记录，但旧毕业题集无法可靠恢复；历史记录会保留用于查看与学习分析，不计入新版正式毕业题集。确认继续吗？`
+        : `今天还没有学习卷。是否创建今日学习卷，并加入“${nodeDetail.node.name}”的这道题？`;
+      if (!window.confirm(confirmation)) return;
+      today = await generateTodayPlan([kpId], "light", needsTransition ? [kpId] : []);
+    }
     if (!isTodayActive(today)) throw new Error("未能创建今日练习，请稍后重试");
     await appendQuestions(today.plan_id, [questionId]);
     questionNotice.value = "已加入今日学习，可在那里作答并查看解析。";
@@ -74,17 +92,30 @@ const router = useRouter();
 const state = computed(() => treeTask.state.value);
 const errorCode = computed(() => treeTask.errorCode.value);
 const errorMessage = computed(() => treeTask.errorMessage.value);
-const roots = ref<KnowledgeNodeView[]>([]);
+const roots = shallowRef<KnowledgeNodeView[]>([]);
+const treeRefreshing = ref(false);
+let treeController: AbortController | null = null;
+let detailController: AbortController | null = null;
+let treeLoad: Promise<void> | null = null;
+let treeSignature = '';
 
 const expanded = ref<Set<string>>(new Set());
 const selectedId = ref<string | null>(null);
 const treeSearch = ref("");
 const rootScope = ref("");
 const searchCollapsed = ref(new Set<string>());
+const searchExpanded = ref(new Set<string>());
 const branchLimits = ref<Record<string, number>>({});
-const BRANCH_BATCH = 20;
+const BRANCH_BATCH = 8;
+const treeCanvas = ref<InstanceType<typeof KnowledgeTreeCanvas> | null>(null);
 let treeInitialized = false;
-watch(treeSearch, () => { searchCollapsed.value = new Set(); branchLimits.value = {}; });
+let firstActivation = true;
+watch(treeSearch, () => {
+  searchCollapsed.value = new Set();
+  searchExpanded.value = new Set();
+  branchLimits.value = {};
+});
+const searchAncestors = computed(() => matchingAncestorIds(roots.value, treeSearch.value));
 
 function filterTree(nodes: KnowledgeNodeView[], query: string): KnowledgeNodeView[] {
   if (!query) return nodes;
@@ -99,22 +130,21 @@ const visibleRoots = computed(() => filterTree(
   treeSearch.value.trim().toLocaleLowerCase(),
 ));
 function branchIsOpen(node: KnowledgeNodeView): boolean {
-  return treeSearch.value.trim() ? !searchCollapsed.value.has(node.id) : expanded.value.has(node.id);
+  return treeSearch.value.trim()
+    ? !searchCollapsed.value.has(node.id) && (searchAncestors.value.has(node.id) || searchExpanded.value.has(node.id))
+    : expanded.value.has(node.id);
 }
-function findPath(nodes: KnowledgeNodeView[], id: string): KnowledgeNodeView[] {
-  for (const node of nodes) {
-    if (node.id === id) return [node];
-    const rest = findPath(node.children, id);
-    if (rest.length) return [node, ...rest];
-  }
-  return [];
-}
-const selectedPath = computed(() => selectedId.value ? findPath(roots.value, selectedId.value) : []);
+const selectedPath = computed(() => selectedId.value ? knowledgePath(roots.value, selectedId.value) : []);
 function collapseTree(): void {
-  if (treeSearch.value.trim()) searchCollapsed.value = new Set(treeGraph.value.nodes.filter((row) => !row.moreFor).map((row) => row.node.id));
-  else expanded.value = new Set(visibleRoots.value.map((node) => node.id));
+  // 收起到初始层级：只保留三个真实根节点，所有后代均由用户逐层展开。
+  if (treeSearch.value.trim()) searchCollapsed.value = new Set();
+  else expanded.value = new Set();
+  searchExpanded.value = new Set();
   branchLimits.value = {};
+  if (selectedId.value) closeDetail();
+  void nextTick(() => treeCanvas.value?.resetView());
 }
+
 function showMore(id: string): void {
   branchLimits.value = { ...branchLimits.value, [id]: (branchLimits.value[id] ?? BRANCH_BATCH) + BRANCH_BATCH };
 }
@@ -126,6 +156,52 @@ const detailError = computed(() =>
   detailTask.state.value === "error" ? detailTask.errorMessage.value : null,
 );
 const tab = ref<Tab>("overview");
+async function refreshSelectedDetail(){
+  const id=selectedId.value;if(!id)return;
+  detailController?.abort();
+  const controller = detailController = new AbortController();
+  await runDetail(async()=>normalizeDetail(await fetchKnowledgeNode(id,controller.signal)),{keepPreviousData:true});
+}
+const questionSearch = ref("");
+const showHiddenPersonalQuestions = ref(false);
+const hiddenPersonalQuestions = ref<PersonalQuestion[]>([]);
+const hiddenQuestionsLoading = ref(false);
+const hiddenQuestionsError = ref("");
+const visibilityBusyId = ref<string | null>(null);
+const visibleNodeQuestions = computed(() => {
+  const query = questionSearch.value.trim().toLocaleLowerCase();
+  return (detail.value?.questions ?? []).filter((question) =>
+    !query || question.stem.toLocaleLowerCase().includes(query));
+});
+async function loadHiddenPersonalQuestions(): Promise<void> {
+  if (!selectedId.value || !showHiddenPersonalQuestions.value) return;
+  hiddenQuestionsLoading.value = true;
+  hiddenQuestionsError.value = "";
+  try {
+    const result = await readBank("personal", selectedId.value, questionSearch.value, 0, true, 100);
+    hiddenPersonalQuestions.value = result.items.filter((question) => question.hidden);
+  } catch (error) {
+    hiddenQuestionsError.value = error instanceof Error ? error.message : "已隐藏练习暂时无法读取";
+  } finally {
+    hiddenQuestionsLoading.value = false;
+  }
+}
+async function setPersonalQuestionHidden(question: PersonalQuestion, hidden: boolean): Promise<void> {
+  if (visibilityBusyId.value) return;
+  visibilityBusyId.value = question.id;
+  hiddenQuestionsError.value = "";
+  try {
+    await hidePersonal(question.id, hidden);
+    await refreshSelectedDetail();
+    await loadHiddenPersonalQuestions();
+  } catch (error) {
+    hiddenQuestionsError.value = error instanceof Error ? error.message : (hidden ? "隐藏失败" : "恢复失败");
+  } finally {
+    visibilityBusyId.value = null;
+  }
+}
+watch(questionSearch, () => { void loadHiddenPersonalQuestions(); });
+watch(showHiddenPersonalQuestions, () => { void loadHiddenPersonalQuestions(); });
 const detailPanel = ref<HTMLElement | null>(null);
 
 const nodeSubmitting = ref(false);
@@ -168,45 +244,6 @@ function summarize(node: KnowledgeNodeView): { total: number; done: number; refe
   return nodeSummaries.value.get(node.id) ?? { total: 0, done: 0, references: 0 };
 }
 
-type GraphNode = { key: string; node: KnowledgeNodeView; depth: number; x: number; y: number; parentId: string | null; moreFor?: string; remaining?: number };
-const treeGraph = computed(() => {
-  const nodes: GraphNode[] = [];
-  let leafIndex = 0;
-  let maxDepth = 0;
-  const visit = (node: KnowledgeNodeView, depth: number, parentId: string | null): number => {
-    maxDepth = Math.max(maxDepth, depth);
-    const limit = branchLimits.value[node.id] ?? BRANCH_BATCH;
-    const children = branchIsOpen(node) ? node.children.slice(0, limit) : [];
-    const childYs = children.map((child) => visit(child, depth + 1, node.id));
-    if (branchIsOpen(node) && node.children.length > limit) {
-      const moreY = 70 + leafIndex++ * 86;
-      nodes.push({ key: `more-${node.id}`, node, depth: depth + 1, x: 34 + (depth + 1) * 244, y: moreY, parentId: node.id, moreFor: node.id, remaining: node.children.length - limit });
-      childYs.push(moreY);
-    }
-    const y = childYs.length ? (childYs[0] + childYs[childYs.length - 1]) / 2 : 70 + leafIndex++ * 86;
-    nodes.push({ key: node.id, node, depth, x: 34 + depth * 244, y, parentId });
-    return y;
-  };
-  visibleRoots.value.forEach((root) => visit(root, 0, null));
-  const byId = new Map(nodes.filter((entry) => !entry.moreFor).map((entry) => [entry.node.id, entry]));
-  const paths = nodes.flatMap((entry) => {
-    const parent = entry.parentId ? byId.get(entry.parentId) : null;
-    if (!parent) return [];
-    const startX = parent.x + 190;
-    const endX = entry.x;
-    const midX = (startX + endX) / 2;
-    return [`M ${startX} ${parent.y} C ${midX} ${parent.y}, ${midX} ${entry.y}, ${endX} ${entry.y}`];
-  });
-  return {
-    nodes,
-    paths,
-    width: Math.max(760, 34 + maxDepth * 244 + 224),
-    height: Math.max(420, 140 + Math.max(0, leafIndex - 1) * 86),
-  };
-});
-function hasChildren(node: KnowledgeNodeView): boolean {
-  return node.children.length > 0;
-}
 
 function findLeaf(kpId: string): KnowledgeNodeView | undefined {
   return allLeaves.value.find((leaf) => leaf.id === kpId);
@@ -222,15 +259,27 @@ function findNodeByCode(nodes: KnowledgeNodeView[], code: string): KnowledgeNode
 }
 
 
-async function load(): Promise<void> {
-  const data = await runTree(async () => {
-    const response = await fetchKnowledgeTree();
-    return response;
+function load(force = false): Promise<void> {
+  if (!force && treeLoad && treeController && !treeController.signal.aborted) return treeLoad;
+  treeController?.abort();
+  const controller = treeController = new AbortController();
+  treeRefreshing.value = roots.value.length > 0;
+  const pending = (async () => {
+    const data = await runTree(() => fetchKnowledgeTree(controller.signal), {keepPreviousData:true});
+    if (!data || controller.signal.aborted) return;
+    const signature = JSON.stringify(data.nodes);
+    // An unchanged response must not make the canvas fit/re-layout again.
+    if (signature !== treeSignature) {
+      roots.value = learningKnowledgeTree(data.nodes);
+      treeSignature = signature;
+    }
+    if (!treeInitialized) expanded.value = new Set();
+    treeInitialized = true;
+  })().finally(() => {
+    if (treeController === controller) { treeRefreshing.value = false; treeLoad = null; }
   });
-  if (!data) return;
-  roots.value = learningKnowledgeTree(data.nodes);
-  if (!treeInitialized) expanded.value = new Set(data.nodes.map((node) => node.id));
-  treeInitialized = true;
+  treeLoad = pending;
+  return pending;
 }
 
 /**
@@ -267,33 +316,44 @@ function normalizeDetail(raw: KnowledgeNodeDetail): KnowledgeNodeDetail {
 }
 
 function toggleExpand(node: KnowledgeNodeView): void {
+  if (!node.children.length) return;
   if (treeSearch.value.trim()) {
-    const next = new Set(searchCollapsed.value);
-    if (next.has(node.id)) next.delete(node.id); else next.add(node.id);
-    searchCollapsed.value = next;
+    if(branchIsOpen(node)) searchCollapsed.value=new Set([...searchCollapsed.value,node.id]);
+    else {searchCollapsed.value=new Set([...searchCollapsed.value].filter(id=>id!==node.id));searchExpanded.value=new Set([...searchExpanded.value,node.id]);}
     return;
   }
-  const next = new Set(expanded.value);
-  if (next.has(node.id)) next.delete(node.id);
-  else next.add(node.id);
-  expanded.value = next;
+  expanded.value=toggleKnowledgeBranch(expanded.value,node.id);
 }
 
-async function selectNode(node: KnowledgeNodeView, syncUrl = true): Promise<void> {
-  // 展开/收起由箭头控制；点击名称始终打开节点，父节点也有章节导读。
+async function selectNode(node: KnowledgeNodeView, syncUrl = true, expandBranch = true): Promise<void> {
+  // 点击节点名称负责选中并逐层展开；同一已选中分支再次点击则收起。
+  // 画布标题不再同时发出 toggle 事件，避免一次点击被切换两次而看似无效。
+  if (expandBranch && node.children.length) toggleExpand(node);
+  if (selectedId.value === node.id) return;
   if (syncUrl) void router.replace({ path: "/knowledge", query: { node: node.code } });
   const kpId = node.id;
   selectedId.value = kpId;
+  questionSearch.value = "";
+  showHiddenPersonalQuestions.value = false;
+  hiddenPersonalQuestions.value = [];
+  hiddenQuestionsError.value = "";
   await nextTick();
-  detailPanel.value?.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (window.matchMedia('(max-width: 900px)').matches) detailPanel.value?.scrollIntoView({ behavior: "smooth", block: "start" });
   tab.value = "overview";
   nodeNotice.value = null;
   nodeError.value = null;
   resetDetail();
-  const data = await runDetail(async () => normalizeDetail(await fetchKnowledgeNode(kpId)));
+  detailController?.abort();
+  const controller = detailController = new AbortController();
+  const data = await runDetail(async () => normalizeDetail(await fetchKnowledgeNode(kpId,controller.signal)));
   // 过期/被取消的选择：结果已经不重要，直接丢弃。
   if (selectedId.value !== kpId) return;
-  if (data) return;
+  if (data) {
+    // 等真实详情完成布局再定位。加载占位时滚动会被短页面高度截住，
+    // 在手机上留下标题被底部导航遮住的半截视图。
+    if(window.matchMedia('(max-width: 900px)').matches){await nextTick();detailPanel.value?.scrollIntoView({behavior:'auto',block:'start'});}
+    return;
+  }
   if (detailTask.errorCode.value === "knowledge_point_not_found") {
     // 规格 2.5：节点被删 → 知识树刷新，详情区回到空态。
     // 不能停在一个指向已删节点的详情上。
@@ -315,9 +375,8 @@ async function nodeAssess(grade: "mastered" | "partial" | "not_mastered"): Promi
       newIdempotencyKey(`node-${kpId}`),
     );
     // 先刷新树与详情（selectNode 会清空反馈），再写入反馈，否则用户看不到结果。
-    await load();
-    const leaf = findLeaf(kpId);
-    if (leaf) await selectNode(leaf);
+    await load(true);
+    await refreshSelectedDetail();
 
     // 基础确认数由后端给出：绝不在前端假装用户做了两题。
     const credit =
@@ -355,84 +414,119 @@ async function nodeAssess(grade: "mastered" | "partial" | "not_mastered"): Promi
 
 const stateTone = (value: MasteryState | null | string): string => `tone tone--${value ?? "aggregate"}`;
 
-onMounted(async () => {
-  await load();
+function closeDetail(): void {
+  detailController?.abort();
+  selectedId.value = null;
+  resetDetail();
+  void router.replace({ path: '/knowledge', query: { ...route.query, node: undefined } });
+}
+
+onActivated(async()=>{
+  if (firstActivation) { firstActivation = false; return; } // mounted owns the initial request
+  const sameSelection = selectedPath.value.at(-1)?.code === route.query.node;
+  await Promise.all([load(), sameSelection ? refreshSelectedDetail() : restoreRouteSelection()]);
+  await restoreRouteSelection();
+});
+onDeactivated(()=>{treeController?.abort();detailController?.abort();});
+async function restoreRouteSelection(){
+  if (route.path !== '/knowledge') return;
   const code = typeof route.query.node === "string" ? route.query.node : null;
-  if (!code) return;
+  if (!code) {if(selectedId.value){selectedId.value=null;resetDetail();}return;}
   const node = findNodeByCode(roots.value, code);
   if (!node) return;
-  treeSearch.value = node.code;
-  await selectNode(node, false);
+  if(selectedId.value===node.id)return;
+  const path=knowledgePath(roots.value,node.id);
+  if(rootScope.value && rootScope.value!==path[0]?.id)rootScope.value=path[0]?.id??'';
+  // 深链接展开祖先路径，而不是把整棵树过滤成孤立的一条搜索结果。
+  expanded.value = new Set([...expanded.value, ...path.slice(0, -1).map(parent => parent.id)]);
+  await selectNode(node, false, false);
   if (node.is_assessable && route.query.tab === "questions") tab.value = "questions";
-});
+}
+onMounted(async () => {await load();await restoreRouteSelection();});
+watch(()=>route.query.node,()=>{if(route.path==='/knowledge'&&treeInitialized)void restoreRouteSelection();});
+watch(rootScope,(scope)=>{if(scope && selectedPath.value.length && selectedPath.value[0].id!==scope)closeDetail();});
 </script>
 
 <template>
   <section class="page page--knowledge">
-    <p class="page-intro">按章节阅读知识讲解，再到题库检验理解。</p>
+    <header class="knowledge-page-heading">
+      <div class="knowledge-heading-copy">
+        <p class="knowledge-page-kicker">知识，和你一起生长</p>
+        <h2>把知识，一片一片连起来。</h2>
+        <p>沿着奶蛙脚趾连接的分支，逐层找到今天要学的知识点。</p>
+      </div>
+      <div class="tree-toolbar">
+        <input v-model="treeSearch" type="search" aria-label="搜索知识点名称或编号" placeholder="搜索知识点或章节" data-testid="knowledge-search" />
+        <select v-if="roots.length > 1" v-model="rootScope" aria-label="知识树学科范围"><option value="">全部学科</option><option v-for="root in roots" :key="root.id" :value="root.id">{{ root.name }}</option></select>
+        <button v-if="treeSearch" type="button" @click="treeSearch = ''">清除搜索</button>
+        <button type="button" class="tree-collapse" @click="collapseTree">收起分支</button>
+      </div>
+    </header>
 
-    <p v-if="state === 'loading'" class="state state--loading" data-testid="knowledge-loading">
+    <p v-if="state === 'loading' && !roots.length" class="state state--loading" data-testid="knowledge-loading">
       正在加载知识树…
     </p>
-    <div v-else-if="state === 'error'" class="state state--error" data-testid="knowledge-error">
+    <div v-if="state === 'error'" class="state state--error" data-testid="knowledge-error">
       <p>{{ errorMessage }}</p>
       <p v-if="errorCode" class="state__code">错误码：{{ errorCode }}</p>
-      <button type="button" @click="load">重试</button>
+      <button type="button" @click="load()">重试</button>
     </div>
 
-    <div v-else class="knowledge-layout">
+    <p v-if="treeRefreshing" class="state" role="status">正在更新知识树学习状态…</p>
+    <div v-if="roots.length || state === 'success'" class="knowledge-layout" :class="{ 'knowledge-layout--inspecting': selectedId }">
       <section class="tree" data-testid="knowledge-tree" aria-label="知识树">
-        <div class="tree-heading"><div><strong>知识结构</strong><span>{{ allLeaves.length }} 个学习知识点</span></div><button type="button" class="tree-collapse" @click="collapseTree">收起分支</button></div>
-        <div class="tree-toolbar">
-          <input v-model="treeSearch" type="search" aria-label="搜索知识点名称或编号" placeholder="搜索知识点或章节" data-testid="knowledge-search" />
-          <select v-if="roots.length > 1" v-model="rootScope" aria-label="知识树学科范围"><option value="">全部学科</option><option v-for="root in roots" :key="root.id" :value="root.id">{{ root.name }}</option></select>
-          <button v-if="treeSearch" type="button" @click="treeSearch = ''">清除搜索</button>
-        </div>
-        <p v-if="!visibleRoots.length" class="state state--empty" data-testid="knowledge-search-empty">没有找到匹配的知识点，试试其他名称或编号。</p>
-        <div v-else class="tree-viewport" tabindex="0" aria-label="知识树画布，可横向和纵向滚动">
-          <div class="tree-graph" role="tree" :style="{ width: `${treeGraph.width}px`, height: `${treeGraph.height}px` }">
-            <svg class="tree-edges" :viewBox="`0 0 ${treeGraph.width} ${treeGraph.height}`" aria-hidden="true">
-              <path v-for="(path, index) in treeGraph.paths" :key="index" :d="path" />
-            </svg>
-            <div v-for="row in treeGraph.nodes" :key="row.key" class="tree-entry" :class="{ 'tree-entry--root': row.depth === 0, 'tree-entry--more': row.moreFor }" :style="{ left: `${row.x}px`, top: `${row.y}px` }" role="treeitem" :aria-level="row.depth + 1" :aria-expanded="!row.moreFor && hasChildren(row.node) ? branchIsOpen(row.node) : undefined">
-              <button v-if="row.moreFor" type="button" class="tree-more" :aria-label="`显示更多${row.node.name}下的节点`" @click="showMore(row.moreFor)">显示更多 <small>还剩 {{ row.remaining }} 项</small></button>
-              <div v-else class="tree-row">
-                <button v-if="hasChildren(row.node)" type="button" class="tree-toggle" :aria-label="branchIsOpen(row.node) ? `收起${row.node.name}` : `展开${row.node.name}`" @click="toggleExpand(row.node)">{{ branchIsOpen(row.node) ? "▾" : "▸" }}</button>
-                <span v-else class="tree-toggle tree-toggle--empty" aria-hidden="true"></span>
-                <button type="button" class="tree-node" :class="{ 'tree-node--selected': selectedId === row.node.id, 'tree-node--branch': hasChildren(row.node) }" :data-testid="`tree-node-${row.node.code}`" @click="selectNode(row.node)">{{ row.node.name }}</button>
-              </div>
-              <span v-if="!row.moreFor && hasChildren(row.node)" class="tree-progress">
-                <template v-if="summarize(row.node).total">{{ summarize(row.node).done }}/{{ summarize(row.node).total }} 已毕业</template>
-                <template v-else>{{ summarize(row.node).references }} 个历年考点</template>
-                <template v-if="summarize(row.node).total && summarize(row.node).references"> · {{ summarize(row.node).references }} 个历年考点</template>
-              </span>
-              <span v-else-if="!row.moreFor && row.node.is_reference_only" class="tree-leaf-state tree-leaf-state--reference" :class="stateTone(row.node.state)"><span class="tree-leaf-dot" aria-hidden="true"></span>{{ stateLabel(row.node.state) }} · 历年真题</span>
-              <span v-else-if="!row.moreFor" class="tree-leaf-state" :class="stateTone(row.node.state)"><span class="tree-leaf-dot" aria-hidden="true"></span>{{ stateLabel(row.node.state) }}</span>
-            </div>
-          </div>
-        </div>
+        <div class="tree-heading"><div><strong>知识结构</strong><span>{{ allLeaves.length }} 个学习知识点</span></div><span>脚趾连分支 · 点击节点查看详情</span></div>
+        <p v-if="!roots.length" class="state state--empty" data-testid="knowledge-empty">还没有可显示的知识点。</p>
+        <p v-else-if="!visibleRoots.length" class="state state--empty" data-testid="knowledge-search-empty">没有找到匹配的知识点，试试其他名称或编号。</p>
+        <KnowledgeTreeCanvas
+          v-else
+          ref="treeCanvas"
+          :nodes="visibleRoots"
+          :selected-id="selectedId"
+          :is-open="branchIsOpen"
+          :limits="branchLimits"
+          :batch-size="BRANCH_BATCH"
+          @select="selectNode($event)"
+          @toggle="toggleExpand"
+          @more="showMore"
+        />
       </section>
 
-      <div ref="detailPanel" class="detail">
-        <p v-if="!selectedId" class="state state--empty" data-testid="knowledge-empty">
-          选择树上的知识点查看详情；章节可继续展开。
-        </p>
+      <div v-if="selectedId" ref="detailPanel" class="detail" aria-label="知识节点详情">
+        <button type="button" class="knowledge-detail-close" aria-label="关闭知识节点详情" @click="closeDetail">关闭详情 <span aria-hidden="true">×</span></button>
 
-        <p v-else-if="detailLoading" class="state state--loading" data-testid="detail-loading">
+        <p v-if="detailLoading" class="state state--loading" data-testid="detail-loading">
           正在加载知识点详情…
         </p>
         <p v-else-if="detailError" class="state state--error">{{ detailError }}</p>
 
         <div v-else-if="detail" data-testid="knowledge-detail">
-          <p class="knowledge-breadcrumb" data-testid="knowledge-breadcrumb">{{ selectedPath.map((node) => node.name).join(' / ') }}</p>
-          <h2 data-testid="detail-title">{{ detail.node.name }}</h2>
-            <p class="state" data-testid="detail-state">
-              {{ stateLabel(detail.node.state) }}
+          <header class="knowledge-detail-heading">
+            <div>
+              <p class="knowledge-breadcrumb" data-testid="knowledge-breadcrumb">{{ selectedPath.map((node) => node.name).join(' / ') }}</p>
+              <h2 data-testid="detail-title">{{ detail.node.name }}</h2>
+            </div>
+          </header>
+            <p v-if="detail.node.graduation_set_binding_status === 'legacy_history_unbound' && detail.node.policy_version === 3" class="notice" data-testid="legacy-set-transition-notice">
+              该节点保留有历史练习记录，但无法可靠恢复旧毕业题集。历史记录仅用于查看与学习分析；开始新版正式考核时会单独征求确认。
             </p>
-            <p v-if="detail.node.is_assessable" class="hint" data-testid="assessment-basis">
-              {{ detail.node.assessment_basis === 'objective_v1' ? '依据：经核验的最终答案。自评只作辅助，不增加毕业次数。' : '依据：历史自评记录，尚未切换为客观作答证据。' }}
-              <span v-if="detail.node.pending_review_count">另有 {{ detail.node.pending_review_count }} 道错题待复测。</span>
-            </p>
+          <p v-if="!detail.node.is_assessable && detail.node.post_graduation_review_count">下属 {{detail.node.post_graduation_review_count}} 个知识点建议复习。</p>
+          <PostGraduationPractice v-if="detail.node.post_graduation?.applicable" :practice="detail.node.post_graduation" :node-id="detail.node.id" />
+          <div v-if="detail.node.is_assessable" class="knowledge-assistant-entry" data-testid="knowledge-assistant-entry">
+            <StudyMascot pose="teach" />
+            <div><strong>围绕这个知识点，和奶蛙一起学</strong><span>讲解、安排练习或生成新题；计划与加入今日学习仍由你确认。</span></div>
+            <RouterLink :key="detail.node.id" :to="{path:'/chat',query:{knowledge_node_id:detail.node.id,clear_context:'1'}}" data-testid="knowledge-assistant-link">询问奶蛙 ↗</RouterLink>
+          </div>
+          <LearningProgressSummary v-if="detail.capability_profile?.learning_progress && !detail.node.post_graduation?.applicable"
+            :progress="detail.capability_profile.learning_progress"
+            :lesson-to="detail.lesson_available ? '/knowledge/' + encodeURIComponent(detail.node.code) + '/lesson' : undefined" />
+          <p v-if="detail.capability_profile?.graduation_progress?.configured" class="graduation-progress-summary" data-testid="graduation-progress-summary">
+            毕业题目：真正完成 {{ detail.capability_profile.graduation_progress.completed_question_count }} / {{ detail.capability_profile.graduation_progress.required_question_count }} 道
+            <span v-if="detail.capability_profile.graduation_progress.graduated">· 已毕业</span>
+          </p>
+          <p v-else-if="detail.capability_profile?.graduation_progress" class="graduation-progress-summary" data-testid="graduation-progress-summary">
+            毕业题目集合尚未配置；题目进度不会因空集合自动毕业。
+          </p>
 
           <nav class="mode-switch">
             <button type="button" :class="{ active: tab === 'overview' }" data-testid="tab-overview" @click="tab = 'overview'">概览</button>
@@ -469,14 +563,29 @@ onMounted(async () => {
 
             <KnowledgeCapabilities v-if="detail.capability_profile" :profile="detail.capability_profile" />
 
-            <p v-if="detail.node.next_step" class="notice" data-testid="next-step">
-              <strong>下一步：</strong>{{ detail.node.next_step }}
+            <p v-if="detail.node.next_step && !detail.capability_profile?.learning_progress" class="notice" data-testid="next-step">
+              <strong>原评价建议：</strong>{{ detail.node.next_step }}
             </p>
             <details v-if="detail.node.is_assessable" class="knowledge-advanced" data-testid="knowledge-advanced">
               <summary>查看毕业进度与考核要求</summary>
+              <p class="state" data-testid="detail-state">原评价状态：{{ stateLabel(detail.node.state) }}</p>
+              <p class="hint" data-testid="assessment-basis">此处保留原评价结果；当前严格确认按有效收据核验，与上方学习进展分开。自评与参考比对不增加严格确认。</p>
             <!-- 毕业进度：逐项来自后端 gap_items，前端不自己算毕业条件 -->
             <h3 class="section-title">毕业进度</h3>
-            <p class="hint" data-testid="graduation-evidence-boundary">以下是知识点的考核要求。练习按题库答案核对；毕业确认还需满足独立作答、题型覆盖和复测等条件。自行对照与 AI 辅助审阅只作学习反馈。</p>
+            <template v-if="detail.capability_profile?.graduation_progress">
+              <p class="hint" data-testid="graduation-evidence-boundary">毕业只看本节点冻结题目是否逐题真正完成。错题复习、间隔安排和变式训练由今日学习与奶蛙负责，不额外变成毕业配额。</p>
+              <p v-if="!detail.capability_profile.graduation_progress.configured" class="notice" data-testid="graduation-set-unconfigured">这个知识点尚未配置可毕业的正式题目集合；不会因为题集为空而自动毕业。</p>
+              <p v-else data-testid="graduation-set-progress">已真正完成 {{ detail.capability_profile.graduation_progress.completed_question_count }} / {{ detail.capability_profile.graduation_progress.required_question_count }} 道规定题目<span v-if="detail.capability_profile.graduation_progress.graduated"> · 已毕业</span></p>
+              <ul v-if="(detail.capability_profile.graduation_progress.questions ?? []).length" class="gap-list" data-testid="graduation-set-items">
+                <li v-for="item in detail.capability_profile.graduation_progress.questions ?? []" :key="item.question_id" class="gap-item">
+                  <span class="gap-item__label">规定题目 {{ item.ordinal }}</span>
+                  <span class="gap-item__value">{{ item.status === 'COMPLETED' ? '已真正完成' : item.status === 'IN_PROGRESS' ? '学习中，待独立完成' : '未开始' }}</span>
+                </li>
+              </ul>
+              <p v-if="detail.capability_profile.graduation_progress.graduated_at" class="hint" data-testid="graduation-set-date">毕业记录：{{ formatTime(detail.capability_profile.graduation_progress.graduated_at) }}</p>
+            </template>
+            <template v-else>
+            <p class="hint" data-testid="graduation-evidence-boundary">以下是知识点的考核要求。练习按题库答案核对；自行对照与 AI 辅助审阅只作学习反馈。</p>
             <p v-if="Object.keys(detail.node.required_question_types ?? {}).some(type => !['single_choice', 'fill_blank', 'calculation'].includes(type))" class="hint" data-testid="graduation-process-gap">证明、讨论等过程题需要检查推导或论证，最终答案不能单独代表掌握。</p>
             <ul class="gap-list" data-testid="gap-list">
               <li
@@ -543,6 +652,7 @@ onMounted(async () => {
               <dt>下次复习</dt>
               <dd>{{ formatTime(detail.node.next_review_at) }}</dd>
             </dl>
+            </template>
             </details>
 
             <!-- 叶子整体自评：只有 is_assessable 叶子才有这一组按钮 -->
@@ -564,10 +674,24 @@ onMounted(async () => {
 
           <!-- 题库：只显示题干，不显示答案 -->
           <section v-else-if="tab === 'questions'" class="card" data-testid="question-bank">
-            <p v-if="detail.questions.length === 0" class="state state--empty">该知识点还没有题目。</p>
-            <ul v-else>
-              <li v-for="question in detail.questions" :key="question.id" class="pool-item">
-                <QuestionSource :source="question.question_source" />
+            <div class="question-bank-heading">
+              <div>
+                <h3>{{ detail.node.name }} · 练习题</h3>
+                <p class="hint">公共正式题与 AI 练习统一按知识点展示；个人 AI 练习不计入正式毕业。</p>
+              </div>
+              <form class="question-search" role="search" @submit.prevent>
+                <label for="node-question-search">搜索本知识点题目</label>
+                <input id="node-question-search" v-model="questionSearch" type="search" maxlength="100" placeholder="输入题干关键词" />
+              </form>
+            </div>
+            <label class="hidden-question-toggle"><input v-model="showHiddenPersonalQuestions" type="checkbox" /> 显示已隐藏的 AI 练习</label>
+            <p v-if="!visibleNodeQuestions.length && !showHiddenPersonalQuestions" class="state state--empty">{{ questionSearch ? '没有找到匹配的题目。' : '该知识点还没有题目。' }}</p>
+            <p v-if="showHiddenPersonalQuestions && hiddenQuestionsLoading" role="status" class="state state--loading">正在读取已隐藏的 AI 练习…</p>
+            <p v-if="hiddenQuestionsError" role="alert" class="form-error">{{ hiddenQuestionsError }}</p>
+            <ul v-if="visibleNodeQuestions.length">
+              <li v-for="question in visibleNodeQuestions" :key="question.id" class="pool-item" :data-testid="question.bank_scope === 'personal' ? 'personal-node-question' : 'public-node-question'">
+                <QuestionSource :source="question.question_source" :trust="question.trust" :is-variant="question.is_variant" />
+                <span v-if="question.bank_scope === 'personal'" class="tag tag--muted">个人练习 · 不计毕业</span>
                 <MarkdownContent :text="question.stem" />
                 <ol v-if="question.options" class="question-options">
                   <li v-for="(text, key) in question.options" :key="key"><span>{{ key }}.</span> <MarkdownContent :text="text" /></li>
@@ -575,9 +699,23 @@ onMounted(async () => {
                 <span class="tag tag--muted">{{ typeLabel(question.question_type) }}</span>
                 <span class="tag tag--muted">{{ question.difficulty }}</span>
                 <span v-if="question.is_variant" class="tag">变式题</span>
-                <button type="button" :disabled="addingQuestionId !== null" @click="addOnlineQuestion(question.id, question.kp_id)">{{ addingQuestionId === question.id ? '正在加入…' : '加入今日学习' }}</button>
+                <button type="button" :disabled="addingQuestionId !== null || !question.trust.practice_eligible" @click="addOnlineQuestion(question.id, question.kp_id)">{{ addingQuestionId === question.id ? '正在加入…' : '加入今日学习' }}</button>
+                <button v-if="question.bank_scope === 'personal'" type="button" class="quiet-action" :disabled="visibilityBusyId !== null" @click="setPersonalQuestionHidden({id:question.id,kp_id:question.kp_id,bank_scope:'personal',hidden:false,question_type:question.question_type,difficulty:question.difficulty,stem:question.stem,options:question.options ?? null,practice_eligible:question.trust.practice_eligible}, true)">{{ visibilityBusyId === question.id ? '处理中…' : '隐藏' }}</button>
               </li>
             </ul>
+            <template v-if="showHiddenPersonalQuestions">
+              <h4>已隐藏的 AI 练习</h4>
+              <p v-if="!hiddenQuestionsLoading && !hiddenPersonalQuestions.length" class="state state--empty">{{ questionSearch ? '没有匹配的已隐藏练习。' : '没有已隐藏的 AI 练习。' }}</p>
+              <ul v-if="hiddenPersonalQuestions.length">
+                <li v-for="question in hiddenPersonalQuestions" :key="question.id" class="pool-item" data-testid="hidden-personal-question">
+                  <span class="tag tag--muted">AI练习题 · 个人练习，不计毕业</span>
+                  <MarkdownContent :text="question.stem" />
+                  <span class="tag tag--muted">{{ typeLabel(question.question_type) }}</span>
+                  <span class="tag tag--muted">{{ question.difficulty }}</span>
+                  <button type="button" :disabled="visibilityBusyId !== null" @click="setPersonalQuestionHidden(question, false)">{{ visibilityBusyId === question.id ? '处理中…' : '恢复显示' }}</button>
+                </li>
+              </ul>
+            </template>
             <p class="hint">题库不显示答案；答案详解只在答题页查看答案时读取。</p>
             <p v-if="questionNotice" role="status" class="notice">{{ questionNotice }}</p>
             <p v-if="questionError" role="alert" class="form-error">{{ questionError }}</p>
@@ -637,6 +775,13 @@ onMounted(async () => {
 .tree-leaf-dot { width: 6px; height: 6px; border-radius: 50%; background: #b9bbbe; }
 .tree-leaf-state.tone--mastered .tree-leaf-dot { background: var(--success); }
 .tree-leaf-state.tone--consolidating .tree-leaf-dot { background: var(--warning); }
+.question-bank-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 12px; margin-bottom: 12px; }
+.question-bank-heading h3 { margin: 0 0 4px; }
+.question-bank-heading p { margin: 0; }
+.question-search { display: grid; gap: 4px; min-width: min(260px, 100%); }
+.question-search input { min-height: 36px; }
+.hidden-question-toggle { display: inline-flex; align-items: center; gap: 6px; margin: 6px 0 12px; }
+.quiet-action { margin-left: 6px; }
 .tree-leaf-state.tone--stuck .tree-leaf-dot { background: var(--danger); }
 .detail { min-height: 270px; padding: 0; border: 0; border-radius: 0; }
 .detail > [data-testid="knowledge-detail"] > h2 { font-size: 20px; }
@@ -733,4 +878,9 @@ onMounted(async () => {
 .question-options { list-style: none; padding: 0; margin: 12px 0; }
 .question-options li { display: flex; gap: 10px; align-items: baseline; margin: 6px 0; }
 .question-options li > span { color: var(--text-secondary); }
+.knowledge-assistant-entry{display:flex;align-items:center;gap:12px;padding:12px 0 16px;margin:4px 0 14px;border-bottom:1px solid var(--border);min-width:0}
+.knowledge-assistant-entry :deep(.study-mascot){width:46px;height:50px;flex:0 0 46px}
+.knowledge-assistant-entry>div{display:grid;gap:4px;flex:1;min-width:0}.knowledge-assistant-entry strong{font-size:13px;font-weight:500}.knowledge-assistant-entry span{font-size:11px;color:var(--text-secondary);line-height:1.6}
+.knowledge-assistant-entry>a{font-size:12px;white-space:nowrap;min-height:38px;display:flex;align-items:center;padding:5px 9px;border:1px solid var(--border);border-radius:9px;text-decoration:none}
+@media(max-width:600px){.knowledge-assistant-entry{flex-wrap:wrap;gap:8px}.knowledge-assistant-entry>a{margin-left:54px}}
 </style>

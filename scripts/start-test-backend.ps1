@@ -14,34 +14,44 @@
 **开发**后端（8000 / dev 库）。缺了这一步，e2e 会在每个用例上重试到超时，
 报出一堆看不懂的 fetch 错误。
 
-存储目录也一起隔离：
-- `CHROMA_DIR=storage/chroma-test`
-- `UPLOAD_DIR=storage/uploads-test`
-否则测试资料会被写进**开发用的向量库**，e2e 删资料时又只按 id 基线清理，
-容易在开发索引里留下孤儿向量。
+存储目录也按每次启动的唯一运行 ID 隔离，使用前先通过只读数据库身份核验。
+不设置安全默认数据库 URL；没有测试运行器的 URL 和端口所有权标记时会拒绝启动。
 
 用法：
+    # 先由隔离测试运行器在当前 PowerShell 进程中设置 TEST_DATABASE_URL 和
+    # KAOYAN_OWNED_TEST_PORT，再执行下列命令。
     powershell -ExecutionPolicy Bypass -File scripts\start-test-backend.ps1
-    # 停止：Ctrl+C（或关闭窗口）
+    # 停止：在这个窗口按 Ctrl+C
 #>
 [CmdletBinding()]
 param(
     [int]$Port = 8001,
-    [string]$TestDatabaseUrl = "postgresql+psycopg://kaoyan:kaoyan_dev_pw@127.0.0.1:5433/kaoyan_test",
-    [string]$DatabaseUrl = "postgresql+psycopg://kaoyan:kaoyan_dev_pw@127.0.0.1:5433/kaoyan"
+    [string]$TestDatabaseUrl = $env:TEST_DATABASE_URL,
+    [string]$OwnedTestPort = $(if ($env:KAOYAN_OWNED_TEST_PORT) { $env:KAOYAN_OWNED_TEST_PORT } else { $env:PHASE45E_OWNED_TEST_PORT })
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# Fail closed. Earlier defaults pointed DATABASE_URL at the ordinary kaoyan
+# database; tests must receive an explicit, runner-owned isolated URL.
+if (-not $TestDatabaseUrl -or -not $OwnedTestPort) {
+    throw "必须由隔离测试运行器提供 TEST_DATABASE_URL 和 owned test port；未连接数据库。"
+}
+
 # 这些环境变量优先于 .env（pydantic-settings 的行为），所以隔离性是确定的。
 $env:APP_ENV = "test"
 $env:TEST_DATABASE_URL = $TestDatabaseUrl
-# DATABASE_URL 是必填项，但它在本进程里不会被使用（Settings 只认 test_database_url）。
-$env:DATABASE_URL = $DatabaseUrl
-$env:CHROMA_DIR = Join-Path $root "storage/chroma-test"
-$env:UPLOAD_DIR = Join-Path $root "storage/uploads-test"
+$env:DATABASE_URL = $TestDatabaseUrl
+$env:KAOYAN_OWNED_TEST_PORT = $OwnedTestPort
+$runId = [guid]::NewGuid().ToString('N')
+$runRoot = Join-Path $root 'storage/test-backend-runs'
+[IO.Directory]::CreateDirectory($runRoot) | Out-Null
+$runStorage = Join-Path $runRoot $runId
+[IO.Directory]::CreateDirectory($runStorage) | Out-Null
+$env:CHROMA_DIR = Join-Path $runStorage "chroma"
+$env:UPLOAD_DIR = Join-Path $runStorage "uploads"
 # 模型是本地缓存的：不联网也能跑，避免 e2e 卡在下载上。
 $env:HF_HUB_OFFLINE = "1"
 $env:TRANSFORMERS_OFFLINE = "1"
@@ -49,14 +59,18 @@ $env:PYTHONIOENCODING = "utf-8"
 
 Write-Host "隔离测试后端" -ForegroundColor Cyan
 Write-Host "  APP_ENV           = $env:APP_ENV"
-Write-Host "  测试库            = kaoyan_test"
-Write-Host "  向量目录          = $env:CHROMA_DIR"
-Write-Host "  上传目录          = $env:UPLOAD_DIR"
+$identity = & python scripts/check_database_target.py
+if ($LASTEXITCODE -ne 0) {
+    throw "测试数据库身份核验失败；服务未启动，隔离数据目录保留在 $runStorage"
+}
+Write-Host "  数据库身份        = $identity"
+Write-Host "  本次存储目录      = $runStorage"
 Write-Host "  监听              = http://127.0.0.1:$Port"
 Write-Host ""
-Write-Host "启动后请确认：curl http://127.0.0.1:$Port/api/health 里 environment 应为 test" -ForegroundColor DarkGray
+Write-Host "启动后确认 /api/health 的 environment=test。" -ForegroundColor DarkGray
 Write-Host "然后另开窗口执行：python scripts\prepare_e2e_data.py --apply" -ForegroundColor DarkGray
 Write-Host "最后跑 e2e：cd frontend; npm run test:e2e" -ForegroundColor DarkGray
+Write-Host "停止方式：在本窗口按 Ctrl+C；不要按端口结束进程。" -ForegroundColor DarkGray
 Write-Host ""
 
 python -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port $Port --log-level warning

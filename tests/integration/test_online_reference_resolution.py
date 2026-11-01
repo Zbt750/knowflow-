@@ -5,7 +5,7 @@ from backend.services.exam_reference_service import sync_exam_reference_index
 from tests.integration.test_learning_loop import session_factory, clean_database, client, clock
 
 
-def test_reference_resolves_to_online_question_and_repeated_append_is_idempotent(client, session_factory):
+def test_unreviewed_reference_candidate_is_not_appended_as_formal_online_practice(client, session_factory):
     with session_factory.begin() as db:
         sync_exam_reference_index(db)
         reference = db.scalar(select(ExamQuestionReference).order_by(ExamQuestionReference.id))
@@ -14,16 +14,16 @@ def test_reference_resolves_to_online_question_and_repeated_append_is_idempotent
         question.grading_config = {"verified": False, "method": None, "provenance": {
             "content_status": "source_transcribed", "source": {"source_type": "exam",
             "subject": reference.subject, "year": reference.year, "question_number": reference.question_number}}}
+        question.answer_provenance="ai_generated";question.answer_reliability="model_generated"
+        question.answer_verification_event_id=None;question.current_answer_verification=None
         reference_id, question_id, kp_id = str(reference.id), str(question.id), str(question.kp_id)
     response = client.post("/api/plans/today/exam-references", json={"reference_ids": [reference_id]})
-    assert response.status_code == 200, response.text
-    item = response.json()["items"][0]
-    assert item["question_id"] == question_id and item["kp_id"] == kp_id
-    assert item["stem"] and item["is_external_reference"] is False and item["exam_reference"] is None
-    again = client.post("/api/plans/today/exam-references", json={"reference_ids": [reference_id]})
-    assert again.status_code == 200 and again.json()["total_count"] == 1
+    assert response.status_code == 409 and response.json()["error"]["code"] == "question_pool_incomplete"
     with session_factory() as db:
-        assert db.scalar(select(func.count(PracticeItem.id))) == 1
+        assert db.scalar(select(func.count(DailyPlan.id))) == 0
+        assert db.scalar(select(func.count(PracticeItem.id))) == 0
+    # A source transcription and AI answer marker alone do not constitute the
+    # formal review needed for this convenience route.
 
 
 def test_mixed_missing_reference_cannot_create_partial_plan(client, session_factory):
@@ -35,6 +35,8 @@ def test_mixed_missing_reference_cannot_create_partial_plan(client, session_fact
         question.grading_config = {"verified": False, "method": None, "provenance": {
             "content_status": "source_transcribed", "source": {"source_type": "exam",
             "subject": first.subject, "year": first.year, "question_number": first.question_number}}}
+        question.answer_provenance="ai_generated";question.answer_reliability="model_generated"
+        question.answer_verification_event_id=None;question.current_answer_verification=None
         ids = [str(r.id) for r in references]
         # Ensure the second pointer describes a different source identity.
         references[1].year = 2099

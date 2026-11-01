@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
 
+@router.get('/runtime-version')
+def runtime_version(request: Request):
+    # No database dependency, secrets, configuration dump, or live disk rehash.
+    # Frozen at app creation so a stale process cannot claim new disk sources.
+    snapshot = getattr(request.app.state, 'runtime_version', None)
+    if snapshot is None:
+        return JSONResponse(status_code=503, content={'error': {'code': 'runtime_snapshot_unavailable',
+            'message': '当前进程没有运行版本快照，请按项目启动方式加载新版后核验。'}})
+    return {**snapshot, 'connection_server': list(request.scope.get('server') or [])}
+
+
 class HealthResponse(BaseModel):
     status: str
     database: str

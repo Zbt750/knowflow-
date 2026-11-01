@@ -27,6 +27,7 @@ class TaskView(BaseModel):
     error_code: str | None
     metrics: dict
     draft_version: str | None = None
+    append_result: dict | None = None
 
 
 class ConfirmTask(BaseModel):
@@ -49,6 +50,12 @@ class NodeIds(ToolArgs):
 class FindQuestions(ToolArgs):
     kp_ids: list[UUID] = Field(default_factory=list, max_length=8)
     question_type: Literal["single_choice", "fill_blank", "calculation", "proof", "discussion", "program"] | None = None
+    exclude_question_ids: list[UUID] = Field(default_factory=list, max_length=100)
+
+
+class ReviewNeedsQuery(ToolArgs):
+    subject: str | None = Field(default=None,max_length=80)
+    limit: int = Field(default=10,ge=1,le=30)
 
 
 class QuestionAvailabilityQuery(ToolArgs):
@@ -63,11 +70,17 @@ class ReadLesson(ToolArgs):
     kp_id: UUID
 
 
-class ValidatePlan(ToolArgs):
-    question_ids: list[UUID] = Field(default_factory=list, max_length=12)
+class PaperValidation(ToolArgs):
+    """Complete persisted paper; transport call limits are not business limits."""
+    question_ids: list[UUID] = Field(default_factory=list)
     review_kp_ids: list[UUID] = Field(default_factory=list, max_length=4, description="不安排知识复习时必须为空列表；只选择有可用讲解的节点")
     review_minutes: int = Field(default=0, ge=0, le=120, strict=True, description="复习节点为空时必须为0，有复习节点时必须为正数")
     rationale: str = Field(default="", max_length=400)
+
+
+class ValidatePlan(PaperValidation):
+    """Bounded model-tool input; never use to revalidate a saved whole paper."""
+    question_ids: list[UUID] = Field(default_factory=list, max_length=12)
 
 
 class TaskConclusion(ToolArgs):

@@ -11,7 +11,7 @@ from backend.mastery.enums import EventType, MasteryState, SelfGrade
 from backend.mastery.rules import effective_confirmation_count
 from backend.mastery.storage import (
     apply_snapshot,
-    policy_from_storage,
+    policy_for_node,
     snapshot_from_storage,
     snapshot_to_storage,
 )
@@ -78,7 +78,7 @@ def assess_knowledge_node(
         )
 
     # 按这个叶子自己的策略判定：基础确认只帮助有效确认数，不能替代真实题与题型覆盖。
-    policy = policy_from_storage(session.get(KpMasteryPolicy, kp_id))
+    policy = policy_for_node(session, kp_id, bind_if_unset=True)
     event = DomainLearningEvent(
         event_type=EventType.NODE_SELF_REPORTED, occurred_at=now, self_grade=self_grade
     )

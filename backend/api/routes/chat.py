@@ -2,11 +2,16 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 from fastapi import APIRouter, Request
+from fastapi import Depends
+from backend.api.deps import get_time_provider
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import delete, exists, select
-from backend.chat.service import answer, basis_payload, provider_from_settings, require_active_session, stream_answer
+from backend.chat.service import answer, basis_payload, provider_from_settings, stream_answer
+from backend.services.chat_session_scope import effective_purpose, require_session_purpose, session_list_predicate
 from backend.errors import AppError
+from backend.services.generation_diagnostics import with_diagnostics
+from backend.services.generation_outcomes import with_outcomes
 from backend.models.chat import ChatMessage, ChatSession, MessageCitation
 from backend.models.learning import KnowledgePoint
 from backend.models.rag import DocumentChunk, Material
@@ -34,6 +39,12 @@ class _DeferredProvider:
     def __getattr__(self,name):
         if self.resolved is None:self.resolved=provider_from_settings(self.settings)
         return getattr(self.resolved,name)
+    def for_answer(self,prepared):
+        # 请求级策略必须作用于真正的 Provider，而不能因延迟包装器的类型
+        # 判断而被跳过。只在确实准备送模时解析，不影响免费确认/通知分支。
+        from backend.chat.service import _provider_for_answer
+        if self.resolved is None:self.resolved=provider_from_settings(self.settings)
+        return _provider_for_answer(self.resolved,prepared)
 
 class DeepQARequest(BaseModel):
     source_session_id:UUID
@@ -49,13 +60,17 @@ def deep_handoff(request:Request,body:DeepQARequest):
 
 
 @router.post("/chat/sessions/{session_id}/assistant:stream")
-async def learning_assistant(request: Request,session_id: UUID,body: AssistantRequest):
+async def learning_assistant(request: Request,session_id: UUID,body: AssistantRequest,
+                             purpose: Literal["qa", "study", "materials", "material_search"] = "qa",
+                             clock=Depends(get_time_provider)):
     from backend.services.learning_assistant_service import assistant_stream
     from backend.services.study_context_service import validate_study_context
+    now = clock()
     with request.app.state.session_factory() as db:
-        validate_study_context(db,session_id=session_id,context=body.study_context)
+        require_session_purpose(db, session_id, purpose)
+        validate_study_context(db,session_id=session_id,context=body.study_context,now=now)
     return StreamingResponse(assistant_stream(request.app.state.session_factory,request=request,session_id=session_id,body=body,
-        stack=getattr(request.app.state,"retrieval_stack",None),provider=_DeferredProvider(request.app.state.settings),web_search_provider=getattr(request.app.state,"web_search_provider",None)),
+        stack=getattr(request.app.state,"retrieval_stack",None),provider=_DeferredProvider(request.app.state.settings),now=now,web_search_provider=getattr(request.app.state,"web_search_provider",None)),
         media_type="text/event-stream",headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
 
 class CreateSessionRequest(BaseModel):
@@ -67,6 +82,16 @@ class CreateSessionRequest(BaseModel):
 class AskRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
     question: str = Field(min_length=1, max_length=4000)
+
+
+@router.post("/chat/sessions/{session_id}/generation-confirmations/{message_id}/cancel")
+def cancel_generation_card(request: Request, session_id: UUID, message_id: UUID,
+                           purpose: Literal["qa", "study", "materials", "material_search"] = "qa"):
+    from backend.services.learning_assistant_service import cancel_generation_confirmation
+    with request.app.state.session_factory() as db:
+        require_session_purpose(db, session_id, purpose)
+    return cancel_generation_confirmation(request.app.state.session_factory,
+        session_id=session_id, message_id=message_id)
 
 class FollowupCandidatesRequest(BaseModel):
     message_id: UUID | None = None
@@ -122,11 +147,11 @@ def _matched_kp_view(row: ChatMessage, cards: list[dict[str, object]], name: str
     )
 
 @router.post("/chat/sessions", status_code=201)
-def create_session(request: Request, body: CreateSessionRequest):
+def create_session(request: Request, body: CreateSessionRequest, clock=Depends(get_time_provider)):
     with request.app.state.session_factory.begin() as db:
         from datetime import datetime,timezone
         from zoneinfo import ZoneInfo
-        today=datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        today=clock().astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
         if body.purpose=="study" and body.mode!="builtin":raise AppError("forbidden",status_code=403)
         if body.purpose=="materials" or body.material_scope_ids:
             if body.mode!="user" or not body.material_scope_ids:raise AppError("private_scope_required",status_code=422)
@@ -140,7 +165,8 @@ def create_session(request: Request, body: CreateSessionRequest):
         return {"session_id":str(session.id),"title":session.title,"mode":session.mode,"purpose":session.purpose,"study_date":session.study_date,"material_scope_ids":session.material_scope_ids}
 
 @router.get("/chat/sessions")
-def list_sessions(request: Request, mode: Literal["builtin", "user"] | None = None):
+def list_sessions(request: Request, mode: Literal["builtin", "user"] | None = None,
+                  purpose: Literal['qa', 'study', 'materials', 'material_search'] | None = None):
     """列出「未归档」且「已经有消息」的会话。
 
     两条筛选都是有意的：
@@ -158,7 +184,7 @@ def list_sessions(request: Request, mode: Literal["builtin", "user"] | None = No
         statement = (
             select(ChatSession)
             .where(ChatSession.archived_at.is_(None))
-            .where(ChatSession.purpose.not_in(("study", "material_search")))
+            .where(session_list_predicate(purpose))
             .where(
                 exists(
                     select(ChatMessage.id).where(ChatMessage.session_id == ChatSession.id)
@@ -169,18 +195,21 @@ def list_sessions(request: Request, mode: Literal["builtin", "user"] | None = No
         if mode is not None:
             statement = statement.where(ChatSession.mode == mode)
         rows = db.scalars(statement).all()
-        return [{"session_id":str(row.id),"title":row.title,"mode":row.mode,"purpose":row.purpose,"material_scope_ids":row.material_scope_ids} for row in rows]
+        return [{"session_id":str(row.id),"title":row.title,"mode":row.mode,"purpose":effective_purpose(db,row),
+                 "study_date":row.study_date,"material_scope_ids":row.material_scope_ids} for row in rows]
 
 @router.patch("/chat/sessions/{session_id}")
-def rename_session(request: Request, session_id: UUID, body: RenameSessionRequest):
+def rename_session(request: Request, session_id: UUID, body: RenameSessionRequest,
+                   purpose: Literal["qa", "study", "materials", "material_search"] = "qa"):
     """会话标题仅供历史导航；不会改写消息、引用或学习事实。"""
     with request.app.state.session_factory.begin() as db:
-        session = require_active_session(db, session_id)
+        session = require_session_purpose(db, session_id, purpose)
         session.title = body.title.strip()
         return {"session_id": str(session.id), "title": session.title, "mode": session.mode}
 
 @router.delete("/chat/sessions/{session_id}", status_code=204)
-def delete_session(request: Request, session_id: UUID):
+def delete_session(request: Request, session_id: UUID,
+                   purpose: Literal["qa", "study", "materials", "material_search"] = "qa"):
     """**物理删除**会话，连同它的消息与引用一起从库里移除。
 
     2026-09-20 之前这里是**归档**（只置 `archived_at`），理由是「问答与引用要可追溯」。
@@ -196,7 +225,7 @@ def delete_session(request: Request, session_id: UUID):
     不该因为用户清理了一轮对话就抹掉；代价是那几条事件的 `source_id` 会变成悬空 id。
     """
     with request.app.state.session_factory.begin() as db:
-        session = require_active_session(db, session_id)
+        session = require_session_purpose(db, session_id, purpose)
         db.execute(
             delete(MessageCitation).where(
                 MessageCitation.message_id.in_(
@@ -208,9 +237,10 @@ def delete_session(request: Request, session_id: UUID):
         db.delete(session)
 
 @router.get("/chat/sessions/{session_id}/messages")
-def list_messages(request: Request, session_id: UUID):
+def list_messages(request: Request, session_id: UUID,
+                  purpose: Literal["qa", "study", "materials", "material_search"] = "qa"):
     with request.app.state.session_factory() as db:
-        require_active_session(db, session_id)
+        require_session_purpose(db, session_id, purpose)
         # 排序必须带 id 兜底：user 与 assistant 是在**同一个事务**里提交的，
         # created_at（server_default=now()）在事务内完全相同，
         # 只按时间排序时两者先后成了数据库的偶然结果 ——
@@ -244,6 +274,19 @@ def list_messages(request: Request, session_id: UUID):
                 "assistance_level":row.metadata_.get("assistance_level"),
                 "qa_action":row.metadata_.get("qa_action"),
                 "practice_request_id":row.metadata_.get("practice_request_id"),
+                "personal_generation":(with_outcomes(with_diagnostics(row.metadata_["personal_generation"])) if row.metadata_.get('personal_generation') else None),
+                "personal_training": row.metadata_.get("personal_training"),
+                "personal_generation_confirmation": (None if row.metadata_.get("personal_generation_confirmation_status") in {"cancelled", "superseded", "expired"}
+                    else row.metadata_.get("personal_generation_confirmation")),
+                "personal_generation_confirmation_status": row.metadata_.get("personal_generation_confirmation_status"),
+                "personal_generation_confirmation_message_id": row.metadata_.get("personal_generation_confirmation_message_id"),
+                "personal_generation_confirmed_kp_id": row.metadata_.get("personal_generation_confirmed_kp_id"),
+                "personal_generation_confirmed_targets": row.metadata_.get("personal_generation_confirmed_targets"),
+                "personal_generation_mode": row.metadata_.get("personal_generation_mode"),
+                "current_work": row.metadata_.get("current_work"),
+                "assistant_error_code": row.metadata_.get("assistant_error_code") or row.metadata_.get("error_code"),
+                "request_key": row.metadata_.get("request_key"),
+                "retryable": row.metadata_.get("assistant_retryable", row.status in {"failed", "cancelled"}),
                 "web_sources":row.metadata_.get("web_sources",[]),
                 "qa_information_route":row.metadata_.get("qa_information_route"),
                 **({"evaluation_evidence": row.metadata_.get("evaluation_evidence"),
@@ -255,9 +298,12 @@ def list_messages(request: Request, session_id: UUID):
         ]
 
 @router.post("/chat/sessions/{session_id}/answers", status_code=201)
-def ask(request: Request, session_id: UUID, body: AskRequest):
+def ask(request: Request, session_id: UUID, body: AskRequest,
+        purpose: Literal["qa", "study", "materials", "material_search"] = "qa"):
     stack = getattr(request.app.state, "retrieval_stack", None)
     if stack is None: raise AppError("retrieval_unavailable")
+    with request.app.state.session_factory() as db:
+        require_session_purpose(db, session_id, purpose)
     message, citations, mode = answer(request.app.state.session_factory, session_id=session_id, question=body.question.strip(), stack=stack, provider=provider_from_settings(request.app.state.settings))
     label_by_chunk = {str(chunk_id): label for label, chunk_id in citations}
     # 带上知识点名称：只给 uuid 的话，用户看到「归到 3f2a…」等于没解释。
@@ -269,10 +315,13 @@ def ask(request: Request, session_id: UUID, body: AskRequest):
     return {"message_id": str(message.id), "answer": message.content, "status": message.status, "response_duration_ms": message.metadata_.get("response_duration_ms"), "matched_kp_id": str(message.matched_kp_id) if message.matched_kp_id else None, "matched_kp": basis_payload(dict(message.matched_kp_basis or {}), label_by_chunk, kp_name=kp_name, kp_id=message.matched_kp_id), "citations": [{"label": label, "chunk_id": str(chunk_id)} for label, chunk_id in citations], "retrieval_mode": mode, "answer_source": message.metadata_.get("answer_source")}
 
 @router.post("/chat/sessions/{session_id}/answers:stream")
-async def ask_stream(request: Request, session_id: UUID, body: AskRequest):
+async def ask_stream(request: Request, session_id: UUID, body: AskRequest,
+                     purpose: Literal["qa", "study", "materials", "material_search"] = "qa"):
     stack = getattr(request.app.state, "retrieval_stack", None)
     with request.app.state.session_factory() as db:
-        session = require_active_session(db, session_id)
+        session = require_session_purpose(db, session_id, purpose)
+        if session.purpose not in {purpose, "qa"}:
+            raise AppError("chat_session_not_found", status_code=404)
         material_search = session.purpose == "material_search"
         if material_search:
             from backend.services.material_search_service import ready_scope
@@ -290,13 +339,14 @@ async def ask_stream(request: Request, session_id: UUID, body: AskRequest):
     return StreamingResponse(stream_answer(request.app.state.session_factory, request=request, session_id=session_id, question=body.question.strip(), stack=stack, provider=provider), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @router.post("/chat/sessions/{session_id}/followup-candidates")
-def followup_candidates(request: Request, session_id: UUID, body: FollowupCandidatesRequest | None = None):
+def followup_candidates(request: Request, session_id: UUID, body: FollowupCandidatesRequest | None = None,
+                        purpose: Literal["qa", "study", "materials", "material_search"] = "qa"):
     """只从服务端已归因叶子的既有题库读取候选；绝不在问答层造题或改掌握状态。"""
     from datetime import datetime, timezone
     from backend.models.learning import KpState, Question, QuestionAttempt
 
     with request.app.state.session_factory() as db:
-        require_active_session(db, session_id)
+        require_session_purpose(db, session_id, purpose)
         # 只认**最新这一条** assistant 回答的归因。
         #
         # 为什么不能「往前找最近一条有归因的消息」：
@@ -339,13 +389,14 @@ def followup_candidates(request: Request, session_id: UUID, body: FollowupCandid
         return {"candidates": [{"question_id": str(row.id), "kp_id": str(row.kp_id), "stem": row.stem, "is_variant": row.is_variant, "practice_status": status(row)} for row in rows]}
 
 @router.post("/chat/sessions/{session_id}/mark-confused")
-def mark_confused(request: Request, session_id: UUID):
+def mark_confused(request: Request, session_id: UUID,
+                  purpose: Literal["qa", "study", "materials", "material_search"] = "qa"):
     """把困惑写成弱信号；它绝不伪造成作答、更不清空毕业证据。"""
     from datetime import datetime, timezone
     from backend.models.learning import LearningEvent
 
     with request.app.state.session_factory.begin() as db:
-        require_active_session(db, session_id)
+        require_session_purpose(db, session_id, purpose)
         # 与 followup_candidates 同一基准：只认**最新这一条**回答的归因。
         # 否则用户在一个越界问题后点「我不理解」，会被记到几十条之前那个知识点上 ——
         # 学习信号记错对象比不记更糟。

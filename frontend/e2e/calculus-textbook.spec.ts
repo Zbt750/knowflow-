@@ -2,9 +2,21 @@ import { expect, test } from '@playwright/test';
 import { readdirSync, readFileSync } from 'node:fs';
 
 const lessonDir = new URL('../../seed/lessons/', import.meta.url);
+// Shared draft quality marker is now also used by algebra and all four 408
+// subjects. Scope this test to the calculus chapter rather than every draft.
+const linearExamCodes = new Set([
+  'math.exam.f4e5ed0360ea','math.exam.44eab8b0d00b','math.exam.08a5efb8a98d',
+  'math.exam.985c26775327','math.exam.c106a40cda48','math.exam.9bda63607d7e',
+  'math.exam.6df0d75f1b07','math.exam.f29397bf3b27','math.exam.7d6f5725a5ab',
+  'math.exam.0aad93648d60','math.exam.f99711e0ea65','math.exam.8b6ba0b9a789',
+  'math.exam.36050d277510','math.exam.9a1731a929ab','math.exam.712e07e16572',
+  'math.exam.90bbbeb58b4a','math.exam.7af99f485eff','math.exam.8d8ad14b2a44','math.exam.0949f5ff08f9',
+]);
 const lessons = readdirSync(lessonDir).filter(name => name.endsWith('.md')).map(name => ({
   code: name.slice(0, -3), markdown: readFileSync(new URL(name, lessonDir), 'utf8'),
-})).filter(lesson => lesson.markdown.includes('knowledge-lesson-quality:subject-textbook-draft-v3'));
+})).filter(lesson => lesson.code.startsWith('math.') && !lesson.code.startsWith('math.linear-algebra')
+  && !linearExamCodes.has(lesson.code) && !lesson.code.includes('.family.')
+  && lesson.markdown.includes('knowledge-lesson-quality:subject-textbook-draft-v3'));
 
 test('高数75份真实文件可独立阅读，公式无渲染错误', async ({ page }) => {
   test.setTimeout(300000);

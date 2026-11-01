@@ -17,10 +17,17 @@ def reviewed_fixture():
         "question_type": "single_choice", "stem": "Synthetic binary arithmetic fixture",
         "options": {"A": "2", "B": "3"}, "correct_answer": "A", "explanation": "Synthetic bit weight explanation",
         "estimated_minutes": 2, "skill_tags": ["synthetic"], "grading_method": "single_choice",
-        "answer_reviewed_by": "SIMULATED TEST ONLY", "source": {"kind": "licensed", "source_type": "exam",
+        "answer_reviewed_by": "SIMULATED TEST ONLY", "answer_reviewed_on": date.today().isoformat(),
+        "content_reviewed_by": "SIMULATED TEST ONLY", "content_reviewed_on": date.today().isoformat(),
+        "answer_provenance": "human_verified", "answer_reliability": "verified",
+        "answer_review_method": "SIMULATED independent review", "answer_review_note": "SIMULATED fixture note only",
+        "source": {"kind": "licensed", "source_type": "exam",
             "year": 2025, "question_number": 3, "subject": "408", "paper_title": "SIMULATED exam fixture",
             "citation": "Synthetic fixture, NOT a real question", "rights_basis": "SIMULATED permission, not a real license",
             "reviewed_by": "SIMULATED TEST ONLY", "reviewed_on": date.today().isoformat()}})
+    # Hash the exact serialized representation sent to prepare(), including
+    # optional-field presence; a model with omitted fields is not that payload.
+    q = PackQuestion.model_validate(q.model_dump(mode="json"))
     sha = fingerprint(q)
     decisions = template(batch)
     decisions["human_review_confirmed"] = True

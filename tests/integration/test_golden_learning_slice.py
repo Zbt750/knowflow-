@@ -3,6 +3,7 @@
 No human content review, model call or development-data import occurs here.
 """
 import json
+from backend.services.learning_task_context import expand_records
 from datetime import datetime, timedelta
 from uuid import UUID
 
@@ -18,6 +19,7 @@ from backend.services.learning_task_tools import TaskTools
 from backend.services.question_pack import import_pack
 from backend.services.golden_learning_slice import reviewed_pack
 from tests.integration.test_learning_loop import session_factory, clean_database, client, clock
+from tests.integration.test_learning_loop import mark_isolated_question_trusted
 from tests.integration.test_learning_tasks import clean_tasks
 from tests.integration.test_answer_submissions import cleanup_answer_records
 from tests.unit.test_golden_learning_slice import load_asset, attest_for_test
@@ -54,6 +56,11 @@ def slice_questions(session_factory, clean_database):
         for topic in asset.topics: ensure(topic.kp_code).is_reference_only = False
         rows = db.scalars(select(Question).where(
             Question.grading_config["provenance"]["key"].as_string().like(asset.slice_id + ":%"))).all()
+        # Explicit TEST_FIXTURE trusted-practice simulation for the positive
+        # state-machine cases. The original AI asset and real provenance stay
+        # unchanged; production AI originals do not receive this designation.
+        for row in rows:
+            mark_isolated_question_trusted(row,db=db)
         identifiers = {(q.grading_config["provenance"]["key"].split(":")[-1]): str(q.id) for q in rows}
     return asset, identifiers
 
@@ -117,12 +124,12 @@ class SlicePlanner:
             goal = json.loads(messages[1]["content"])["goal"]
             actions = [("search_knowledge", {"query": goal})]
         elif self.turn == 2:
-            self.nodes = [n["kp_id"] for n in json.loads(messages[-1]["content"])["nodes"]]
+            self.nodes = [n["kp_id"] for n in expand_records(json.loads(messages[-1]["content"]))["nodes"]]
             actions = [("get_learning_state", {"kp_ids": self.nodes}),
                 ("read_lesson", {"kp_id": self.nodes[0]}),
                 ("find_questions", {"kp_ids": self.nodes})]
         elif self.turn == 3:
-            available = json.loads(messages[-1]["content"])["questions"]
+            available = expand_records(json.loads(messages[-1]["content"]))["questions"]
             candidate = next(q for q in available if q["question_id"] == self.target)
             assert not candidate["in_today_plan"]
             actions = [("validate_plan", {"question_ids": [candidate["question_id"]],

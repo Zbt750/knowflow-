@@ -1,17 +1,30 @@
-"""每知识点毕业策略。
+"""Versioned per-node mastery policy.
 
-设计要点：
-- 毕业不再只看题目总数，而是同时看「真实题量 / 必考题型 / 必考考法 / 变式题 / 跨天」。
-- 策略按知识点配置：只考客观题的叶子不必练大题，只考大题的叶子不必做选择题。
-- `question_type`（作答形式）与 `question_role`（学习作用）互不替代，
-  因此策略只约束题型与考法，不约束角色。
+v1/v2 preserve historical semantics. v3 graduates a node when every question
+in its frozen, versioned graduation set has a valid completion receipt.
+Learning-plan spacing, variants, and remedial questions remain separate.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import get_args
+from uuid import UUID
 
 from backend.mastery.enums import QuestionType
+from backend.schemas.question_trust import QuestionProvenance
+
+LEGACY_POLICY_FIELDS = (
+    "min_confirmations", "min_real_questions", "required_question_types",
+    "excluded_question_types", "required_skill_tags", "required_variant_count",
+    "min_day_span", "manual_mastered_credit", "review_intervals_days",
+    "max_evidence_window", "note",
+)
+VERSIONED_POLICY_FIELDS = (*LEGACY_POLICY_FIELDS, "policy_version", "required_question_origins")
+GRADUATION_SET_FIELDS = ("graduation_question_ids", "graduation_set_version")
+# Storage/validation safety bound, not a learning quota. A release may include
+# every approved public question of a substantial topic without the old 20 cap.
+MAX_GRADUATION_SET_SIZE = 200
 
 
 @dataclass(frozen=True)
@@ -34,8 +47,52 @@ class MasteryPolicy:
     review_intervals_days: tuple[int, ...] = (7, 15, 30)
     max_evidence_window: int = 20
     note: str | None = None
+    policy_version: int = 1
+    # Deprecated compatibility field. Historical v2 policies may still carry
+    # a real_exam quota until a guarded data migration clears it. Runtime
+    # graduation and supply decisions must not treat this as a requirement.
+    required_question_origins: dict[str, int] = field(default_factory=dict)
+    # v3's finite, frozen formal-question set. New bank items never expand it.
+    graduation_question_ids: tuple[str, ...] = ()
+    graduation_set_version: int = 0
+    # Runtime-only fail-closed projection for legacy activity that has no
+    # provable historical set. Never persisted into the shared policy row.
+    graduation_binding_pending: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.policy_version) is not int or self.policy_version not in {1, 2, 3}:
+            raise ValueError("未知掌握策略版本")
+        if self.policy_version == 1 and self.required_question_origins:
+            raise ValueError("旧策略版本不能包含来源配额")
+        if self.policy_version == 3 and self.required_question_origins:
+            raise ValueError("v3 冻结题目集策略不能包含来源配额")
+        if self.policy_version in {2, 3} and "external_exam" in self.required_question_types:
+            raise ValueError("新策略版本不能把外部原卷引用作为毕业题型")
+        if type(self.graduation_set_version) is not int or self.graduation_set_version < 0:
+            raise ValueError("毕业题目集合版本必须是非负整数")
+        if type(self.graduation_binding_pending) is not bool:
+            raise ValueError("毕业题集切换状态必须是布尔值")
+        if any(not isinstance(qid, str) or not qid.strip() for qid in self.graduation_question_ids):
+            raise ValueError("毕业题目集合包含空题目ID")
+        try:
+            normalized_ids = tuple(str(UUID(qid)) for qid in self.graduation_question_ids)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("毕业题目集合必须使用有效题目UUID") from exc
+        if normalized_ids != self.graduation_question_ids:
+            raise ValueError("毕业题目集合UUID必须使用规范格式")
+        if len(set(self.graduation_question_ids)) != len(self.graduation_question_ids):
+            raise ValueError("毕业题目集合不能包含重复题目")
+        if len(self.graduation_question_ids) > MAX_GRADUATION_SET_SIZE:
+            raise ValueError(f"毕业题目集合不能超过 {MAX_GRADUATION_SET_SIZE} 道题")
+        if bool(self.graduation_question_ids) != (self.graduation_set_version > 0):
+            raise ValueError("毕业题目集合与集合版本必须同时配置")
+        if self.policy_version != 3 and (self.graduation_question_ids or self.graduation_set_version):
+            raise ValueError("只有 v3 策略可以配置冻结毕业题目集合")
+        origins = set(get_args(QuestionProvenance)) - {"legacy_unknown"}
+        if set(self.required_question_origins) - origins:
+            raise ValueError("未知题目来源配额")
+        if any(type(n) is not int or n < 1 for n in self.required_question_origins.values()):
+            raise ValueError("来源配额必须是正整数")
         positive = (
             self.min_confirmations,
             self.min_real_questions,
@@ -75,6 +132,8 @@ class MasteryPolicy:
             item.value
             for item in QuestionType
             if item.value not in self.excluded_question_types
+            and (self.policy_version in {2, 3} or item not in {QuestionType.DISCUSSION, QuestionType.PROGRAM}
+                 or item.value in self.required_question_types)
             and (
                 item.value != QuestionType.EXTERNAL_EXAM.value
                 or item.value in self.required_question_types
@@ -84,4 +143,5 @@ class MasteryPolicy:
     @property
     def total_required_question_count(self) -> int:
         """题型配额要求的题目总数下限。"""
+        # Source identity is descriptive, never a graduation quota.
         return sum(self.required_question_types.values())

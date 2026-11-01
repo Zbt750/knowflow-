@@ -1,0 +1,20 @@
+{
+  "source": "User-reported saved QuestionVersion, read-only extraction; not the original model response",
+  "question_id": "b16aaae4-d23f-53c4-9cad-554810dd0237",
+  "question_version_id": "2a3b8260-f199-4fc6-9c29-771d5c82a547",
+  "node_code": "math.calculus.series.geometric",
+  "stem": "关于级数 \\(\\sum_{n=1}^{\\infty} \\frac{1}{2^n}\\) 与 \\(\\sum_{n=1}^{\\infty} \\left(\\frac{3}{2}\\right)^n\\)，下列结论正确的是（ ）",
+  "options": {
+    "A": "两题均收敛，且和分别为 1 与 3",
+    "B": "前一题收敛且和为 1，后一题发散",
+    "C": "前一题收敛且和为 1，后一题发散但通项趋于 0",
+    "D": "前一题收敛且和为 1，后一题收敛且和为 2"
+  },
+  "correct_answer": "B",
+  "explanation": "第一个级数是首项 \\(a_1=\\frac{1}{2}\\)、公比 \\(q=\\frac{1}{2}\\) 的等比级数，因 \\(|q|<1\\)，收敛，其和为 \\(\\frac{a_1}{1-q}=\\frac{1/2}{1-1/2}=1\\)。第二个级数是公比 \\(q=\\frac{3}{2}\\) 的等比级数，因 \\(|q|>1\\)，通项不趋于 0，故级数发散。因此仅有“前一题收敛且和为 1，后一题发散”正确。",
+  "final_value": "前一题收敛且和为 1，后一题发散。",
+  "raw_model_response_available": false,
+  "failed_item_index": 1,
+  "saved_item_index": 2,
+  "failed_item_issue": "schema_extra_forbidden"
+}

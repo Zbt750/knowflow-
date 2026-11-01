@@ -144,7 +144,7 @@ test.describe("十态矩阵 · /study", () => {
     await openWith(page, STUDY);
     // 范围调整是可选操作；移出唯一知识点后前端应拦住空范围请求。
     await page.getByTestId("tree-kp-picker-open").click();
-    await page.getByTestId("tree-kp-picker").locator(".study-range-row__toggle").first().click();
+    await page.getByRole("button", { name: "从范围移出洛必达法则" }).click();
     await expect(page.getByTestId("generate-plan")).toBeDisabled();
     expect(generateCalls).toBe(0);
   });
@@ -473,23 +473,37 @@ test.describe("十态矩阵 · /chat", () => {
     await expect(page.locator(".conversation-sidebar")).toBeVisible();
   });
 
-  test("empty：没有资料范围时明确指引去资料页，且发送按钮禁用", async ({ page }) => {
+  test("empty：没有个人资料时学习问答仍可用，资料搜索有独立空态", async ({ page }) => {
     await page.route("**/api/materials?*", (route) => route.fulfill({ json: EMPTY_MATERIALS }));
     await page.route("**/api/chat/sessions", (route) => route.fulfill({ json: [] }));
+    // MaterialSearch restores its own daily session independently from the
+    // learning-chat sidebar. Keep this UI-matrix case deterministic instead
+    // of inheriting messages left by earlier browser tests on the same day.
+    await page.route("**/api/chat/material-search/session", (route) => route.fulfill({ json: {
+      session_id: "22222222-2222-4222-8222-222222222222", title: "今日资料搜索",
+      mode: "user", purpose: "material_search", study_date: "2026-10-15",
+      scope_mode: "all", selected_file_ids: [],
+    } }));
+    await page.route("**/api/chat/sessions/*/messages", (route) => route.fulfill({ json: [] }));
     await openWith(page, CHAT);
-    const notice = page.locator(".chat-notice--setup");
-    await expect(notice).toBeVisible({ timeout: 15_000 });
-    await expect(notice).toContainText("资料");
-    await expect(page.locator(".send-button")).toBeDisabled();
+    await expect(page.getByTestId("chat-source")).toHaveText("奶蛙 · 学习问答");
+    await page.locator("#chat-question").fill("解释导数的几何意义");
+    await expect(page.locator(".send-button")).toBeEnabled();
+    await page.getByRole("link", { name: "资料", exact: true }).click();
+    await expect(page.getByTestId("material-search-panel")).toBeVisible();
+    await expect(page.getByTestId("material-search-send")).toBeDisabled();
+    await expect(page.getByTestId("material-search-results")).toHaveCount(0);
   });
 
-  test("success：页面结构完整（侧栏 / 范围选择 / 输入区）", async ({ page }) => {
+  test("success：学习问答与个人资料搜索入口分离", async ({ page }) => {
     await page.route("**/api/materials?*", (route) => route.fulfill({ json: EMPTY_MATERIALS }));
     await page.route("**/api/chat/sessions", (route) => route.fulfill({ json: [] }));
     await openWith(page, CHAT);
     await expect(page.locator(".conversation-sidebar")).toBeVisible();
-    await expect(page.locator(".scope-picker")).toBeVisible();
+    await expect(page.getByTestId("chat-source")).toHaveText("奶蛙 · 学习问答");
+    await expect(page.locator(".scope-picker")).toHaveCount(0);
     await expect(page.locator("#chat-question")).toBeVisible();
+    await expect(page.getByRole("link", { name: "资料", exact: true })).toBeVisible();
   });
 
   test("server-error：会话列表失败时不白屏，侧栏仍可用", async ({ page }) => {

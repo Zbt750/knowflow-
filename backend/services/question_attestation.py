@@ -37,7 +37,8 @@ def _sha(value: Any) -> str:
 
 def _subject(value: Any) -> str:
     normalized = re.sub(r"\s+", "", str(value or "")).lower()
-    if normalized in {"408", "计算机408", "计算机学科专业基础", "计算机学科专业基础综合（408）"}:
+    if normalized in {"408", "计算机408", "计算机学科专业基础", "计算机学科专业基础（408）",
+                      "计算机学科专业基础综合（408）"}:
         return "408"
     if normalized in {"数学二", "数学（二）", "考研数学二", "math2"}:
         return "math2"
@@ -123,7 +124,15 @@ def assess_source_attestation(*, question: Any, node: Any, pack_question: Any,
         issues.append("source_trace_metadata_incomplete")
     if not source.get("reviewed_on"):
         issues.append("source_review_date_missing")
-    if _dump(source) != _dump(saved_source):
+    # SourceReview gained optional content_origin. Old persisted declarations
+    # legitimately omit it; absent and explicit null carry the same meaning.
+    # Non-null origins and every other source field still compare exactly.
+    def compatible_source(value):
+        data = _dump(value)
+        if data.get("content_origin") is None:
+            data.pop("content_origin", None)
+        return data
+    if compatible_source(source) != compatible_source(saved_source):
         issues.append("database_source_snapshot_mismatch")
 
     stable_key = f"{pack_id}:{data.get('source_id', '')}"

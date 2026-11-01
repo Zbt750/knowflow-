@@ -56,6 +56,18 @@ def review(client, item_id, *, key="process-review-key-0001", work="我先对分
     })
 
 
+def append_current_version_item(db, original_item, question):
+    db.flush()
+    plan = DailyPlan(study_date="2026-01-02", status="active")
+    db.add(plan)
+    db.flush()
+    item = PracticeItem(plan_id=plan.id, question_id=question.id,
+        kp_id=question.kp_id, ordinal=1)
+    db.add(item)
+    db.flush()
+    return item
+
+
 def test_text_review_is_idempotent_and_only_marks_later_answer_as_assisted(
     client, calculation_item, session_factory, monkeypatch,
 ):
@@ -97,11 +109,13 @@ def test_review_rejects_choice_without_model_call(client, calculation_item, sess
     monkeypatch.setattr(study_routes, "provider_from_settings", lambda _settings: provider)
     with session_factory() as db:
         choice = db.scalar(select(Question).where(Question.question_type == "single_choice"))
-        item = db.get(PracticeItem, UUID(calculation_item))
-        item.question_id = choice.id
-        item.kp_id = choice.kp_id
-        db.commit()
-    response = review(client, calculation_item)
+        original_item = db.get(PracticeItem, UUID(calculation_item))
+        choice_id = choice.id
+    with session_factory.begin() as db:
+        original_item = db.get(PracticeItem, UUID(calculation_item))
+        choice = db.get(Question, choice_id)
+        item_id = append_current_version_item(db, original_item, choice).id
+    response = review(client, str(item_id))
     assert response.status_code == 409
     assert provider.calls == 0
 
@@ -137,7 +151,9 @@ def test_open_question_review_does_not_supply_hidden_solution(client, calculatio
     with session_factory.begin() as db:
         item = db.get(PracticeItem, UUID(calculation_item))
         item.question.question_type = question_type
-    response = client.post(f"/api/practice-items/{calculation_item}/process-reviews", json={
+        current_item = append_current_version_item(db, item, item.question)
+        current_item_id = str(current_item.id)
+    response = client.post(f"/api/practice-items/{current_item_id}/process-reviews", json={
         "idempotency_key": "open-review-test-0001", "work_text": "我先写出需要满足的前提，再检查每一步是否成立。", "subjective_kind": kind,
     })
     assert response.status_code == 200, response.text

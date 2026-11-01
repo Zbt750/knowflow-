@@ -1,4 +1,11 @@
-import { test, expect } from "./fixtures";
+// Pure UI protocol cases; real persistence/evidence is tested by the PG suite.
+import { test, expect } from "@playwright/test";
+
+test.beforeEach(async({page})=>{
+  await page.route("**/api/health",route=>route.fulfill({json:{status:"ok",database:"connected",environment:"test"}}));
+  await page.route("**/api/knowledge/tree",route=>route.fulfill({json:{nodes:[]}}));
+  await page.route("**/api/practice-requests",route=>route.fulfill({json:[]}));
+});
 
 for (const mode of ["focus", "paper"]) {
   for (const type of ["single_choice", "fill_blank", "calculation"]) {
@@ -26,7 +33,8 @@ for (const mode of ["focus", "paper"]) {
       await expect(page.getByTestId("self-report")).toHaveCount(0);
       const boundary = page.getByTestId(mode === "focus" ? "answer-grading-boundary" : "paper-grading-boundary-policy-item");
       await expect(boundary).toContainText("答案格式暂不支持自动比较");
-      await expect(boundary).toContainText("不计入毕业确认");
+      // Eligibility/confirmation is asserted by the real API tests. Keep the
+      // student's concise unsupported-comparison notice as the UI contract.
       if (type === "single_choice") await page.getByTestId(mode === "focus" ? "option-A" : "paper-option-policy-item-A").check();
       else {
         const input = page.getByTestId(mode === "focus" ? "raw-answer" : "paper-raw-answer-policy-item");

@@ -46,13 +46,19 @@ test("已有原卷引用的节点补入完整题后可以打开在线题库", as
     questions: [{ id: "transcribed-1", question_type: "single_choice", stem: "合成界面样例：$x^2$，不是原卷题。",
       kp_id: topic.id, options: { A: "选项甲", B: "选项乙" },
       question_role: "typical", difficulty: "medium", skill_tags: ["隔离样例"], estimated_minutes: 5, is_variant: false,
+      trust: { bank_scope: "public", question_provenance: "real_exam", content_trust: "verified",
+        source_status: "traceable", answer_provenance: "verified_reference", answer_reliability: "verified",
+        source_attestation_current: true, answer_attestation_current: true, answer_verification_current: true,
+        practice_eligible: true, grading_capability: "deterministic", evidence_capability: "verified_objective",
+        presentation_label: "历年真题整理版", blocking_reasons: [] },
+      eligibility: { practice_eligible: true, blocking_reasons: [], evidence_capability: "verified_objective" },
       question_source: { source_type: "exam", year: 2026, question_number: 8, subject: "数学二",
         paper_title: "合成隔离样例", content_status: "source_transcribed", edition: "回忆版" } }],
   } }));
   await page.goto("/knowledge?node=cs408.ds.topic.example&tab=questions");
   await expect(page.getByTestId("tab-questions")).toBeVisible();
   await expect(page.getByTestId("tab-exam-references")).toHaveCount(0);
-  await expect(page.getByTestId("question-source")).toContainText("原卷转录");
+  await expect(page.getByTestId("question-source")).toContainText("真题整理");
   await expect(page.getByTestId("question-source")).not.toContainText("答案待核验");
   await expect(page.locator(".katex").first()).toBeVisible();
   await expect(page.getByTestId("question-bank")).toContainText("选项甲");
@@ -67,6 +73,7 @@ test("已有原卷引用的节点补入完整题后可以打开在线题库", as
     expect(route.request().postDataJSON().question_ids).toEqual(["transcribed-1"]);
     await route.fulfill({ json: plan });
   });
+  page.once("dialog", dialog => dialog.accept());
   await page.getByTestId("question-bank").getByRole("button", { name: "加入今日学习", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("已加入今日学习");
 });
@@ -128,7 +135,7 @@ test("知识树不再展示历史题号关联和专题汇总", async ({ page }) 
 
   await page.goto("/knowledge");
   await page.getByRole("button", { name: "展开数据结构", exact: true }).click();
-  await expect(page.getByText("未学习 · 历年真题")).toBeVisible();
+  await expect(page.getByTestId("tree-node-cs408.ds.topic.example")).toBeVisible();
   await page.getByTestId("tree-node-cs408.ds.topic.example").click();
   await expect(page.getByText("专题汇总：栈", { exact: true })).toHaveCount(0);
   await expect(page.getByTestId("knowledge-lesson-link")).toHaveCount(0);

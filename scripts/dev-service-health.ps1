@@ -48,3 +48,27 @@ function Test-DevBackendOwner([string]$Root, $Process) {
         return ([Math]::Abs(($started - $created).TotalSeconds) -lt 30)
     } catch { return $false }
 }
+
+function Test-DevBackendSnapshotCurrent([string]$Root, $Process) {
+    # A healthy listener can still serve stale Python modules after source edits.
+    # Only trust the startup manifest after Test-DevBackendOwner has tied it to
+    # this exact PID/workspace; then compare every recorded source hash.
+    try {
+        if (-not (Test-DevBackendOwner $Root $Process)) { return $false }
+        $match = [regex]::Match($Process.CommandLine, '(?i)--manifest(?:=|\s+)(?:"([^"]+)"|([^\s]+))')
+        if (-not $match.Success) { return $false }
+        $argument = $(if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value })
+        $workspace = [System.IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+        $path = $(if ([System.IO.Path]::IsPathRooted($argument)) { $argument } else { Join-Path $workspace $argument })
+        $manifest = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $files = $manifest.workspace_files
+        if (-not $files -or $files.PSObject.Properties.Count -eq 0) { return $false }
+        foreach ($entry in $files.PSObject.Properties) {
+            $source = Join-Path $workspace ([string]$entry.Name)
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { return $false }
+            $actual = (Get-FileHash -LiteralPath $source -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            if ($actual -ne ([string]$entry.Value).ToLowerInvariant()) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}

@@ -1,16 +1,11 @@
 @echo off
 REM ============================================================
-REM  Stop the ISOLATED test backend (whatever listens on port 8001).
-REM
-REM  Only touches the process owning port 8001, so it can never stop the
-REM  development backend on 8000 or any other service.
+REM  Do not terminate an arbitrary process by port. The matching start script
+REM  runs in the foreground; stop it with Ctrl+C in its own window.
 REM
 REM  Usage: scripts\stop-test-backend.cmd
 REM ============================================================
 
-set PORT=8001
-
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$c = Get-NetTCPConnection -LocalPort %PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue; Write-Host ('stopped test backend pid ' + $c.OwningProcess) } else { Write-Host 'no test backend on port %PORT%' }"
+echo No process was stopped. Stop only the test backend window you started by pressing Ctrl+C there.
 
 exit /b 0

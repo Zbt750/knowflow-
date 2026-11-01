@@ -44,18 +44,20 @@ def test_independent_result_exposed_identically_to_ui_and_agent(client, session_
 
 def test_self_correction_stays_pending_and_next_day_retest_changes_dimension(client, session_factory, item_id, clock):
     first = send(client, item_id, "3", "capability-wrong").json()
-    send(client, item_id, "1", "capability-corrected", first["attempt_id"])
+    # Submitted items are locked; retry on the same item cannot rewrite history.
+    rejected = send(client, item_id, "1", "capability-corrected", first["attempt_id"])
+    assert rejected.status_code == 409
     profile = read(client, session_factory, item_id)
     assert profile["excluded_confirmation_count"] == 0  # weak evidence is not a rejected confirmation
     d = dim(profile)
     assert d["status"] == "needs_retest" and d["independent_question_count"] == 0
-    assert d["recent_attempt_count"] == 2
+    assert d["recent_attempt_count"] == 1
     clock.now += timedelta(days=1)
     fresh, _ = next_item(session_factory, item_id, "2026-01-02")
     send(client, fresh, "1", "capability-fresh")
     d = dim(read(client, session_factory, fresh))
     assert d["status"] == "independent_evidence" and d["independent_question_count"] == 1
-    assert d["pending_review_question_count"] == 0 and d["recent_attempt_count"] == 3
+    assert d["pending_review_question_count"] == 0 and d["recent_attempt_count"] == 2
 
 
 @pytest.mark.parametrize("kind", ["solution", "guess", "blank", "unverified"])
@@ -132,8 +134,13 @@ def test_parent_has_no_capability_profile_and_reads_do_not_write(client, session
 
 def test_current_role_snapshot_supplies_transfer_only_with_matching_mapping(client, session_factory, item_id):
     with session_factory.begin() as db: db.get(PracticeItem, UUID(item_id)).question.question_role = "comprehensive"
-    send(client, item_id, "1", "capability-comprehensive")
-    assert dim(read(client, session_factory, item_id), "application_transfer")["independent_question_count"] == 1
+    # Existing plan items remain pinned to the version they were created with.
+    # Build a fresh item to exercise the newly published role snapshot.
+    from tests.integration.test_answer_submissions import _new_item_for_current_question_version
+    with session_factory.begin() as db:
+        fresh_item_id = _new_item_for_current_question_version(db, item_id)
+    send(client, fresh_item_id, "1", "capability-comprehensive")
+    assert dim(read(client, session_factory, fresh_item_id), "application_transfer")["independent_question_count"] == 1
 
 
 def test_reference_only_leaf_exposes_unverified_408_process_not_fake_online_pool(client, session_factory):

@@ -19,6 +19,7 @@ export function attemptLabel(attempt: AnswerSubmissionResponse): string {
   return labels[attempt.sequence_category ?? ""] ?? "历史作答";
 }
 
-export function canRetryAnswer(attempt?: AnswerSubmissionResponse | null): boolean {
-  return attempt?.can_retry === true && ["wrong", "unknown"].includes(attempt.result);
+export function canRetryAnswer(_attempt?: AnswerSubmissionResponse | null): boolean {
+  // 旧回执里的can_retry仅为历史字段，不能重新解锁当前练习。
+  return false;
 }

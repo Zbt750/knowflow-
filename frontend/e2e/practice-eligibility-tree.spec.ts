@@ -5,8 +5,13 @@ test("原卷标记节点有可练Question时可选，仅引用与未合格题不
   const eligible = { id:"eligible",code:"math.eligible",name:"伴随矩阵与可逆矩阵",is_assessable:true,is_reference_only:true,practice_eligible_question_count:2,online_question_count:3,children:[] };
   await page.route("**/api/**", async route => {
     const path=new URL(route.request().url()).pathname;
+    if(!path.startsWith("/api/"))return route.continue();
     if(path==="/api/health")return route.fulfill({json:{status:"ok",database:"connected"}});
-    if(path==="/api/plans/today")return route.fulfill({json:{status:"active",plan_id:"plan",study_date:"2026-10-07",items:[],total_count:0,completed_count:0,summary_kps:[],type_summary:{},estimated_minutes:0,remaining_minutes:0}});
+    if(path==="/api/plans/today")return route.fulfill({json:{status:"active",plan_id:"plan",study_date:"2026-10-07",
+      items:[{id:"existing-item",question_id:"existing-q",kp_id:"existing-node",kp_name:"已有知识点",ordinal:1,
+        question_type:"single_choice",question_role:"basic",stem:"已有合成题",options:{A:"1",B:"2"},
+        skill_tags:[],is_variant:false,is_review:false,estimated_minutes:5,completed:false}],
+      focus_item_id:"existing-item",total_count:1,completed_count:0,summary_kps:[],type_summary:{single_choice:1},estimated_minutes:5,remaining_minutes:5}});
     if(path==="/api/knowledge/tree")return route.fulfill({json:{nodes:[{id:"root",code:"math",name:"数学",is_assessable:false,children:[eligible,
       {id:"references",code:"math.references",name:"只有原卷引用",is_assessable:true,is_reference_only:true,practice_eligible_question_count:0,online_question_count:0,children:[]},
       {id:"blocked",code:"math.blocked",name:"题目未达练习资格",is_assessable:true,practice_eligible_question_count:0,online_question_count:4,children:[]},

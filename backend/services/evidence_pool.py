@@ -7,6 +7,7 @@ question opportunities.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from collections import Counter
 from hashlib import sha256
 import json
 from typing import Iterable
@@ -46,7 +47,7 @@ def _has_ai_answer(eligibility) -> bool:
 
 
 def assess_evidence_pool(*, questions: Iterable, eligibility_by_id: dict,
-                         attempted_question_ids: set, known: bool = True) -> EvidencePoolAssessment:
+                         attempted_question_ids: set, known: bool = True, policy=None) -> EvidencePoolAssessment:
     """Return whether this node offers a small, credible objective evidence path.
 
     `SUFFICIENT` requires at least two distinct verified-objective questions, an
@@ -65,6 +66,9 @@ def assess_evidence_pool(*, questions: Iterable, eligibility_by_id: dict,
     distinct_rows = list(distinct.values())
     unattempted = [q for q in distinct_rows if q.id not in attempted_question_ids]
     variants = [q for q in distinct_rows if bool(getattr(q, "is_variant", False))]
+    versioned = policy is not None and policy.policy_version in {2, 3}
+    needed = max(policy.min_confirmations, policy.min_real_questions) if versioned else 2
+    variant_quota = policy.required_variant_count if versioned else 1
 
     reasons: list[str] = []
     if not practice:
@@ -77,11 +81,11 @@ def assess_evidence_pool(*, questions: Iterable, eligibility_by_id: dict,
             in {"deterministic", "final_answer_limited"} for q in practice
         ):
             reasons.append("GRADING_UNSUPPORTED")
-    if len(distinct_rows) < 2:
+    if len(distinct_rows) < needed:
         reasons.append("NO_DISTINCT_QUESTION")
-    if distinct_rows and not variants:
+    if distinct_rows and len(variants) < variant_quota:
         reasons.append("NO_VARIATION")
-    if distinct_rows and not unattempted:
+    if distinct_rows and not unattempted and not versioned:
         reasons.append("NO_DELAYED_VERIFICATION_OPPORTUNITY")
 
     # Be explicit when the only usable comparison is model-authored. Such items
@@ -91,9 +95,21 @@ def assess_evidence_pool(*, questions: Iterable, eligibility_by_id: dict,
             and "ANSWER_RELIABILITY_TOO_LOW" not in reasons:
         reasons.append("ANSWER_RELIABILITY_TOO_LOW")
 
-    required = len(distinct_rows) >= 2 and bool(variants) and bool(unattempted)
+    required = len(distinct_rows) >= needed and len(variants) >= variant_quota
+    if versioned:
+        types = Counter(q.question_type for q in distinct_rows)
+        tags = {tag for q in distinct_rows for tag in (getattr(q, "skill_tags", None) or [])}
+        for kind, quota in policy.required_question_types.items():
+            if types[kind] < quota: reasons.append(f"MISSING_REQUIRED_TYPE:{kind}")
+        for tag in sorted(policy.required_skill_tags - tags):
+            reasons.append(f"MISSING_REQUIRED_SKILL_TAG:{tag}")
+        required = required and all(types[k] >= v for k,v in policy.required_question_types.items()) \
+            and policy.required_skill_tags.issubset(tags)
+    else:
+        required = required and bool(unattempted)
     return EvidencePoolAssessment(
         SUFFICIENT if required else INSUFFICIENT,
         tuple(dict.fromkeys(reasons)),
         len(practice), len(objective), len(distinct_rows), len(unattempted), len(variants),
+        "configured_policy_objective_opportunity_v2" if versioned else "verified_objective_opportunity_v1",
     )

@@ -1,5 +1,6 @@
 """真实API/PG跨模块闭环；模型为协议替身，避免用收费推理测试事务。"""
 import json
+from backend.services.learning_task_context import expand_records
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -24,10 +25,10 @@ class JourneyPlanner:
             self.kind = "fill_blank" if "填空题" in body["goal"] else None
             actions = [("search_knowledge", {"query": "洛必达"})]
         elif self.turn == 2:
-            self.nodes = [n["kp_id"] for n in json.loads(messages[-1]["content"])["nodes"]]
+            self.nodes = [n["kp_id"] for n in expand_records(json.loads(messages[-1]["content"]))["nodes"]]
             actions = [("get_learning_state", {"kp_ids": self.nodes}), ("find_questions", {"kp_ids": self.nodes, "question_type": self.kind})]
         elif self.turn == 3:
-            qs = json.loads(messages[-1]["content"])["questions"]
+            qs = expand_records(json.loads(messages[-1]["content"]))["questions"]
             candidates = [q for q in qs if not q["in_today_plan"] and q["minutes"] <= self.budget]
             actions = [("validate_plan", {"question_ids": [candidates[0]["question_id"]], "rationale": "隔离闭环测试：按修改后的题型和时间选择"})]
         else:
@@ -56,7 +57,10 @@ def journey(client, clock, session_factory, monkeypatch):
     assert first.status_code == 200 and first.json()["result"] == "right"
     before = client.get("/api/plans/today").json()
     assert before["status"] == "completed" and before["total_count"] == 1
-    created = client.post("/api/learning-tasks", json={"goal": "洛必达法则比较弱，安排本次学习", "budget_minutes": 30, "mode": "builtin"}).json()
+    created_response = client.post("/api/learning-tasks", json={"goal": "洛必达法则比较弱，安排本次学习", "budget_minutes": 30, "mode": "builtin"})
+    assert created_response.status_code == 201, created_response.text
+    created = created_response.json()
+    assert "task_id" in created, created
     tid = created["task_id"]
     initial = client.post(f"/api/learning-tasks/{tid}/run").json()
     assert initial["status"] == "ready"
@@ -123,7 +127,8 @@ def test_complete_journey_preserves_paper_and_drives_next_day_recommendation(jou
     assert selected["in_today_plan"]
     if result == "wrong":
         assert candidates[0]["question_id"] == journey["question_id"]
-        assert "优先复测" in state["next_step"]
+        assert state["learning_progress"]["status"]=="NEEDS_CONSOLIDATION"
+        assert state["learning_progress"]["next_action"]=="consolidate"
     clock.now += timedelta(days=1)
     tomorrow = client.get("/api/plans/today").json()
     assert tomorrow["status"] == "setup"

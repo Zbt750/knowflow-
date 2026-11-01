@@ -7,6 +7,15 @@ from backend.models.learning import Question, DailyPlan, PracticeItem, QuestionA
 from tests.integration.test_learning_loop import session_factory, clean_database, client, clock
 
 
+def verify_synthetic_answer_revision(db, question, key):
+    """Bind intentionally edited fixture answers to a new test-only event."""
+    from backend.services.answer_verification import answer_version_sha256, verify_answer
+    verify_answer(db, question_id=question.id, verification_type="human_verified",
+        verifier="isolated-synthetic-test-fixture", method="synthetic test fixture review",
+        note="Synthetic fixture-only answer approval; not a real review.",
+        idempotency_key=key, expected_answer_sha256=answer_version_sha256(question))
+
+
 def test_legacy_ai_attempt_response_projects_grading_basis_without_rewriting_node_basis():
     from datetime import datetime, timezone
     from uuid import uuid4
@@ -63,6 +72,25 @@ def submit(client, item, answer="1", key="submission-key-0001"):
     })
 
 
+def _new_item_for_current_question_version(db, old_item_id):
+    """Create a fresh test plan item after mutating its synthetic question.
+
+    Existing items intentionally remain pinned to their original question
+    snapshot; tests that exercise a revised answer must submit a newly-created
+    item instead of silently retargeting historical plan content.
+    """
+    from sqlalchemy import func
+    old_item = db.get(PracticeItem, UUID(old_item_id))
+    plan = DailyPlan(study_date=f"2099-02-{UUID(old_item_id).int % 27 + 1:02d}", status="active")
+    db.add(plan)
+    db.flush()
+    item = PracticeItem(plan_id=plan.id, question_id=old_item.question_id,
+        kp_id=old_item.kp_id, ordinal=1)
+    db.add(item)
+    db.flush()
+    return str(item.id)
+
+
 def test_numeric_submission_adds_objective_confirmation(client, item_id, session_factory):
     response = submit(client, item_id, "2/2")
     assert response.status_code == 200
@@ -96,15 +124,18 @@ def test_short_fraction_through_answer_api_preserves_review_gate(client, item_id
         q.explanation = "SYNTHETIC TEST ONLY：负四分之一精确等于-1/4。"
         q.correct_answer = r"$-\frac14$"
         q.grading_config = {"verified": verified, "method": "numeric_final"}
-    response = submit(client, item_id, answer, "short-fraction-api-test")
+        if verified:
+            verify_synthetic_answer_revision(db, q, "short-fraction-answer-revision")
+        revised_item_id = _new_item_for_current_question_version(db, item_id)
+    response = submit(client, revised_item_id, answer, "short-fraction-api-test")
     assert response.status_code == 200, response.text
     receipt = response.json()
     assert receipt["result"] == result
     assert receipt["effective_confirmation_count"] == count
-    assert submit(client, item_id, answer, "short-fraction-api-test").json() == receipt
+    assert submit(client, revised_item_id, answer, "short-fraction-api-test").json() == receipt
     with session_factory() as db:
         assert db.scalar(select(func.count()).select_from(QuestionAttempt)) == 1
-        state = db.get(KpState, db.get(PracticeItem, UUID(item_id)).kp_id)
+        state = db.get(KpState, db.get(PracticeItem, UUID(revised_item_id)).kp_id)
         assert state.state != "mastered"
         assert len(state.evidence_window) == count
 
@@ -121,32 +152,33 @@ def test_conservative_outcomes(client, item_id, answer, result, reason):
 
 
 def test_missing_grader_does_not_produce_objective_result(client, item_id, session_factory):
-    with session_factory() as db:
+    with session_factory.begin() as db:
         db.get(PracticeItem, UUID(item_id)).question.grading_config = None
-        db.commit()
-    response = submit(client, item_id)
+        revised_item_id = _new_item_for_current_question_version(db, item_id)
+    response = submit(client, revised_item_id)
     assert response.json()["result"] == "unknown"
     assert response.json()["reason"] == "question_not_practice_eligible"
 
 
-@pytest.mark.parametrize("answer,result", [("1", "right"), ("3", "wrong")])
-def test_imported_answer_key_grades_practice_without_false_confirmation(client, item_id, session_factory, answer, result):
+@pytest.mark.parametrize("answer", ["1", "3"])
+def test_unreviewed_public_answer_key_cannot_bypass_formal_admission(client, item_id, session_factory, answer):
     with session_factory.begin() as db:
         question = db.get(PracticeItem, UUID(item_id)).question
         question.grading_config = {"verified": False, "method": None,
             "provenance": {"content_status": "source_transcribed", "source": {"source_type": "exam"}}}
         question.grading_mode = "self_assessed"
-    today = client.get("/api/plans/today").json()
-    assert today["items"][0]["answer_grading_method"] == "reference_numeric_final"
-    response = submit(client, item_id, answer)
+        revised_item_id = _new_item_for_current_question_version(db, item_id)
+    # The final public-bank rule has no reference-only practice admission path.
+    # A retained historical key cannot replace a current content-bound review.
+    response = submit(client, revised_item_id, answer)
     assert response.status_code == 200
     receipt = response.json()
-    assert receipt["result"] == result
-    assert receipt["reason"] == "reference_exact_numeric_comparison"
+    assert receipt["result"] == "unknown"
+    assert receipt["reason"] == "question_not_practice_eligible"
     assert receipt["effective_confirmation_count"] == 0
-    assert submit(client, item_id, answer).json() == receipt
+    assert submit(client, revised_item_id, answer).json() == receipt
     with session_factory() as db:
-        state = db.get(KpState, db.get(PracticeItem, UUID(item_id)).kp_id)
+        state = db.get(KpState, db.get(PracticeItem, UUID(revised_item_id)).kp_id)
         assert state.state != "mastered" and not state.pending_review_question_ids
 
 
@@ -244,26 +276,32 @@ def test_key_cannot_be_reused_for_another_item(client, item_id, session_factory)
 
 
 def test_single_choice_and_proof_are_not_confused(client, item_id, session_factory):
-    with session_factory() as db:
+    with session_factory.begin() as db:
         question = db.get(PracticeItem, UUID(item_id)).question
         question.question_type = "single_choice"
         question.grading_config = {"verified": True, "method": "single_choice"}
         question.options = {"A": "1", "B": "2"}
         question.correct_answer = "A"
-        db.commit()
-    response = client.post(f"/api/practice-items/{item_id}/answer-submissions", json={
+        verify_synthetic_answer_revision(db, question, "choice-answer-revision")
+        revised_item_id = _new_item_for_current_question_version(db, item_id)
+    response = client.post(f"/api/practice-items/{revised_item_id}/answer-submissions", json={
         "idempotency_key": "choice-key-0001", "selected_option": "a",
     })
     assert response.json()["result"] == "right"
 
 
 def test_proof_never_graded_by_numeric_result(client, item_id, session_factory):
-    with session_factory() as db:
-        db.get(PracticeItem, UUID(item_id)).question.question_type = "proof"
-        db.commit()
-    response = submit(client, item_id)
+    with session_factory.begin() as db:
+        question = db.get(PracticeItem, UUID(item_id)).question
+        question.question_type = "proof"
+        verify_synthetic_answer_revision(db, question, "proof-type-revision")
+        revised_item_id = _new_item_for_current_question_version(db, item_id)
+    response = submit(client, revised_item_id)
     assert response.json()["result"] == "unknown"
-    assert response.json()["reason"] == "unsupported_question"
+    # A non-objectively-gradable public item is stopped at admission before
+    # numeric grading, even when its synthetic answer revision is current.
+    assert response.json()["reason"] == "question_not_practice_eligible"
+    assert response.json()["effective_confirmation_count"] == 0
 
 
 def test_concurrent_items_complete_plan(session_factory, item_id, clock):
@@ -280,8 +318,11 @@ def test_concurrent_items_complete_plan(session_factory, item_id, clock):
     barrier = Barrier(2)
     def run(target):
         with session_factory() as db:
+            target_item=db.get(PracticeItem,target)
+            target_question=db.get(Question,target_item.question_id)
+            option=next(iter(target_question.options)) if target_question.question_type=='single_choice' else None
             barrier.wait(timeout=5)
-            result = submit_answer(db, item_id=target, raw_answer="1", selected_option=None,
+            result = submit_answer(db, item_id=target, raw_answer=None if option else "1", selected_option=option,
                                    idempotency_key=f"parallel-{target}", now=clock())
             db.commit()
             return result

@@ -12,6 +12,11 @@ export const router = createRouter({
   routes: [
     { path: "/", redirect: "/study" },
     { path: "/study", component: StudyPage },
+    // Keep old bookmarks working, but route the user into the shared learning surface.
+    { path: "/training", redirect: to => ({
+      path: "/study",
+      query: to.query.training_id && to.query.owner_session_id ? { ...to.query, mode: "personal" } : {},
+    }) },
     { path: "/knowledge", component: KnowledgePage },
     { path: "/knowledge/:code/lesson", component: KnowledgeLessonPage },
     { path: "/materials", component: MaterialsPage },
@@ -20,5 +25,6 @@ export const router = createRouter({
     } }) },
     { path: "/chat", component: ChatPage },
     { path: "/settings", component: SettingsPage },
+    { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./pages/NotFoundPage.vue') },
   ],
 });

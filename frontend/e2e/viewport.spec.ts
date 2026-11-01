@@ -49,7 +49,7 @@ test.describe("窄窗口 · 375×667", () => {
     for (const [path, selector, title] of pages) {
       await page.goto(path);
       await expect(page.locator(selector).first()).toBeVisible({ timeout: 25_000 });
-      await expect(page.locator(".app-header > strong")).toHaveText(title, { timeout: 25_000 });
+      await expect(page.locator(".app-breadcrumb > strong")).toHaveText(title, { timeout: 25_000 });
       await assertNoHorizontalOverflow(page, `${path} @375px`);
     }
   });

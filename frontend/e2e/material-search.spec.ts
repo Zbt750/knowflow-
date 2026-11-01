@@ -11,6 +11,7 @@ async function install(page:Page, empty=false) {
   let sourceDeleted=false;
   await page.route(/\/api\//,async route=>{
     const url=new URL(route.request().url());const method=route.request().method();
+    if(!url.pathname.startsWith("/api/"))return route.continue();
     if(url.pathname==="/api/health")return route.fulfill({json:{status:"ok",database:"connected"}});
     if(url.pathname==="/api/chat/material-search/session")return route.fulfill({json:current});
     if(url.pathname==="/api/chat/material-search/scope") {
@@ -42,18 +43,21 @@ async function install(page:Page, empty=false) {
   return {calls:()=>calls,fail:()=>{fail=true;},deleteSource:()=>{sourceDeleted=true;},nextDay:()=>{current={...current,session_id:crypto.randomUUID(),study_date:"2026-10-08",scope_mode:"all",selected_file_ids:[]};messages=[];}};
 }
 
-test("default all, Enter submission, no duplicate while loading, same-day restore",async({page})=>{
+test("default all, Enter submission, no duplicate while loading, same-day restore",async({page},testInfo)=>{
   const state=await install(page);await page.goto("/materials");
   await expect(page.getByTestId("material-search-scope")).toHaveText(/全部资料/);
   await page.getByTestId("material-search-question").fill("矩阵相似的条件是什么？");
   await expect(page.getByTestId("material-search-send")).toBeEnabled();
   await page.getByTestId("material-search-question").press("Enter");
   await expect(page.getByTestId("material-search-assistant")).toContainText("可逆矩阵");
+  await expect(page.getByTestId("material-search-assistant").locator('.search-answer-heading .study-mascot')).toBeVisible();
+  await expect(page.getByTestId("material-search-assistant").locator('.search-answer-heading')).toHaveText('奶蛙');
   expect(state.calls()).toBe(1);
   await page.reload();await expect(page.getByTestId("material-search-user")).toContainText("矩阵相似");
   await expect(page.getByTestId("material-search-assistant")).toContainText("可逆矩阵");
   await page.getByTestId("material-search-question").fill("那它和合同有什么区别？");await page.getByTestId("material-search-send").click();
   await expect(page.getByTestId("material-search-assistant")).toHaveCount(2);expect(state.calls()).toBe(2);
+  await page.screenshot({path:testInfo.outputPath('materials-frog-replies.png'),fullPage:true});
 });
 
 test("optional scope, processing disabled, clear back to all, file-specific shortcut",async({page})=>{

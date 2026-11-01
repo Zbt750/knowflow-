@@ -2,7 +2,8 @@
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from backend.schemas.personal_questions import GenerationTarget
 
 QAAction = Literal["auto", "hint_1", "hint_2", "solution", "process_review"]
 
@@ -14,6 +15,8 @@ class StudyContext(BaseModel):
     subject: str | None = Field(default=None, max_length=80)
     knowledge_node_ids: list[UUID] = Field(default_factory=list, max_length=8)
     question_id: UUID | None = None
+    # Exact immutable snapshot; the server derives this from PracticeItem when omitted.
+    question_version_id: UUID | None = None
     attempt_id: UUID | None = None
     daily_plan_id: UUID | None = None
     practice_item_id: UUID | None = None
@@ -33,6 +36,26 @@ class AssistantRequest(BaseModel):
     request_key: UUID | None = None
     retry_of_message_id: UUID | None = None
     current_work: str | None = Field(default=None, max_length=4000)
+    # Applies only when the explicit personal-question generation route is taken.
+    personal_generation_mode: Literal["ai_generated", "ai_enhanced", "deterministic_fast"] = "ai_generated"
+    personal_generation_confirmed_kp_id: UUID | None = None
+    # Whole server-issued allocation for explicit multi-knowledge-point cards.
+    # The assistant service verifies every field against that card before use.
+    personal_generation_confirmed_targets: list[GenerationTarget] | None = Field(default=None, max_length=5)
+    # A knowledge-node confirmation continues its original user turn. The
+    # assistant message is the server-owned confirmation token, not a new goal.
+    personal_generation_confirmation_message_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_generation_confirmation(self):
+        if self.personal_generation_confirmed_kp_id and self.personal_generation_confirmed_targets:
+            raise ValueError("generation_confirmation_must_select_one_contract")
+        if self.personal_generation_confirmed_targets and sum(
+                target.count for target in self.personal_generation_confirmed_targets) > 5:
+            raise ValueError("generation_confirmation_count_limit")
+        if self.personal_generation_confirmed_targets and not self.personal_generation_confirmation_message_id:
+            raise ValueError("generation_confirmation_message_required")
+        return self
 
 
 class PlannerHandoff(BaseModel):

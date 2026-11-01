@@ -48,13 +48,14 @@ test("学习问答：空内置资料下通用答案无伪引用且刷新保留�
   await page.locator("#chat-question").fill(question);
   await expect(page.locator(".send-button")).toBeEnabled();
   await page.locator(".send-button").click();
-  await expect(page.getByTestId("answer-source")).toContainText("非资料结论");
+  await expect(page.getByTestId("answer-source")).toHaveCount(0);
+  await expect(page.locator('.citation-box, .attribution-box')).toHaveCount(0);
   const bubble = page.locator(".message-row--assistant .message-bubble");
   await expect(bubble).toContainText("可靠的字节流传输");
   await expect(bubble).not.toContainText("[C99]");
   await expect(bubble).not.toContainText("第一轮未完成的残句");
   await page.reload();
-  await expect(page.getByTestId("answer-source")).toContainText("非资料结论");
+  await expect(page.getByTestId("answer-source")).toHaveCount(0);
   await expect(bubble).toContainText("可靠的字节流传输");
   expect(pageErrors).toEqual([]);
 });

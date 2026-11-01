@@ -249,10 +249,11 @@ export async function expectSystemStatus(page: Page, status: string) {
  * 父节点自身的点击是折叠/展开，不进入考核视图。
  */
 export async function expandTreeRow(page: Page, testId: string): Promise<void> {
-  const row = page.getByTestId(testId).locator("xpath=..");
-  const toggle = row.locator(".tree-toggle");
-  if ((await toggle.textContent())?.trim() === "▸") await toggle.click();
-  await expect(toggle).toHaveText("▾");
+  const row = page.getByTestId(testId).locator("xpath=ancestor::*[@role='treeitem'][1]");
+  const toggle = row.locator(".canvas-toggle");
+  await expect(toggle).toBeVisible();
+  if (await row.getAttribute("aria-expanded") !== "true") await toggle.click();
+  await expect(row).toHaveAttribute("aria-expanded", "true");
 }
 
 /** 展开到某个可考核叶子：依次展开它路径上的每个汇总节点。 */

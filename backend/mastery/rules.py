@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from backend.mastery.enums import EvidenceLevel
 from backend.mastery.policy import MasteryPolicy
 from backend.mastery.types import Evidence
+from backend.mastery.origin_evidence import policy_confirmation_window
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")  # 依赖 tzdata：Windows 与 slim 镜像没有 IANA 时区库
 
@@ -72,11 +73,18 @@ def type_counts(window: tuple[Evidence, ...]) -> dict[str, int]:
 
 
 def covered_skill_tags(window: tuple[Evidence, ...]) -> set[str]:
-    """窗口内已经考过的考法标签集合。"""
+    """只从确认级证据计算已证明的技能；失败标记不构成能力覆盖。"""
     tags: set[str] = set()
     for item in window:
-        tags.update(item.skill_tags)
+        if item.level is EvidenceLevel.CONFIRMED:
+            tags.update(item.skill_tags)
     return tags
+
+
+def pending_review_skill_tags(window: tuple[Evidence, ...]) -> set[str]:
+    """当前窗口中仍待独立复测的能力风险标签。"""
+    return {tag for item in window if item.source == "objective_risk"
+            and item.level is EvidenceLevel.FAILURE for tag in item.skill_tags}
 
 
 def graduation_check(
@@ -91,6 +99,21 @@ def graduation_check(
     判定顺序刻意从「最基础的事实」到「最细的覆盖」：
     数量不够时说“确认不足”，而不是先抱怨缺某道大题——这样原因码对用户更有指导性。
     """
+    if policy.graduation_binding_pending:
+        return False, "graduation_set_transition_confirmation_required"
+    window = policy_confirmation_window(window, policy)
+    if policy.policy_version in {2, 3}:
+        manual_credit_count, manual_confirmed_at = 0, None
+    if policy.policy_version == 3:
+        required = set(policy.graduation_question_ids)
+        if not required:
+            return False, "graduation_question_set_unconfigured"
+        completed = {str(item.question_id) for item in window
+                     if item.level is EvidenceLevel.CONFIRMED and item.question_id}
+        missing = required - completed
+        if missing:
+            return False, f"incomplete_graduation_question:{sorted(missing)[0]}"
+        return True, "graduated"
     # 1) 有效确认数 = 窗口内真实确认数 + 节点整体自评的透明基础确认数。
     if (
         effective_confirmation_count(window, manual_credit_count=manual_credit_count)
@@ -107,7 +130,6 @@ def graduation_check(
     for question_type, required in policy.required_question_types.items():
         if counts.get(question_type, 0) < required:
             return False, f"missing_question_type:{question_type}"
-
     # 4) 真实变式题数量。
     if sum(item.is_variant for item in window) < policy.required_variant_count:
         return False, "missing_real_variant"
@@ -157,6 +179,7 @@ class GapReport:
     reasons: tuple[str, ...]
     missing_types: tuple[str, ...]
     missing_skill_tags: tuple[str, ...]
+    missing_origins: tuple[str, ...] = ()
 
     @property
     def can_graduate(self) -> bool:
@@ -174,6 +197,8 @@ _TYPE_LABELS: dict[str, str] = {
     "fill_blank": "填空题",
     "calculation": "计算大题",
     "proof": "证明题",
+    "discussion": "讨论题",
+    "program": "程序题",
     "subjective": "主观题",
     "external_exam": "历年真题",
 }
@@ -181,6 +206,20 @@ _TYPE_LABELS: dict[str, str] = {
 
 def type_label(question_type: str) -> str:
     return _TYPE_LABELS.get(question_type, question_type)
+
+
+def origin_counts(window: tuple[Evidence, ...]) -> dict[str, int]:
+    counts = {}
+    for item in window:
+        origin = (item.confirmation_facts or {}).get("question_provenance")
+        if origin:
+            counts[origin] = counts.get(origin, 0) + 1
+    return counts
+
+
+def origin_label(origin: str) -> str:
+    return {"real_exam": "历年真题来源", "trusted_practice": "可信练习来源",
+        "ai_generated_practice": "AI练习来源"}.get(origin, origin)
 
 
 def analyze_gaps(
@@ -191,6 +230,30 @@ def analyze_gaps(
     policy: MasteryPolicy,
 ) -> GapReport:
     """逐条算出毕业条件的进度，并给出还缺什么。"""
+    if policy.graduation_binding_pending:
+        item = GapItem("graduation-set-transition", "新版正式考核待确认", 0, 1, False)
+        return GapReport(items=(item,), reasons=("历史学习记录已保留；开始新版正式考核前需要明确确认",),
+            missing_types=(), missing_skill_tags=(), missing_origins=())
+    window = policy_confirmation_window(window, policy)
+    if policy.policy_version in {2, 3}:
+        manual_credit_count, manual_confirmed_at = 0, None
+    if policy.policy_version == 3:
+        required = tuple(policy.graduation_question_ids)
+        completed = {str(item.question_id) for item in window
+                     if item.level is EvidenceLevel.CONFIRMED and item.question_id}
+        if not required:
+            item = GapItem("graduation-set-unconfigured", "毕业题目集合待配置", 0, 1, False)
+            return GapReport(items=(item,), reasons=("该知识点尚未配置正式毕业题目",),
+                missing_types=(), missing_skill_tags=(), missing_origins=())
+        items = [GapItem(f"graduation-question:{qid}", f"规定题目 {index} 已完成",
+                         int(qid in completed), 1, qid in completed)
+                 for index, qid in enumerate(required, start=1)]
+        missing = [qid for qid in required if qid not in completed]
+        reasons = [f"完成规定题目 {required.index(qid) + 1}/{len(required)}" for qid in missing]
+        if any(item.level is EvidenceLevel.FAILURE for item in window):
+            reasons.insert(0, "近期有错题，奶蛙会安排复习；错题不增加毕业配额")
+        return GapReport(items=tuple(items), reasons=tuple(reasons), missing_types=(),
+                         missing_skill_tags=(), missing_origins=())
     counts = type_counts(window)
     confirmations = effective_confirmation_count(
         window, manual_credit_count=manual_credit_count
@@ -295,6 +358,9 @@ def analyze_gaps(
         reasons=tuple(reasons),
         missing_types=tuple(missing_types),
         missing_skill_tags=tuple(missing_tags),
+        # Kept in the response shape for older clients; current policy no
+        # longer emits source-origin graduation blockers.
+        missing_origins=(),
     )
 
 

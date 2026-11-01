@@ -1,7 +1,9 @@
 """Real fresh cluster, never kaoyan/kaoyan_test. Explicit local binaries required."""
 import os
 from pathlib import Path
+import shutil
 import socket
+import tempfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,7 +23,12 @@ def test_owned_pg_first_boot_restart_preservation_and_backup(tmp_path, monkeypat
     if os.name != "nt" or not binary_dir:
         pytest.skip("explicit Windows PG18 binaries required for isolated-cluster test")
     root = Path(__file__).resolve().parents[2]
-    paths = RuntimePaths.windows(resources=root, local_app_data=tmp_path / "managed-user")
+    # A Chinese Windows user/data path must survive first boot, restart, backup,
+    # and recovery with the same exact instance identity checks. Keep mutable
+    # desktop data outside the checkout: the checkout is the immutable resource
+    # root, so a pytest basetemp nested under it is intentionally rejected.
+    data_parent = Path(tempfile.mkdtemp(prefix="kaoyan-managed-pg-test-"))
+    paths = RuntimePaths.windows(resources=root, local_app_data=data_parent / "学习资料")
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -88,8 +95,8 @@ def test_owned_pg_first_boot_restart_preservation_and_backup(tmp_path, monkeypat
         assert cold["files"] > 10 and not cold["encrypted"]
         assert inspect_backup(archive)["cluster_id"] == identity
         retained = paths.data.with_name("retained-owned-original")
-        # Both targets are exact children of this pytest temporary parent.
-        assert retained.parent == paths.data.parent and retained.is_relative_to(tmp_path)
+        # Both targets remain inside this exact test-owned external temporary root.
+        assert retained.parent == paths.data.parent and retained.is_relative_to(data_parent)
         paths.data.rename(retained)
         restore_backup(archive, paths.data)
         assert (paths.data / "uploads/cold-backup-probe.md").read_text("utf-8") == "synthetic-upload"
@@ -103,3 +110,5 @@ def test_owned_pg_first_boot_restart_preservation_and_backup(tmp_path, monkeypat
             assert probe.connect_ex(("127.0.0.1", port)) != 0
     finally:
         get_settings.cache_clear()
+        if data_parent.name.startswith("kaoyan-managed-pg-test-") and data_parent.is_dir():
+            shutil.rmtree(data_parent)
