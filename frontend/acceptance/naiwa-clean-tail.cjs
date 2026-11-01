@@ -1,0 +1,21 @@
+const {chromium,expect}=require('@playwright/test'),fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const ROOT=path.resolve(__dirname,'../..'),OUT=path.join(ROOT,'storage/quality-audits/naiwa-v33-continue-20261023'),DIR=path.join(OUT,'visible-tail');fs.mkdirSync(DIR);
+const id=JSON.parse(fs.readFileSync(path.join(ROOT,'storage/manual-experience/naiwa-clean-20261023/identity.json'))),BASE=`http://127.0.0.1:${id.web_port}`;
+(async()=>{const browser=await chromium.launch({channel:'chrome',headless:false,args:['--disable-background-networking']});const ctx=await browser.newContext();
+ await ctx.route('**/*',r=>{const u=new URL(r.request().url());return ['http:','https:'].includes(u.protocol)&&!(u.hostname==='127.0.0.1'&&[String(id.api_port),String(id.web_port)].includes(u.port))?r.abort():r.continue()});
+ const page=await ctx.newPage();await page.clock.install({time:new Date('2040-04-02T01:00:00Z')});
+ try{await page.goto(BASE+'/chat',{waitUntil:'networkidle'});await page.getByRole('button',{name:'＋',exact:true}).click();
+ const pending=page.waitForResponse(r=>r.url().endsWith('/assistant:stream')&&r.request().method()==='POST');
+ const input='讲清楚洛必达法则，如果没有符合资格的洛必达题，就只讲解，不要生成新题。';
+ await page.locator('#chat-question').fill(input);await page.locator('#chat-question').press('Enter');const response=await pending,raw=await response.text();
+ await expect(page.locator('#chat-question')).toBeEnabled();
+ const frames=raw.split('\n\n').filter(f=>f.includes('data: ')).map(f=>({event:f.match(/event: (.+)/)?.[1],data:JSON.parse(f.match(/data: (.+)/)[1])}));
+ const done=frames.find(f=>f.event==='done');assert(done.data.answer.includes('可新增 0 道'));assert(done.data.answer.includes('系统节点讲解'));
+ assert(!frames.some(f=>['practice_request','planner','personal_generation'].includes(f.event)));
+ const body=await page.locator('.messages').innerText();await page.reload({waitUntil:'networkidle'});assert.equal(await page.locator('.messages').innerText(),body);
+ await page.setViewportSize({width:390,height:844});const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);assert(!overflow);
+ const today=await (await ctx.request.get(BASE+'/api/plans/today')).json();assert.equal(today.total_count,3);
+ fs.writeFileSync(path.join(DIR,'result.json'),JSON.stringify({input,frames,body,today,refreshEqual:true,mobileOverflow:overflow,realModels:0},null,2),{flag:'wx'});
+ await page.screenshot({path:path.join(DIR,'zero-stock-mobile.png'),fullPage:true});console.log('ZERO_STOCK_REFRESH_MOBILE_PASS');
+ }catch(e){fs.writeFileSync(path.join(DIR,'failure.json'),JSON.stringify({error:String(e),stack:e.stack}));console.error(e);process.exitCode=1}finally{await browser.close()}
+})();
