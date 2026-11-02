@@ -377,6 +377,10 @@ def submit_answer(db: Session, *, item_id: UUID, raw_answer: str | None,
             "manual_confirmed_at": before.manual_confirmed_at.isoformat() if before.manual_confirmed_at else None,
         }
     apply_snapshot(state, result.snapshot)
+    # NB-08：仅“题型/判分方式不受支持”时拒绝写入；个人题 verified=false 属
+    # answer_not_verified，应保留为参考作答（unknown，不计掌握度/毕业证据）。
+    if getattr(verdict, "method", None) == "unsupported_v1" and getattr(verdict, "reason", None) == "unsupported_question":
+        raise AppError("answer_grading_unsupported", status_code=422)
     attempt = QuestionAttempt(
         id=attempt_id,
         practice_item_id=item.id, question_id=question.id, kp_id=item.kp_id,

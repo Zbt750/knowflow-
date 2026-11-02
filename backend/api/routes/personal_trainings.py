@@ -30,6 +30,14 @@ from backend.services.personal_training_service import (
 router = APIRouter(tags=["personal-training"])
 
 
+# 临时停用专项练习（2026-11-02）：只关闭 API 入口，保留实现与历史数据，便于恢复。
+def _disabled():
+    raise AppError("personal_training_disabled", status_code=409)
+
+
+router.dependencies = [Depends(_disabled)]
+
+
 def _write(call, db: Session):
     try:
         result = call()

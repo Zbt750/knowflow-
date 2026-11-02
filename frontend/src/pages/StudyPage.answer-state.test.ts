@@ -62,9 +62,10 @@ it('wrong answers are accessible from a first-level disclosure rather than hidde
   expect(all(records).some(n=>n===review)).toBe(false);
   expect(all(review).some(n=>n.props['data-testid']==='revisit-wrong-wrong')).toBe(true);
 });
-it('opens in today mode by default and only offers a validated personal-training mode',async()=>{
+it('opens in today mode by default without a duplicate top label',async()=>{
   const view=await mounted();
-  expect(all(view.root).find(n=>n.props['data-testid']==='mode-today')?.props.class).toBe('active');
+  // 2026-11-02：顶部“今日学习”标签与标题重复已移除；专项入口仍停用。
+  expect(all(view.root).some(n=>n.props['data-testid']==='mode-today')).toBe(false);
   expect(all(view.root).some(n=>n.props['data-testid']==='mode-personal-training')).toBe(false);
 });
 it('keeps the existing daily full-paper preview on the shared paper-preview component',async()=>{
@@ -74,7 +75,8 @@ it('keeps the existing daily full-paper preview on the shared paper-preview comp
   expect(all(view.root).find(n=>n.props.id==='paper-item-item')).toBeDefined();
   expect(text(view.root)).toContain('求 ln(x)/x 的极限');
 });
-it('loads a chat-linked training inside /study and can switch back without touching the daily plan',async()=>{
+// 临时停用专项练习（2026-11-02）：保留用例代码，恢复功能后去掉 skip 即可。
+it.skip('loads a chat-linked training inside /study and can switch back without touching the daily plan',async()=>{
   const owner='11111111-1111-4111-8111-111111111111';const trainingId='22222222-2222-4222-8222-222222222222';
   installBrowser(`http://127.0.0.1/study?mode=personal&owner_session_id=${owner}&training_id=${trainingId}`);
   mocks.trainingRead.mockResolvedValue({training_id:trainingId,owner_session_id:owner,request_key:'chat-request',title:'专项练习',status:'active',version:1,
@@ -96,7 +98,8 @@ it('loads a chat-linked training inside /study and can switch back without touch
   expect(mocks.today).toHaveBeenCalledTimes(dailyReadCount);
   expect(mocks.submit).not.toHaveBeenCalled();
 });
-it('restores the chat-linked personal mode from the URL after a fresh page mount',async()=>{
+// 临时停用专项练习（2026-11-02）：保留用例代码，恢复功能后去掉 skip 即可。
+it.skip('restores the chat-linked personal mode from the URL after a fresh page mount',async()=>{
   const owner='11111111-1111-4111-8111-111111111111';const trainingId='22222222-2222-4222-8222-222222222222';
   installBrowser(`http://127.0.0.1/study?mode=personal&owner_session_id=${owner}&training_id=${trainingId}`);
   mocks.trainingRead.mockResolvedValue({training_id:trainingId,owner_session_id:owner,request_key:'chat-request',title:'恢复专项',status:'paused',version:2,

@@ -37,10 +37,14 @@ class NoProvider:
 
 @pytest.fixture
 def factory():
-    from scripts.restore_naiwa_experience_20261020 import existing_manager,database_url
-    pg=existing_manager();u=database_url(pg)
-    assert (u.host,u.port,u.database)==('127.0.0.1',63044,'naiwa_experience_test')
-    engine=create_engine(u,connect_args={'connect_timeout':5})
+    # R12：不再依赖 63044 硬编码；统一读取 TEST_DATABASE_URL（隔离 _test 集群）。
+    import os
+    from sqlalchemy.engine import make_url
+    url = os.environ.get('TEST_DATABASE_URL') or os.environ.get('DATABASE_URL')
+    assert url, 'TEST_DATABASE_URL 必须由隔离测试运行器显式设置'
+    u = make_url(url)
+    assert (u.database or '').endswith('_test') and u.port != 5433, '测试库必须是非 5433 的 _test 库'
+    engine=create_engine(url,connect_args={'connect_timeout':5})
     with engine.connect() as c:
         tx=c.begin();f=sessionmaker(bind=c,expire_on_commit=False,join_transaction_mode='create_savepoint')
         try:yield f

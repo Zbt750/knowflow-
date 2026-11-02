@@ -58,6 +58,39 @@ def post_graduation_review_query(message):
 def route_message(message, context, *, action="auto", task=None, classifier=None):
     text=message.strip()
     if action!="auto": return CapabilityRoute("qa","qa",1,"explicit_assistance_action")
+    # NB-13：质疑判断依据 → 学习证据解释（必须先于题库检索，避免裸词“题”抢走）。
+    if re.search(r'(?:为什么|凭什么|依据|怎么).{0,10}(?:判断|认为|说|认定)|判断依据|凭什么说|你的依据|你说我.{0,12}(?:很差|没掌握|薄弱)', text):
+        return CapabilityRoute('data_query','evidence_basis',1,'explicit_evidence_basis_query',write_risk=False)
+    # NB-01：学习进度/统计查询是只读，先于“学习任务请求”。
+    if re.search(r'(?:查看|看看|看下)?.{0,4}(?:今天|今日).{0,6}(?:的)?(?:学习)?(?:进度|学了多少|学得怎么样|完成得如何|完成情况|答对了几道)|(?:今天|今日).{0,6}(?:学习)?(?:进度|学得怎么样|完成得如何)', text):
+        return CapabilityRoute('data_query','today_summary',1,'explicit_today_progress_query',write_risk=False)
+    if re.search(r'(?:今天|今日).{0,8}(?:独立)?(?:答对|做对).{0,6}几道|还有多少.{0,6}知识点.{0,4}(?:没|未).{0,4}掌握', text):
+        return CapabilityRoute('data_query','learning_state',1,'explicit_learning_state_query',write_risk=False)
+    # 资料库边界：只有明确“根据资料出题”才进入生成；其余资料阅读/检索/总结保持只读问答。
+    if re.search(r'(?:根据|按照|用).{0,8}(?:这份|这篇|该|上传的)?.{0,6}(?:资料|笔记|PDF|文档|材料).{0,10}(?:出|生成|出题|练习题|测试题)', text):
+        return CapabilityRoute('generation','generate',1,'material_based_generation',write_risk=True)
+    # NB-10：概念/区别类问句不得进入出题（即使含“变式/生成”）。
+    if re.search(r'(?:什么是|什么叫|是什么意思|有哪些类型|有何区别|有什么区别|怎么区分|区别是)', text) \
+            and re.search(r'变式|生成|出题|AI|个人练习|真题', text):
+        return CapabilityRoute('qa','qa',1,'concept_question_not_generation',write_risk=False)
+    # “只想看题库/看看题库里有哪些题，不要创建计划”是只读题库检索（否定创建，不是否定检索）。
+    if re.search(r'(?:只|就)?(?:想|要)?看(?:看|一下)?题库|看看题库里', text) and re.search(r'不要创建计划|别创建计划|不创建计划|不建计划', text):
+        return CapabilityRoute('data_query','find',1,'explicit_read_only_bank_query',write_risk=False)
+    # NB-02：明确否定约束（别加入/不要生成/只讲/只查）优先，尊重用户限定。
+    if re.search(r'(?:别|不要|不用|无需|不需要).{0,8}(?:加入|生成|出题|修改|写入|调整)|只(?:想)?(?:给|帮我|要)?(?:讲|解释|查询|查看|看看)', text):
+        return CapabilityRoute('qa','qa',1,'explicit_negative_constraint',write_risk=False)
+    # NB-03：延后学习（产品暂无跨天延期，交给澄清/说明，不伪造写入）。
+    if re.search(r'(?:剩下|剩余|没做完|没完成|未完成).{0,12}(?:明天|改天|以后|留到)|今天先(?:做到|到这|到这里)|留到明天|明天再做|剩下的题先不做|先不做', text):
+        return CapabilityRoute('qa','qa',1,'deferral_request_not_supported',write_risk=False)
+    # NB-04：减少题量/时间不足（交业务层判断是否允许，冻结时由业务层拒绝）。
+    if re.search(r'(?:题目|题量|任务).{0,6}(?:有点|太)?多|(?:题目|题量).{0,6}(?:减少|少)|减少.{0,6}[两二三四五\d]+道|少安排|时间(?:不够|来不及|比较紧|有点紧)|总时间不变|减少一(?:点|些)|保留(?:重点|优先级)|低优先级', text) \
+            and not re.search(r'^(?:为什么|什么是|解释)', text):
+        return CapabilityRoute('planner','modify',1,'explicit_workload_reduction',write_risk=False)
+    # NB-11：当前题/上下文题目追问（含“这道题/上一道/接着”）不是题库库存查询。
+    if re.search(r'(?:这道题|这题|这个题|上一道|上题|接着上题|刚才那道)', text) \
+            and re.search(r'(?:错误|选项|怎么|如何|计算|求解|为什么|含义|问)', text) \
+            and not re.search(r'(?:题库|库存|有没有|检索|找几道)', text):
+        return CapabilityRoute('qa','qa',1,'current_question_followup',write_risk=False)
     # “类似/相似/同类型/同解法题”必须相对当前原题检索，优先于库存统计。
     if (re.search(r'(?:类似|相似|同类型|同题型|同解法|同考点|同知识点).{0,6}(?:的)?(?:题|练习)', text)
             and not re.search(r'生成|新编|出一道|出题|来一道', text)):
@@ -80,9 +113,12 @@ def route_message(message, context, *, action="auto", task=None, classifier=None
         return CapabilityRoute("qa", "qa", 1, "assistant_capability_inquiry")
     # 明确的“生成一道（类似的）题/变式”必须进入 AI 出题，而不是只读查询或通用问答。
     if (re.search(r'(?:生成|出一道|出题|新编|变式|再来一道|编一道)', text)
-            and (re.search(r'题', text) or re.search(r'加入|放进|加到', text))
+            and (re.search(r'题', text) or re.search(r'加入|放进|加到', text) or re.search(r'(?:让我|给我)?看看', text))
             and not re.search(r'计划|方案|专项训练|出题卡|题库|检索|找(?:一|几)?道', text)):
         return CapabilityRoute('generation','generate',1,'explicit_generation_request',write_risk=True)
+    # 口语检索：“查一下/查查 … 的题”是只读题库检索。
+    if re.search(r'(?:查(?:一下|查|询)|搜一下|搜搜).{0,14}(?:题|习题|练习)', text) and not re.search(r'生成|出题|查题库', text):
+        return CapabilityRoute('data_query','find',1,'explicit_read_only_bank_query',write_risk=False)
     # 只读题库查询优先于“选题并加入计划”：用户说“找/看看”时先给真实库存，
     # 只有明确加入/安排/生成时才进入 planner。
     from backend.services.assistant_data_queries import classify_read_only_data_query
@@ -326,6 +362,12 @@ def assistance_action(message, *, explicit="auto", question_present=False):
     if not question_present: return None
     if explicit!="auto": return explicit
     text=message.strip()
+    # P1 证据安全：知识点毕业/掌握度/判断依据咨询属于“学习证据咨询”，
+    # 不得因存在当前题就自动揭示答案或写入 qa_assistance_used。
+    if re.search(r'毕业|掌握度|掌握(?:状态|程度)|(?:为什么|凭什么).{0,12}(?:没|没有|认为|判断|算|是)'
+                 r'|差什么|判断依据|证据|学习记录|为什么.*(?:这么|这样)|凭什么', text) \
+            and not re.search(r'(?:给|帮我|请)我?(?:讲解|讲讲)这(?:道|个)题|查看(?:这道题)?(?:的)?(?:答案|解析)|给我(?:答案|解析)', text):
+        return None
     # Match a current request, not the mere mention of a hint in a concept or history.
     hint_request=re.search(r"(?:给我|给|请|帮我|能否|能不能|可以|麻烦)\s*(?:再|只)?\s*(?:给我)?\s*(?:一点|一些|个)?\s*提示(?:一下|一点|下一步|具体|[。？?]|$)|(?:^|[，,；;。])\s*(?:再|一点|只给方向[，,]?)\s*提示|不要(?:告诉|给我)?.{0,4}答案.{0,8}(?:提示|方向)|^\s*(?:一点提示|只给方向)[。？?]?$",text)
     if hint_request:

@@ -94,6 +94,16 @@ def assess_general_output(output, node, *, request_id, trace, difficulty, parent
         # 求解器不适用/报错不代表题目已证错，也不能伪装成PASS。
         independent = {"status": "ERROR", "error_type": type(exc).__name__,
             "reason": "optional_independent_verifier_unavailable"}
+    # 解析自证题目有误/选项不匹配时，直接拒绝保存（模型已声明无法与选项一致）。
+    _self_contradict = re.search(
+        r'选项与计算结果不匹配|四个选项均不正确|选项均不正确|题目有误|题设有误|条件不足|题目条件矛盾|无法确定正确选项',
+        output.explanation or "")
+    if _self_contradict:
+        return {"status": "REJECTED", "review_status": "CONFIRMED_WRONG",
+            "errors": ["generated_question_inconsistent"], "question": q,
+            "validation_detail": {"self_contradiction": _self_contradict.group(0),
+                                  "correct_answer": output.correct_answer,
+                                  "explanation": (output.explanation or "")[:500]}}
     if independent and independent.get("status") == "FAIL":
         return {"status": "REJECTED", "review_status": "CONFIRMED_WRONG",
             "errors": ["independent_answer_conflict"], "question": q,

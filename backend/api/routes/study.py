@@ -189,6 +189,7 @@ _ERROR_STATUS: dict[str, int] = {
     "process_review_kind_mismatch": 422,
     "process_review_text_too_short": 422,
     "answer_attempt_conflict": 409,
+    "answer_grading_unsupported": 422,
     "answer_retry_not_allowed": 409,
     "answer_question_changed": 409,
     "answer_attempt_limit": 409,

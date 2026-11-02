@@ -64,6 +64,8 @@ def _minutes(text: str) -> int | None:
 
 
 def parse_training_command(text: str) -> TrainingCommand | None:
+    # 临时停用专项练习（2026-11-02）：只关闭聊天入口，不删除实现，便于恢复。
+    return None
     value = text.strip()
     if not value:
         return None

@@ -62,8 +62,10 @@ def configure_isolated_provider_http(settings, *, verified_fresh_identity=None):
     """Process-only opt-in, never an OS proxy or daily configuration change."""
     from sqlalchemy.engine import make_url
     url = make_url(str(settings.active_database_url))
-    retained_experience = (url.host, url.port, url.database) == (
-        '127.0.0.1', 63044, 'naiwa_experience_test')
+    retained_port = int(os.environ.get('NAIWA_RETAINED_EXPERIENCE_PORT', '0') or 0)
+    retained_database = os.environ.get('NAIWA_RETAINED_EXPERIENCE_DATABASE', '')
+    retained_experience = bool(retained_port and retained_database) and (
+        url.host, url.port, url.database) == ('127.0.0.1', retained_port, retained_database)
     fresh_test = False
     if verified_fresh_identity is not None:
         expected_cluster = os.environ.get('NAIWA_EXPECTED_CLUSTER_ID')

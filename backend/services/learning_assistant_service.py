@@ -800,6 +800,60 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         yield encode_sse('delta',{'seq':1,'text':ORIGINAL_EXAM_NOTICE})
         yield encode_sse('done',{'message_id':str(message_id),'answer':ORIGINAL_EXAM_NOTICE,'status':'completed','citations':[]})
         return
+    # 最高优先级：跨轮“加入今日学习”只消费最近一次真实生成记录，单一响应来源，后续分支不得再处理。
+    if (re.search(r'加入|添加|放进|加到', body.question)
+            and not re.search(r'生成一道|生成题|出一道|变式|新编|类似|相似', body.question)):
+        _generated_ids: list[str] = []
+        with factory() as _db:
+            for _message in _db.scalars(select(ChatMessage).where(
+                    ChatMessage.session_id == session_id, ChatMessage.role == "assistant")
+                    .order_by(ChatMessage.seq.desc()).limit(12)):
+                _generation = (_message.metadata_ or {}).get("personal_generation") or {}
+                if _generation.get("status") == "completed" and _generation.get("question_ids"):
+                    _generated_ids = [str(value) for value in _generation["question_ids"]]
+                    break
+                if _generation.get("status") == "failed":
+                    break
+        if _generated_ids:
+            from backend.models.learning import PracticeItem as _PI
+            _already = False
+            if ctx.daily_plan_id:
+                with factory() as _db:
+                    _already = _db.scalars(select(_PI.id).where(
+                        _PI.plan_id == ctx.daily_plan_id,
+                        _PI.question_id.in_([UUID(value) for value in _generated_ids[:1]])).limit(1)).first() is not None
+            if _already:
+                text = "这道 AI 练习题已在今日学习中，无需重复添加。"
+            else:
+                try:
+                    from backend.services.personal_question_service import append_personal as _append_personal
+                    _appended = _append_personal(factory, question_ids=[UUID(value) for value in _generated_ids[:1]],
+                                                 plan_id=ctx.daily_plan_id, now=now)
+                    _added = int(_appended.get("added") or 0)
+                    text = (f"已将刚才生成的 AI 练习题加入今日学习（本次新增 {_added} 道）。"
+                            if _added else "这道 AI 练习题已在今日学习中，无需重复添加。")
+                except Exception as exc:
+                    text = "加入今日学习未完成：" + str(exc)[:80]
+            with factory.begin() as db:
+                _saved = db.get(ChatMessage, message_id)
+                _saved.content = text
+                _saved.status = "completed"
+                _saved.metadata_ = {**_saved.metadata_, "answer_source": "generated_append",
+                                    "writes": True, "generated_question_ids": _generated_ids}
+            yield encode_sse("meta", {"message_id": str(message_id), "capability": "append"})
+            yield encode_sse("delta", {"seq": 1, "text": text})
+            yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": []})
+            return
+        text = "没有找到刚才成功生成并保存的题目，暂时无法加入今日学习。请先生成一道题目。"
+        with factory.begin() as db:
+            _saved = db.get(ChatMessage, message_id)
+            _saved.content = text
+            _saved.status = "completed"
+            _saved.metadata_ = {**_saved.metadata_, "answer_source": "generated_append_missing", "writes": False}
+        yield encode_sse("meta", {"message_id": str(message_id), "capability": "append"})
+        yield encode_sse("delta", {"seq": 1, "text": text})
+        yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": []})
+        return
     # The persisted same-session task is authoritative when a client loses its
     # transient task pointer. Never scan another session or inherit committed work.
     from backend.services.assistant_scope_resolution import draft_revision, correction_target
@@ -811,29 +865,50 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             prior=next((t for t in candidates if task_is_current(t,now) and not (t.metrics or {}).get('commit')),None)
             if prior:
                 ctx=ctx.model_copy(update={'task_id':prior.id})
-    # “生成/变式 + 类似题 + 加入今日卷”是 AI 生成后追加，不是题库选题确认。
+    # “生成/变式 + 类似题/加入今日卷”是 AI 生成后追加，不是题库选题确认。
     if (re.search(r'(?:生成|出一道|出题|新编|变式|再来一道|编一道)', body.question)
-            and re.search(r'类似|相似|同类|同类型|变式|新题', body.question)):
+            and (re.search(r'类似|相似|同类|同类型|变式|新题', body.question)
+                 or re.search(r'加入|放进|加到|今日卷|今日学习', body.question))):
         bank_confirmation = None
     else:
         bank_confirmation = _bank_confirmation_kind(body.question)
     # 跨轮“加入今日学习”：优先消费最近一轮真实生成的个人练习题（不重新生成、不查公共题库）。
-    if (mode == "builtin" and re.search(r'加入|添加|放进|加到', body.question)
+    if (re.search(r'加入|添加|放进|加到', body.question)
             and not re.search(r'生成一道|生成题|出一道|变式|新编|类似|相似', body.question)):
         with factory() as _db:
             recent_messages = list(_db.scalars(select(ChatMessage).where(
                 ChatMessage.session_id == session_id, ChatMessage.role == "assistant"
-            ).order_by(ChatMessage.seq.desc()).limit(8)))
+            ).order_by(ChatMessage.seq.desc()).limit(12)))
             generated_ids: list[str] = []
+            _probe = {"session_id": str(session_id), "user_message_id": str(message_id),
+                      "assistant_count": len(recent_messages), "messages": [], "selected": [],
+                      "reason": None}
             for message in recent_messages:
-                ids = ((message.metadata_ or {}).get("personal_generation") or {}).get("question_ids") or []
-                if ids:
-                    generated_ids = [str(value) for value in ids]
+                meta = message.metadata_ or {}
+                generation = meta.get("personal_generation")
+                qids = (generation or {}).get("question_ids") or []
+                _probe["messages"].append({
+                    "id": str(message.id), "role": message.role,
+                    "seq": message.seq, "created_at": message.created_at.isoformat() if message.created_at else None,
+                    "metadata": bool(meta), "generation": bool(generation),
+                    "status": (generation or {}).get("status"), "qids": len(qids)})
+                if qids:
+                    generated_ids = [str(value) for value in qids]
+                    _probe["selected"] = generated_ids
                     break
+            if not recent_messages:
+                _probe["reason"] = "A_no_assistant_messages"
+            elif not generated_ids:
+                last = (_probe["messages"][0] if _probe["messages"] else {})
+                _probe["reason"] = ("B_metadata_missing" if not last.get("metadata")
+                                    else "C_generation_missing" if not last.get("generation")
+                                    else "D_question_ids_empty" if not last.get("qids")
+                                    else "E_status_not_completed")
+            print("generated_append_probe " + json.dumps(_probe, ensure_ascii=False), flush=True)
         if generated_ids:
             from backend.services.personal_question_service import append_personal as _append_personal
             try:
-                result = _append_personal(factory, question_ids=generated_ids[:1],
+                result = _append_personal(factory, question_ids=[UUID(value) for value in generated_ids[:1]],
                                           plan_id=ctx.daily_plan_id, now=now)
                 added = int(result.get("added") or 0)
                 text = (f"已将刚才生成的 AI 练习题加入今日学习（本次新增 {added} 道）。"
@@ -1263,7 +1338,7 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             saved.metadata_ = {**saved.metadata_, "answer_source": "similar_questions",
                                "similar_reference_question_id": str(ctx.question_id),
                                "similar_reference_version_id": str(ctx.question_version_id),
-                               "similar_items": items, "writes": False}
+                               "similar_items": (locals().get("items") or []), "writes": False}
         yield encode_sse("meta", {"message_id": str(message_id)})
         yield encode_sse("delta", {"seq": 1, "text": text})
         yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": []})
@@ -1553,15 +1628,18 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             text = generated["message"]
             generation_failed = generated.get("status") in {"failed", "running"}
             # 用户明确“生成并加入今日学习”：生成成功后走个人练习入口自动追加。
+            # 排除否定/疑问（先不加、不要加入、要不要加入、加不加 等），避免推断成入卷授权。
             if (not generation_failed and generated.get("question_ids")
                     and re.search(r'加入|放进|加到|放到', body.question)
-                    and re.search(r'今日|今天|卷', body.question)):
+                    and re.search(r'今日|今天|卷', body.question)
+                    and not re.search(r'先不|暂不|不要|别|不用|无需|要不要|需不需要|加不加|是否|吗[？?]?$', body.question)):
                 try:
                     from backend.services.personal_question_service import append_personal as _append_personal
-                    appended = _append_personal(factory, question_ids=list(generated["question_ids"])[:1],
+                    appended = _append_personal(factory, question_ids=[UUID(value) for value in list(generated["question_ids"])[:1]],
                                                 plan_id=ctx.daily_plan_id, now=now)
                     added = int(appended.get("added") or 0)
-                    text = text + (f"\n已按你的要求加入今日学习（本次新增 {added} 道）。"
+                    text = text + (f"\n已成功加入今日学习，共新增 {added} 道 AI 个人练习题。"
+                                   "该题尚未完成完整独立正确性验证，可用于个人练习和学习记录，但不计入正式毕业证据。"
                                    if added else "\n这道题已在今日学习中，无需重复添加。")
                     generated = {**generated, "appended_count": added}
                 except Exception as exc:
@@ -1827,6 +1905,25 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
                     'recent_wrong_attempt_id': reference_source['attempt_id'],
                     'time_explicit': False}
             persist_route(factory,message_id,route,{"planner_handoff":handoff.model_dump(mode="json")})
+            # 统一写入边界：今日正式卷已生成并含题目时，聊天不得再规划/调整今日卷。
+            from backend.models.learning import DailyPlan as _DP, PracticeItem as _PIItem
+            with factory() as _db:
+                _today_key = now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+                _today_plan = _db.scalar(select(_DP).where(_DP.study_date == _today_key))
+                _plan_frozen = bool(_today_plan is not None and _db.scalar(
+                    select(_PIItem.id).where(_PIItem.plan_id == _today_plan.id).limit(1)) is not None)
+            if _plan_frozen:
+                text = ("今天的学习计划已经生成并冻结，暂时不能通过聊天重新生成或调整今日卷。"
+                        "你仍然可以检索题库、查看相似题和讲解当前题目。")
+                with factory.begin() as db:
+                    row = db.get(ChatMessage, message_id); row.content = text; row.status = "completed"
+                    row.metadata_ = {**row.metadata_, "answer_source": "plan_frozen_notice",
+                                     "writes": False, "frozen_plan_id": str(_today_plan.id)}
+                yield encode_sse("meta", {"message_id": str(message_id), "capability": "planner"})
+                yield encode_sse("delta", {"seq": 1, "text": text})
+                yield encode_sse("done", {"message_id": str(message_id), "answer": text,
+                                          "status": "completed", "citations": []})
+                return
             task=prepare_planner(factory,ctx=ctx,handoff=handoff,now=now)
             persist_route(factory,message_id,route,{"planner_task_id":str(task.task_id)})
             yield encode_sse("meta",{"message_id":str(message_id),"capability":"planner","task_id":str(task.task_id)})

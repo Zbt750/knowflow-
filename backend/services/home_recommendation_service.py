@@ -410,7 +410,7 @@ def _paper(db, ids, minutes, now, question_limit=None, candidate_question_ids=No
     for kp_id, selection, _, question_id, _ in picked:
         q = db.get(Question, question_id)
         node = db.get(KnowledgePoint, kp_id)
-        version=db.get(QuestionVersion,q.current_version_id) if q.current_version_id else None
+        version = db.get(QuestionVersion, q.current_version_id) if q and q.current_version_id else None
         if not version or not version.is_active or not question_eligibility(q, node).practice_eligible:
             raise ValueError("question_version_or_eligibility_invalid")
         questions.append({"question_id": str(q.id), "question_version_id": str(q.current_version_id),

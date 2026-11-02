@@ -234,8 +234,8 @@ def result_message(result):
     else:
         text += "题目已保存在对应知识节点的题目列表中。"
         if result.get("reference_only_question_ids"):
-            text += ("这批题尚未通过独立验证（needs_review），按现有准入规则不能加入正式今日卷；"
-                     "你可以在个人题库中查看，或重新生成后再试。")
+            text += ("这批题尚未完成完整独立正确性验证（needs_review），可用于个人练习与学习记录，"
+                     "但不计入正式毕业证据；如需正式卷请使用正式题库题目。")
         else:
             text += "尚未加入今日学习。你可以先查看题目，再选择加入或暂不加入。"
     return text

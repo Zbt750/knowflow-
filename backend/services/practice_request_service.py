@@ -18,9 +18,19 @@ from backend.services.assistant_router import CapabilityRoute
 from backend.services.study_context_service import validate_study_context
 
 
-def view(row, now=None):
+def view(row, now=None, *, task_status=None):
     now = now or datetime.now(timezone.utc)
     status = row.status
+    # 以真实 planner_task 状态派生（只读：不写回数据库）。
+    if status not in {"accepted", "declined"}:
+        if task_status == "failed":
+            status = "failed"
+        elif task_status in {"cancelled", "canceled"}:
+            status = "cancelled"
+        elif task_status == "running":
+            status = "planning"
+        elif task_status == "ready" and status in {"draft", "pending", "planning"}:
+            status = "proposed"
     if status not in {"accepted", "declined"} and row.expires_at <= now:
         status = "expired"
     return {"id": str(row.id), "status": status,
@@ -135,7 +145,53 @@ def build_plan_preview(factory, *, handoff, now, constraints=None, prior_plan=No
     return result
 
 
+def _inherit_scope(factory, ctx, message):
+    """NA-02：追加指令缺知识点时，从本会话最近上下文继承范围（相似检索/今日卷）。
+
+    只读取真实记录，不跨会话；找不到时返回空列表，由上层澄清。
+    """
+    if not re.search(r'(?:再|继续).{0,8}(?:加|来|补|增加|安排)|刚才|上面|上一|这个范围|推荐范围', message):
+        return []
+    today = datetime.now(timezone.utc).astimezone(__import__("zoneinfo").ZoneInfo("Asia/Shanghai")).date().isoformat()
+    with factory() as db:
+        recent = list(db.scalars(select(ChatMessage).where(
+            ChatMessage.session_id == ctx.conversation_id,
+            ChatMessage.role == "assistant").order_by(ChatMessage.seq.desc()).limit(6)))
+        for row in recent:
+            meta = row.metadata_ or {}
+            ref = meta.get("similar_reference_question_id")
+            if ref:
+                from backend.models.learning import Question
+                question = db.get(Question, UUID(str(ref)))
+                if question is not None and question.kp_id:
+                    return [question.kp_id]
+            generated = (meta.get("personal_generation") or {}).get("question_ids") or []
+            if generated:
+                from backend.models.learning import Question
+                question = db.get(Question, UUID(str(generated[0])))
+                if question is not None and question.kp_id:
+                    return [question.kp_id]
+        from backend.models.learning import DailyPlan, PracticeItem
+        plan = db.scalar(select(DailyPlan).where(DailyPlan.study_date == today))
+        if plan is not None:
+            item = db.scalar(select(PracticeItem).where(PracticeItem.plan_id == plan.id).order_by(PracticeItem.ordinal).limit(1))
+            if item is not None and item.kp_id:
+                return [item.kp_id]
+    return []
+
+
 def draft_request(factory, *, ctx, user_id, assistant_id, message, now, route=None):
+    # 今日正式卷已生成并冻结时，不生成追加方案（避免用户确认后才收到 409）。
+    from zoneinfo import ZoneInfo
+    from backend.models.learning import DailyPlan, PracticeItem
+    with factory() as _db:
+        _today = now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        _plan = _db.scalar(select(DailyPlan).where(DailyPlan.study_date == _today))
+        _frozen = bool(_plan is not None and _db.scalar(
+            select(PracticeItem.id).where(PracticeItem.plan_id == _plan.id).limit(1)) is not None)
+    if _frozen:
+        return {"notice": "今日正式卷已生成并冻结，不能再追加或扩充；如需继续练习，请创建独立练习。",
+                "details": {}, "frozen": True}
     from backend.services.learning_assistant_service import planner_handoff
     effective_route = (route if (route and route.intent in {"plan", "recommend", "modify", "query"})
                        else CapabilityRoute("planner", "plan", 1, "practice_request"))
@@ -149,6 +205,11 @@ def draft_request(factory, *, ctx, user_id, assistant_id, message, now, route=No
     if route and route.explanation_request:
         handoff = handoff.model_copy(update={"constraints": {**handoff.constraints,
             "explanation_request": route.explanation_request}})
+    # NA-02：追加指令未带知识点时，从本会话最近上下文继承（相似检索/今日卷），不跨会话。
+    if not handoff.target_knowledge_node_ids and route and route.intent in {"plan", "modify"}:
+        inherited = _inherit_scope(factory, ctx, message)
+        if inherited:
+            handoff = handoff.model_copy(update={"target_knowledge_node_ids": inherited})
     selection = bool(route and route.reason in {"explicit_bank_selection", "select_preview", "replace_preview"})
     reference = None
     if route and route.reason in {"select_preview", "replace_preview"}:
@@ -273,7 +334,10 @@ def list_requests(factory, *, source_conversation_id=None, now=None):
         if source_conversation_id:
             query = query.where(PracticeRequest.source_conversation_id == source_conversation_id)
         rows = list(db.scalars(query.order_by(PracticeRequest.created_at.desc()).limit(50)))
-        return [view(row, now) for row in rows]
+        task_ids = [row.planner_task_id for row in rows if row.planner_task_id]
+        task_status = {task.id: task.status for task in db.scalars(
+            select(LearningTask).where(LearningTask.id.in_(task_ids)))} if task_ids else {}
+        return [view(row, now, task_status=task_status.get(row.planner_task_id)) for row in rows]
 
 
 def send_request(factory, request_id, *, source_conversation_id, target_study_session_id=None, now=None):

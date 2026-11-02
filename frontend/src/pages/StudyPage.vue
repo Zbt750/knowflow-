@@ -948,17 +948,13 @@ onBeforeUnmount(() => {
       刷新失败，当前练习内容仍保留：{{ errorMessage }} <button type="button" @click="load">重试</button>
     </p>
 
-    <!-- 准备页：没有用户确认就不创建计划 -->
-    <nav v-if="today || learningMode === 'personal'" class="study-mode-switch" aria-label="学习模式">
-      <button type="button" :class="{ active: learningMode === 'today' }" data-testid="mode-today" @click="setLearningMode('today')">今日学习</button>
-      <button v-if="personalTrainingAvailable" type="button" :class="{ active: learningMode === 'personal' }" data-testid="mode-personal-training" @click="setLearningMode('personal')">专项练习</button>
-    </nav>
+    <!-- 顶部“今日学习”标签与页面标题/面包屑重复，已移除（2026-11-02，专项练习仍停用）。 -->
 
     <p v-if="learningMode === 'personal' && (!uuidPattern.test(personalTrainingId) || !uuidPattern.test(personalTrainingOwnerId))" role="alert" data-testid="training-route-invalid">
       专项入口信息不完整，请从奶蛙的专项训练记录中重新打开。<button type="button" @click="setLearningMode('today')">返回今日学习</button>
     </p>
     <PersonalTrainingStudyMode
-      v-if="uuidPattern.test(personalTrainingId) && uuidPattern.test(personalTrainingOwnerId)"
+      v-if="false && uuidPattern.test(personalTrainingId) && uuidPattern.test(personalTrainingOwnerId)"
       v-show="learningMode === 'personal'"
       :training-id="personalTrainingId"
       :owner-session-id="personalTrainingOwnerId"

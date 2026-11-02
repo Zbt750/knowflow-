@@ -351,6 +351,9 @@ def create_task(factory, body, *, now=None):
             if session.mode != "builtin":
                 raise AppError("forbidden", status_code=403)
         current_plan, signature = _daily_plan_snapshot(db, now=now, requested_plan_id=body.current_plan_id)
+        # 今日正式卷已生成并冻结时，在方案生成前直接拒绝，避免“确认后才 409”。
+        if current_plan.get("plan_id") and int(current_plan.get("total_items") or 0) > 0:
+            raise AppError("plan_already_generated", status_code=409)
         context = {"current_plan": current_plan, "current_plan_signature": signature,
             "current_plan_id": current_plan.get("plan_id"), "session_id": str(body.session_id) if body.session_id else None}
         task = LearningTask(goal=body.goal, budget_minutes=body.budget_minutes, session_id=body.session_id,
