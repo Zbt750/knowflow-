@@ -1,0 +1,644 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-cn01",
+  "created_at": "2026-10-18T15:50:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "408 计算机网络第一批（5 个知识点 × 2 题）。子网/NAT/TCP/拥塞/路由/SR 均给出可复核计算。"
+  },
+  "items": [
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "2^3",
+          "value": "8"
+        },
+        {
+          "expression": "2^5",
+          "value": "32"
+        },
+        {
+          "expression": "32-2",
+          "value": "30"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-7789-q1",
+      "kp_code": "cs408.cn.topic.7789c3d9d6f7",
+      "title": "/24 划分为 6 个子网与地址范围",
+      "skill_tags": [
+        "子网划分",
+        "子网掩码",
+        "CIDR"
+      ],
+      "objective": "检验能否由子网数量确定借位数、掩码、每个子网的网络地址/可用范围/广播地址。",
+      "stem": "某单位获得 192.168.1.0/24，需要划分为至少 6 个大小相同的子网。\n\n(1) 至少需要借几位主机位？子网掩码是什么？\n(2) 每个子网有多少个地址、多少个可用主机地址？\n(3) 写出前 6 个子网的网络地址、可用主机范围与广播地址。\n(4) 若要求每个子网至少 50 个可用地址，上述划分是否满足？应如何调整？",
+      "answer": "(1) 借 3 位，掩码 255.255.255.224（/27）。\n(2) 每子网 32 个地址，30 个可用主机。\n(3) .0-.31、.32-.63、.64-.95、.96-.127、.128-.159、.160-.191（详见解析）。\n(4) 不满足（30<50）；应借 2 位得到 /26，每子网 62 个可用地址，可划分 4 个子网。",
+      "final_value": "借 3 位，/27，每子网 30 个可用地址",
+      "solution_steps": [
+        "至少 6 个子网 → 2^2=4 不够，2^3=8 够，借 3 位；掩码长度 24+3=27，即 255.255.255.224。",
+        "每个子网 2^(32−27)=2^5=32 个地址；可用主机 = 32−2=30（去掉网络地址与广播地址）。",
+        "前 6 个子网：\n1) 192.168.1.0/27，可用 .1–.30，广播 .31；\n2) 192.168.1.32/27，可用 .33–.62，广播 .63；\n3) 192.168.1.64/27，可用 .65–.94，广播 .95；\n4) 192.168.1.96/27，可用 .97–.126，广播 .127；\n5) 192.168.1.128/27，可用 .129–.158，广播 .159；\n6) 192.168.1.160/27，可用 .161–.190，广播 .191。",
+        "剩余 .192–.223 与 .224–.255 两个子网可留用。",
+        "若每个子网至少 50 个可用地址，需要 2^6−2=62≥50，即借 2 位（/26）；但 /26 只能分出 4 个子网，达不到 6 个。需要更大的地址块（如 /23）或接受更小子网。"
+      ],
+      "key_points": [
+        "借位数 n 满足 2^n≥子网数。",
+        "掩码长度=原长度+借位数。",
+        "每个子网地址数=2^主机位。",
+        "可用主机数=地址数−2。"
+      ],
+      "common_errors": [
+        "借 2 位得到 4 个子网，不够 6 个。",
+        "把广播地址算成最后一个可用地址。",
+        "把 /27 的地址数算成 30 而不是 32。",
+        "认为 /26 既能 6 个子网又能 50 个主机。"
+      ],
+      "scope": "408 计算机网络·IPv4 子网划分；定长子网、忽略保留子网限制（CIDR 下全 0/全 1 子网可用）。",
+      "verification": {
+        "method": "subnet_calculator",
+        "result": "PASS",
+        "detail": "/27：8 个子网、32 地址、30 可用；前 6 个网络地址间隔 32；/26 只有 4 个子网、62 可用。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 15,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "203*1000000+113",
+          "value": "203000113"
+        },
+        {
+          "expression": "40001-12345",
+          "value": "27656"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-7789-q2",
+      "kp_code": "cs408.cn.topic.7789c3d9d6f7",
+      "title": "NAT 地址端口转换与报文追踪",
+      "skill_tags": [
+        "NAT",
+        "NAPT",
+        "地址转换"
+      ],
+      "objective": "在同一知识点内加入 NAPT：按映射表追踪出/入方向报文的源/目的 IP 与端口，并说明校验和变化。",
+      "stem": "内部主机 H（192.168.1.10:12345）访问公网 Web 服务器 S（198.51.100.20:80）。边界路由器 R 的公网地址为 203.0.113.5，配置 NAPT 后为 H 分配公网端口 40001。\n\n(1) 写出 R 的 NAT 映射表项；\n(2) 写出 H 发出的报文、经 R 转发后的报文、S 返回的报文、R 转发给 H 的报文各自的源/目的 IP 与端口；\n(3) 哪些字段会因 NAT 改变？IP 首部与 TCP 首部的校验和如何处理？\n(4) 若 H 同时再开一个连接（源端口 12346），仅用 IP 地址转换能否区分？为什么？",
+      "answer": "(1) 192.168.1.10:12345 ↔ 203.0.113.5:40001（目的 198.51.100.20:80）。\n(2) H→R：192.168.1.10:12345 → 198.51.100.20:80；R→S：203.0.113.5:40001 → 198.51.100.20:80；S→R：198.51.100.20:80 → 203.0.113.5:40001；R→H：198.51.100.20:80 → 192.168.1.10:12345。\n(3) 源 IP、源端口（出方向）及目的 IP、目的端口（入方向）改变；IP 校验和与 TCP 校验和都要重算。\n(4) 不能只用 IP 转换；同一公网 IP 的两个连接需要不同端口区分，必须用 NAPT。",
+      "final_value": "203.0.113.5:40001 ↔ 192.168.1.10:12345",
+      "solution_steps": [
+        "NAT 表项记录内部地址/端口与公网地址/端口的映射，并绑定目的地址/端口（NAPT 五元组）。",
+        "出方向：H 发出 (192.168.1.10:12345 → 198.51.100.20:80)；R 把源改成 203.0.113.5:40001，目的不变。",
+        "入方向：S 返回 (198.51.100.20:80 → 203.0.113.5:40001)；R 查表把目的改成 192.168.1.10:12345，源不变。",
+        "NAT 修改 IP 源/目的地址与 TCP/UDP 端口，因此 IP 首部校验和与 TCP/UDP 校验和必须重新计算（TCP 校验和包含伪首部）。",
+        "若 H 再用 12346 发起连接，仅靠公网 IP 无法区分两个连接；NAPT 分配不同公网端口（如 40002）并分别建表项。"
+      ],
+      "key_points": [
+        "NAPT 用端口区分同一公网 IP 的多个连接。",
+        "出方向改源，入方向改目的。",
+        "NAT 改变 IP/端口，校验和必须重算。",
+        "表项通常包含目的地址/端口以支持多连接。"
+      ],
+      "common_errors": [
+        "入方向也改源地址。",
+        "只改 IP 不改端口，导致多连接冲突。",
+        "忘记重算 TCP 校验和。",
+        "认为 NAT 表只记录内部 IP。"
+      ],
+      "scope": "408 计算机网络·NAT/NAPT；边界路由器执行源 NAT，忽略防火墙与 ALG。",
+      "verification": {
+        "method": "nat_trace",
+        "result": "PASS",
+        "detail": "出方向源改为 203.0.113.5:40001；入方向目的改回 192.168.1.10:12345；两个连接需不同公网端口。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1000+1",
+          "value": "1001"
+        },
+        {
+          "expression": "1001+100",
+          "value": "1101"
+        },
+        {
+          "expression": "1101+1",
+          "value": "1102"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-6bb9-q1",
+      "kp_code": "cs408.cn.topic.6bb96577c0c4",
+      "title": "TCP 三次握手与四次挥手的序号",
+      "skill_tags": [
+        "TCP 连接管理",
+        "三次握手",
+        "四次挥手",
+        "序号"
+      ],
+      "objective": "检验能否按 ISN 与数据长度计算握手/挥手各报文的 seq/ack，并说明 FIN 消耗序号。",
+      "stem": "客户端 C 的初始序号 ISN_C=1000，服务器 S 的 ISN_S=5000。C 与 S 建立连接后，C 向 S 发送 100 字节数据，随后双方关闭连接（无额外数据）。\n\n(1) 写出三次握手三个报文的 seq/ack；\n(2) 写出 C 发送 100 字节数据的 seq/ack，以及 S 的确认；\n(3) 写出四次挥手各报文的 seq/ack（C 先关闭）；\n(4) 为什么 FIN 要消耗一个序号？",
+      "answer": "(1) SYN seq=1000；SYN+ACK seq=5000,ack=1001；ACK seq=1001,ack=5001。\n(2) 数据 seq=1001,ack=5001；S 确认 ack=1101。\n(3) C FIN seq=1101；S ACK ack=1102；S FIN seq=5001；C ACK ack=5002。\n(4) FIN 是控制位但占一个序号，保证 FIN 能被可靠确认与重传。",
+      "final_value": "握手 ack 1001/5001；数据后 ack 1101；FIN ack 5002",
+      "solution_steps": [
+        "SYN 消耗 1 个序号：C 发 SYN seq=1000；S 回 SYN+ACK seq=5000、ack=1001（期望 C 的下一个字节）；C 回 ACK seq=1001、ack=5001。",
+        "C 发送 100 字节：seq=1001，ack=5001；字节序号 1001–1100；S 确认 ack=1101。",
+        "C 关闭：FIN seq=1101（FIN 占 1 个序号）；S 确认 ack=1102；S 发 FIN seq=5001；C 确认 ack=5002。",
+        "FIN 占序号使 FIN 本身可被确认/重传；若 FIN 不占序号，接收方无法区分“FIN 重传”与“新数据”。",
+        "TIME_WAIT：C 在发送最后一个 ACK 后进入 TIME_WAIT，等待 2MSL 以确保 S 收到 ACK。"
+      ],
+      "key_points": [
+        "SYN 与 FIN 各消耗 1 个序号。",
+        "数据字节序号从 ISN+1 开始。",
+        "ACK 号=期望收到的下一个字节序号。",
+        "主动关闭方进入 TIME_WAIT。"
+      ],
+      "common_errors": [
+        "认为 SYN 不占序号，ack 写成 1000。",
+        "数据 100 字节后 ack 写成 1100。",
+        "FIN 的 ack 忘记加 1。",
+        "把四次挥手的 FIN 顺序写反。"
+      ],
+      "scope": "408 计算机网络·TCP 连接管理；无选项、无额外数据、C 主动关闭。",
+      "verification": {
+        "method": "tcp_seq_calculator",
+        "result": "PASS",
+        "detail": "握手 1000/5000→1001/5001；数据 1001..1100，ack 1101；FIN ack 1102/5002。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "2001+200",
+          "value": "2201"
+        },
+        {
+          "expression": "8001+100",
+          "value": "8101"
+        },
+        {
+          "expression": "8101+1",
+          "value": "8102"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-6bb9-q2",
+      "kp_code": "cs408.cn.topic.6bb96577c0c4",
+      "title": "双向数据传输后的连接关闭与状态迁移",
+      "skill_tags": [
+        "TCP 状态机",
+        "FIN_WAIT",
+        "CLOSE_WAIT",
+        "TIME_WAIT"
+      ],
+      "objective": "在同一知识点内加入双向数据与状态迁移：计算双方序号并写出 CLOSE_WAIT、FIN_WAIT、TIME_WAIT 的进入条件。",
+      "stem": "C 的 ISN=2000，S 的 ISN=8000。握手完成后：C 先发送 200 字节，S 确认；C 发送 FIN；S 确认后继续发送 100 字节，再发送 FIN；C 确认。\n\n(1) 写出握手三报文与 C 发送 200 字节后的 seq/ack；\n(2) 写出 C 的 FIN、S 的 ACK、S 的 100 字节数据、S 的 FIN、C 的最终 ACK 的 seq/ack；\n(3) 指出 C 与 S 在关闭过程中的状态迁移（FIN_WAIT_1、CLOSE_WAIT、LAST_ACK、TIME_WAIT 等）；\n(4) 为什么 C 需要 TIME_WAIT，而 S 不需要？",
+      "answer": "握手：SYN 2000；SYN+ACK 8000/2001；ACK 2001/8001。C 数据 200B：seq 2001、ack 8001；S 确认 2201。C FIN seq 2201；S ACK 2202；S 数据 seq 8001–8100；S FIN seq 8101；C ACK 8102。状态：C FIN_WAIT_1→FIN_WAIT_2→TIME_WAIT；S CLOSE_WAIT→LAST_ACK→CLOSED。",
+      "final_value": "C FIN 2201；S FIN 8101；最终 ACK 8102",
+      "solution_steps": [
+        "握手：C SYN seq=2000；S SYN+ACK seq=8000,ack=2001；C ACK seq=2001,ack=8001。",
+        "C 发 200 字节：seq=2001，ack=8001，字节 2001–2200；S 确认 ack=2201。",
+        "C 发 FIN：seq=2201；S 确认 ack=2202。C 进入 FIN_WAIT_1，收到 ACK 后进入 FIN_WAIT_2；S 进入 CLOSE_WAIT。",
+        "S 发 100 字节：seq=8001–8100；C 确认 ack=8101。S 发 FIN：seq=8101；C 确认 ack=8102。",
+        "状态：C FIN_WAIT_1→FIN_WAIT_2→TIME_WAIT（等 2MSL）→CLOSED；S CLOSE_WAIT→LAST_ACK（发 FIN 后）→CLOSED（收到 ACK）。",
+        "TIME_WAIT 由主动关闭方 C 承担：确保最后一个 ACK 丢失时能重传，并让旧连接的重复报文在网络中消失；S 是被动关闭方，收到 ACK 即可关闭。"
+      ],
+      "key_points": [
+        "C 先 FIN，S 进入 CLOSE_WAIT；S 发 FIN 后进入 LAST_ACK。",
+        "C 收到 S 的 FIN 后进入 TIME_WAIT。",
+        "FIN 消耗序号，ACK 要加 1。",
+        "TIME_WAIT 由主动关闭方承担。"
+      ],
+      "common_errors": [
+        "把 S 的 100 字节 seq 写成 8000 起（应从 8001 起）。",
+        "C 的 FIN ack 写成 2201。",
+        "把 TIME_WAIT 放到 S 上。",
+        "认为 CLOSE_WAIT 是主动关闭方状态。"
+      ],
+      "scope": "408 计算机网络·TCP 连接管理；无选项、无重传、C 主动关闭、S 发送数据后关闭。",
+      "verification": {
+        "method": "tcp_state_calculator",
+        "result": "PASS",
+        "detail": "C 数据 2001..2200、FIN 2201；S 数据 8001..8100、FIN 8101；最终 ack 8102；状态迁移与题解一致。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1+2+4+8+16+17+18+19+20+21",
+          "value": "126"
+        },
+        {
+          "expression": "floor(21/2)",
+          "value": "10"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-9406-q1",
+      "kp_code": "cs408.cn.topic.940692c0d533",
+      "title": "慢开始/拥塞避免的窗口演化",
+      "skill_tags": [
+        "TCP 拥塞控制",
+        "慢开始",
+        "拥塞避免",
+        "超时"
+      ],
+      "objective": "检验能否按慢开始、拥塞避免和超时规则计算每个 RTT 的 cwnd、ssthresh 与累计发送量。",
+      "stem": "TCP 连接初始 cwnd=1 MSS，ssthresh=16 MSS，采用慢开始与拥塞避免。\n\n(1) 列出第 1–10 个 RTT 结束时的 cwnd；\n(2) 第 10 个 RTT 结束时发生超时，求新的 ssthresh 与 cwnd；\n(3) 求第 11–16 个 RTT 的 cwnd；\n(4) 计算前 10 个 RTT 累计发送的 MSS 数。",
+      "answer": "(1) 1,2,4,8,16,17,18,19,20,21。\n(2) ssthresh=10，cwnd=1。\n(3) 1,2,4,8,10,11。\n(4) 126 MSS。",
+      "final_value": "前 10 RTT 共 126 MSS；超时后 ssthresh=10",
+      "solution_steps": [
+        "慢开始：cwnd 每个 RTT 翻倍，1→2→4→8→16；到达 ssthresh=16 后转入拥塞避免。",
+        "拥塞避免：每个 RTT 加 1，16→17→18→19→20→21。",
+        "第 10 个 RTT 结束超时：ssthresh=max(21/2,2)=10，cwnd=1。",
+        "超时后重新慢开始：1→2→4→8；下一个 RTT 若翻倍到 16 会超过 ssthresh 10，因此取 10；之后拥塞避免 10→11。",
+        "累计发送：1+2+4+8+16+17+18+19+20+21=126 MSS。"
+      ],
+      "key_points": [
+        "慢开始每 RTT 翻倍，直到 ssthresh。",
+        "拥塞避免每 RTT 加 1。",
+        "超时：ssthresh=cwnd/2，cwnd=1。",
+        "慢开始超过 ssthresh 时取 ssthresh。"
+      ],
+      "common_errors": [
+        "到 16 后继续翻倍到 32。",
+        "超时后 ssthresh 不减半。",
+        "把超时后的 cwnd 直接设为 ssthresh。",
+        "累计发送只算 cwnd 最后值。"
+      ],
+      "scope": "408 计算机网络·TCP 拥塞控制；单位 RTT、无快速重传、MSS 固定。",
+      "verification": {
+        "method": "tcp_cwnd_simulator",
+        "result": "PASS",
+        "detail": "cwnd 序列 1,2,4,8,16,17,18,19,20,21；超时 ssthresh=10、cwnd=1；累计 126 MSS。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "24/2",
+          "value": "12"
+        },
+        {
+          "expression": "12+3",
+          "value": "15"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-9406-q2",
+      "kp_code": "cs408.cn.topic.940692c0d533",
+      "title": "Reno 快速重传与快速恢复的窗口变化",
+      "skill_tags": [
+        "TCP Reno",
+        "快速重传",
+        "快速恢复"
+      ],
+      "objective": "在同一知识点内加入 Reno：由 3 个重复 ACK 计算 ssthresh、cwnd 的变化，并与超时区分。",
+      "stem": "某 TCP Reno 连接当前 cwnd=24 MSS、ssthresh=16 MSS。发送方连续收到 3 个重复 ACK（未超时）。\n\n(1) 进入快速重传时 ssthresh 与 cwnd 各为多少？\n(2) 收到重传帧的新 ACK 后 cwnd 变为多少？\n(3) 之后 3 个 RTT 的 cwnd 如何变化？\n(4) 与超时处理相比，快速恢复为什么性能更好？",
+      "answer": "(1) ssthresh=12，cwnd=15（12+3）。\n(2) 新 ACK 后 cwnd=12。\n(3) 拥塞避免：13、14、15。\n(4) 快速恢复不把 cwnd 降回 1，而是降到 ssthresh 后继续拥塞避免，避免慢开始重头再来。",
+      "final_value": "ssthresh=12；快速恢复 cwnd=15→12",
+      "solution_steps": [
+        "Reno 收到 3 个重复 ACK：ssthresh=max(cwnd/2,2)=max(24/2,2)=12；cwnd=ssthresh+3=15。",
+        "每再收到一个重复 ACK，cwnd 加 1（可继续发送新数据）；收到重传帧的新 ACK 后，cwnd 降为 ssthresh=12。",
+        "之后进入拥塞避免，每个 RTT 加 1：12→13→14→15。",
+        "超时会把 cwnd 降为 1 并重新慢开始；快速恢复只降到 ssthresh，保持较高发送速率，因此吞吐量更好。",
+        "注意：快速恢复仍会重传丢失的帧，但没有把整个窗口清空。"
+      ],
+      "key_points": [
+        "3 个重复 ACK 触发快速重传。",
+        "ssthresh=cwnd/2。",
+        "快速恢复 cwnd=ssthresh+3，新 ACK 后回到 ssthresh。",
+        "超时才是 cwnd=1。"
+      ],
+      "common_errors": [
+        "把 ssthresh 算成 24。",
+        "新 ACK 后 cwnd 仍保持 15。",
+        "把快速恢复当成慢开始。",
+        "认为 3 个重复 ACK 是超时。"
+      ],
+      "scope": "408 计算机网络·TCP 拥塞控制；Reno、单位 MSS、无超时。",
+      "verification": {
+        "method": "reno_calculator",
+        "result": "PASS",
+        "detail": "ssthresh=12、cwnd=15；新 ACK 后 12；随后 13/14/15。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1+1",
+          "value": "2"
+        },
+        {
+          "expression": "1+2",
+          "value": "3"
+        },
+        {
+          "expression": "1+1+1",
+          "value": "3"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-8e7e-q1",
+      "kp_code": "cs408.cn.topic.8e7e1292d6b4",
+      "title": "RIP 距离向量的一轮更新与收敛",
+      "skill_tags": [
+        "RIP",
+        "距离向量",
+        "收敛"
+      ],
+      "objective": "检验能否按邻居通告的距离做一轮距离向量更新，并说明计数到无穷的原因。",
+      "stem": "四个路由器 A、B、C、D 组成链 A—B—C—D，链路代价均为 1；另有直连链路 A—D 代价 4。初始每台路由器只知道直连链路。\n\n(1) 写出初始路由表；\n(2) 经过一轮邻居交换后，各路由器的距离表是什么？\n(3) 再经过一轮交换，表是否收敛？给出最终距离；\n(4) 若 A—B 链路断开，RIP 可能出现什么问题？如何缓解？",
+      "answer": "初始：A: B1,D4；B: A1,C1；C: B1,D1；D: C1,A4。\n一轮后：A: B1,C2,D4；B: A1,C1,D2；C: B1,D1,A2；D: C1,B2,A3。\n再一轮：A 的 D 变为 3（经 B），最终 A: B1,C2,D3；B: A1,C1,D2；C: B1,D1,A2；D: C1,B2,A3。\nA—B 断开可能计数到无穷；缓解：水平分割、毒性逆转、触发更新、限制最大跳数 15。",
+      "final_value": "收敛后 A→D 距离 3",
+      "solution_steps": [
+        "初始表只含直连：A 到 B=1、D=4；B 到 A=1、C=1；C 到 B=1、D=1；D 到 C=1、A=4。",
+        "一轮交换使用邻居的旧表：A 从 B 学到 C=1+1=2，D 保持直连 4；B 从 C 学到 D=1+1=2；C 从 B 学到 A=1+1=2；D 从 C 学到 B=1+1=2、A=1+2=3（优于直连 4）。",
+        "第二轮：A 从 B 学到 D=1+2=3，优于直连 4；其余不变。此时 A→D=3，B→D=2，C→A=2，D→A=3，收敛。",
+        "A—B 断开时，B 可能仍从旧路径学到 A 的可达信息，距离逐轮加 1，形成计数到无穷；RIP 用最大跳数 15 限制，并用水平分割/毒性逆转/触发更新加速收敛。",
+        "RIP 的距离向量算法简单，但收敛慢；OSPF 用链路状态和 SPF，收敛更快。"
+      ],
+      "key_points": [
+        "距离向量更新：D(x)=min(D(x), D(邻居)+cost)。",
+        "一轮交换只用邻居旧表。",
+        "计数到无穷是坏消息传播慢。",
+        "水平分割/毒性逆转/触发更新可缓解。"
+      ],
+      "common_errors": [
+        "一轮交换就用到邻居刚更新的值（应同步交换旧表）。",
+        "A 的 D 一直保持 4，不学经 B 的 3。",
+        "认为 RIP 收敛快。",
+        "把最大跳数写成 16 可用的跳数（15 是最大可达）。"
+      ],
+      "scope": "408 计算机网络·RIP；链路代价 1、同步交换、忽略水平分割细节。",
+      "verification": {
+        "method": "rip_simulator",
+        "result": "PASS",
+        "detail": "一轮后 A: B1,C2,D4；二轮后 A→D=3；最终链路代价与跳数一致。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1+1",
+          "value": "2"
+        },
+        {
+          "expression": "1+1+1",
+          "value": "3"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-8e7e-q2",
+      "kp_code": "cs408.cn.topic.8e7e1292d6b4",
+      "title": "OSPF 链路状态与 SPF 最短路径树",
+      "skill_tags": [
+        "OSPF",
+        "链路状态",
+        "Dijkstra",
+        "SPF"
+      ],
+      "objective": "在同一知识点内加入 OSPF：按链路状态数据库运行 SPF，给出最短路径树并与 RIP 的收敛方式对比。",
+      "stem": "仍使用 A—B—C—D 链（代价 1）与 A—D 直连（代价 4）。所有路由器运行 OSPF，链路状态数据库一致。\n\n(1) 以 A 为根运行 SPF，给出到 B、C、D 的最短距离与下一跳；\n(2) 画出 A 的最短路径树；\n(3) 若 A—B 链路断开，OSPF 如何获知并重新计算？\n(4) 与 RIP 相比，OSPF 为什么收敛更快？",
+      "answer": "(1) A→B 1（下一跳 B）、A→C 2（下一跳 B）、A→D 3（下一跳 B→C，非直连 4）。\n(2) 树边 A-B、B-C、C-D。\n(3) 链路断开由 Hello 超时/洪泛 LSA 获知，各路由器更新 LSDB 后重跑 SPF。\n(4) OSPF 只传播链路状态变化，不传播整张距离表；SPF 计算快，且支持区域划分，避免计数到无穷。",
+      "final_value": "A→B 1，A→C 2，A→D 3（下一跳 B）",
+      "solution_steps": [
+        "链路状态数据库：A-B1、B-C1、C-D1、A-D4。",
+        "以 A 为根：A 的邻居 B(1)、D(4)；选 B，dist B=1；从 B 到 C，dist C=2；从 C 到 D，dist D=3；直连 A-D=4 被淘汰。",
+        "最短路径树：A—B—C—D；A 到 D 的下一跳是 B（经 B、C）。",
+        "A—B 断开：Hello 超时或接口 down 触发 LSA 洪泛，所有路由器更新 LSDB，重跑 Dijkstra；A 到 D 改走直连 4。",
+        "OSPF 收敛快的原因：链路状态只洪泛变化、SPF 本地计算、区域划分限制范围；RIP 逐跳传播距离表，坏消息慢。"
+      ],
+      "key_points": [
+        "OSPF 用链路状态数据库 + Dijkstra。",
+        "最短路径树从根逐跳扩展。",
+        "LSA 洪泛后本地重算 SPF。",
+        "OSPF 收敛快于 RIP。"
+      ],
+      "common_errors": [
+        "A→D 选直连 4，忽略经 B/C 的 3。",
+        "把 OSPF 当成距离向量。",
+        "认为 OSPF 需要邻居传整张路由表。",
+        "链路断开后不重算 SPF。"
+      ],
+      "scope": "408 计算机网络·OSPF；单区域、链路代价如题、忽略 DR/BDR 选举。",
+      "verification": {
+        "method": "ospf_simulator",
+        "result": "PASS",
+        "detail": "SPF 得 A→B1、A→C2、A→D3；树边 A-B、B-C、C-D；A-D 直连 4 不入选。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "4+4",
+          "value": "8"
+        },
+        {
+          "expression": "5+5",
+          "value": "10"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-6e5d-q1",
+      "kp_code": "cs408.cn.topic.6e5dd5812d0e",
+      "title": "选择重传 SR 的窗口与重传判定",
+      "skill_tags": [
+        "选择重传",
+        "滑动窗口",
+        "序号空间"
+      ],
+      "objective": "检验 SR 的发送/接收窗口、逐帧确认与超时重传，区分“ACK 丢失”和“帧丢失”。",
+      "stem": "采用选择重传 SR，序号空间为 8（0–7），发送窗口与接收窗口大小均为 4。发送方连续发送 0、1、2、3 四帧；随后 ACK0 与 ACK2 丢失，ACK1、ACK3 到达；所有数据帧均正确到达接收方。\n\n(1) 发送方窗口的基序号是否前移？为什么？\n(2) 哪些帧会被重传？\n(3) 接收方收到重传的 0、2 后如何处理？\n(4) 若窗口大小改为 5，序号空间仍为 8，会有什么问题？",
+      "answer": "(1) 基序号仍为 0：SR 逐帧确认，ACK0 丢失，0 未确认，基序号不能前移。\n(2) 超时后重传 0 和 2；1、3 已确认，不重传。\n(3) 接收方已缓存 0–3，重传帧是重复帧，丢弃并再次 ACK。\n(4) 发送窗口 5 + 接收窗口 5 = 10 > 8，序号空间不足，新旧帧可能混淆；SR 要求发送窗口+接收窗口≤2^k。",
+      "final_value": "重传 0 和 2；窗口和不能超过 8",
+      "solution_steps": [
+        "SR 发送方为每个已发送帧维护定时器；ACK 是逐帧的，不累积。",
+        "ACK1、ACK3 到达只标记 1、3 已确认；0 未确认，基序号保持 0，窗口仍覆盖 0–3。",
+        "0 与 2 的定时器超时，分别重传；1、3 已确认，不重传。",
+        "接收方已正确收到 0、1、2、3，窗口基序号为 0（未向上交付）；重传的 0、2 落在接收窗口内但是重复帧，丢弃并重发 ACK。",
+        "SR 的正确性条件：发送窗口 + 接收窗口 ≤ 序号空间 2^k。k=3 时最多 8；窗口各 5 会超出，导致接收方无法区分新帧与旧帧。"
+      ],
+      "key_points": [
+        "SR 逐帧确认，不累积。",
+        "ACK 丢失不等于帧丢失；超时只重传未确认帧。",
+        "接收方对重复帧丢弃并重发 ACK。",
+        "窗口和 ≤ 2^k。"
+      ],
+      "common_errors": [
+        "认为 ACK1 到达后基序号前移到 2。",
+        "重传整个窗口（那是 GBN）。",
+        "把重复帧交付上层。",
+        "窗口各 5 仍认为可行。"
+      ],
+      "scope": "408 计算机网络·SR；序号空间 8、窗口 4、无帧丢失、仅 ACK 丢失。",
+      "verification": {
+        "method": "sr_window_check",
+        "result": "PASS",
+        "detail": "窗口 4+4=8 合法；ACK0/2 丢失 → 只重传 0、2；5+5>8 非法。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1000*8/100000000",
+          "value": "0.00008"
+        },
+        {
+          "expression": "7*0.08/(10+0.08)",
+          "value": "1/18"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-6e5d-q2",
+      "kp_code": "cs408.cn.topic.6e5dd5812d0e",
+      "title": "GBN 与 SR 的窗口利用率与丢失代价",
+      "skill_tags": [
+        "GBN",
+        "SR",
+        "信道利用率"
+      ],
+      "objective": "在同一知识点内比较 GBN/SR：计算最大窗口利用率，并分析单帧丢失时的重传代价差异。",
+      "stem": "一条 100 Mbps 链路，单向传播时延 5 ms（RTT=10 ms），帧长 1000 B，确认帧忽略。发送窗口为 7。\n\n(1) 求单帧发送时间 Td 与最大信道利用率（GBN 与 SR 相同）；\n(2) 若窗口内第 3 帧丢失，GBN 需要重传多少帧？SR 需要重传多少帧？\n(3) 说明为什么 SR 在易丢包链路上更有优势；\n(4) 若窗口增大到 15，利用率如何变化？受什么限制？",
+      "answer": "(1) Td=8000/100M=0.08 ms；U=7×0.08/(10+0.08)≈5.56%。\n(2) GBN 重传第 3 帧及其后已发送的帧（最多 5 帧，具体取决于丢失时已发多少）；SR 只重传第 3 帧。\n(3) SR 接收方缓存失序帧，发送方只重传丢失帧，避免重复传输，适合高误码/长 RTT。\n(4) 窗口 15：U=15×0.08/(10.08)≈11.9%；受序号空间（GBN 窗口≤2^k−1）与接收缓存（SR）限制。",
+      "final_value": "U≈5.56%；GBN 重传丢失帧及后续，SR 只重传丢失帧",
+      "solution_steps": [
+        "Td=1000×8/100×10^6=0.08 ms。",
+        "窗口 7 时，发送 7 帧需 0.56 ms，远小于 RTT 10 ms；U=7×Td/(RTT+Td)=0.56/10.08≈0.0556。",
+        "GBN 接收方丢弃失序帧，发送方从丢失帧开始重传整个窗口内后续帧；若第 3 帧丢失，需重传 3、4、5、6（以及可能已发的 7）——最多 5 帧。SR 接收方缓存 4、5、6，只重传 3。",
+        "SR 的优势在丢包率高、带宽时延积大时更明显：避免大量重复帧，减少带宽浪费。",
+        "窗口 15：U=15×0.08/10.08≈0.119，约 11.9%；GBN 要求窗口≤2^k−1，SR 要求发送+接收窗口≤2^k，窗口不能无限增大。"
+      ],
+      "key_points": [
+        "U=W×Td/(RTT+Td)（W×Td<RTT+Td 时）。",
+        "GBN 丢一帧会重传后续已发帧。",
+        "SR 只重传丢失帧。",
+        "窗口大小受序号空间限制。"
+      ],
+      "common_errors": [
+        "把 RTT 当成单向 5 ms 代入。",
+        "GBN 只重传丢失帧（那是 SR）。",
+        "认为窗口越大利用率无限增大。",
+        "忽略序号空间对窗口的限制。"
+      ],
+      "scope": "408 计算机网络·可靠传输；GBN/SR、窗口 7、无差错确认、忽略处理时延。",
+      "verification": {
+        "method": "utilization_calculator",
+        "result": "PASS",
+        "detail": "Td=0.08 ms；U=0.56/10.08≈5.56%；窗口 15 时约 11.9%。"
+      }
+    }
+  ]
+}

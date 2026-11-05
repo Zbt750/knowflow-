@@ -1,0 +1,542 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-cs40804",
+  "created_at": "2026-10-18T23:00:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "408 第四批：WLAN/编码调制/交换机/HTTP/TCP可靠传输。"
+  },
+  "items": [
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "8000/11",
+          "value": "8000/11"
+        },
+        {
+          "expression": "50+100+727.2727+10+10",
+          "value": "897.2727"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-1351-q1",
+      "kp_code": "cs408.cn.topic.1351211c91cf",
+      "title": "802.11 CSMA/CA 接入时延计算",
+      "skill_tags": [
+        "无线局域网",
+        "CSMA/CA",
+        "DIFS",
+        "退避"
+      ],
+      "objective": "检验 DIFS、退避、数据与 ACK 的时延累加。",
+      "stem": "802.11 站点发送一个 1000 B 数据帧，速率 11 Mbps。DIFS=50 μs，SIFS=10 μs，时隙=20 μs，退避 5 个时隙，ACK=10 μs，忽略传播时延。\n\n(1) 求数据帧发送时间；(2) 求从决定发送到收到 ACK 的总时延；(3) 说明退避为什么按 slot 递增。",
+      "answer": "数据 727 μs；总时延 50+100+727+10+10=897 μs；退避按 slot 递增是为了让竞争站在不同时隙尝试，降低再次碰撞概率。",
+      "final_value": "897 μs",
+      "solution_steps": [
+        "数据发送时间=1000×8/11×10^6≈727 μs。",
+        "总时延=DIFS 50 + 退避 5×20=100 + 数据 727 + SIFS 10 + ACK 10=897 μs。",
+        "退避计数器以 slot 为单位随机选择，不同站选择不同 slot，错开发送；冲突后窗口加倍进一步降低碰撞。"
+      ],
+      "key_points": [
+        "DIFS 后进入退避。",
+        "SIFS 用于 ACK 等短间隔。",
+        "退避按 slot 计数。"
+      ],
+      "common_errors": [
+        "漏掉 SIFS。",
+        "把退避 5 个时隙算成 5 μs。",
+        "数据时间漏 bit 换算。"
+      ],
+      "scope": "408 计算机网络·无线局域网；802.11 DCF、忽略传播与处理时延。",
+      "verification": {
+        "method": "timing_calculator",
+        "result": "PASS",
+        "detail": "数据 727 μs；总 897 μs。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "cn-1351-q2",
+      "kp_code": "cs408.cn.topic.1351211c91cf",
+      "title": "隐藏终端与 RTS/CTS",
+      "skill_tags": [
+        "无线局域网",
+        "隐藏终端",
+        "RTS/CTS"
+      ],
+      "objective": "在同一知识点内解释隐藏终端成因与 RTS/CTS 解决机制。",
+      "stem": "A、C 均能与 B 通信，但 A 与 C 互相听不到。\n\n(1) 说明隐藏终端导致的冲突过程；(2) RTS/CTS 如何避免该冲突；(3) 说明 RTS/CTS 的代价与适用场景。",
+      "answer": "A、C 同时向 B 发送，信号在 B 处碰撞；B 发 CTS 被 A、C 听到，未获 CTS 的一方推迟发送，从而预约信道。代价是额外 RTS/CTS 开销，适合长帧/高冲突场景。",
+      "final_value": "CTS 预约信道，避免 A/C 同时发送",
+      "solution_steps": [
+        "A 与 C 互相听不到，都认为信道空闲，可能同时向 B 发数据，在 B 处碰撞。",
+        "发送方先发 RTS；B 回复 CTS，CTS 能被 A、C 听到。未收到 CTS 的一方根据 NAV 推迟发送。",
+        "RTS/CTS 增加控制帧开销和时延；短帧时开销占比大，长帧或隐藏终端严重时收益明显。"
+      ],
+      "key_points": [
+        "隐藏终端=互相听不到。",
+        "CTS 由接收方发送，覆盖隐藏终端。",
+        "NAV 预约。"
+      ],
+      "common_errors": [
+        "认为 CSMA/CA 载波监听能发现隐藏终端。",
+        "说 CTS 由发送方发出。",
+        "忽略 RTS/CTS 开销。"
+      ],
+      "scope": "408 计算机网络·无线局域网；802.11 RTS/CTS。",
+      "verification": {
+        "method": "protocol_reasoning",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "CTS 覆盖 A/C，NAV 推迟发送；代价为控制帧开销。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "2^4",
+          "value": "16"
+        },
+        {
+          "expression": "8000*4",
+          "value": "32000"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-1e61-q1",
+      "kp_code": "cs408.cn.topic.1e611d5e4eb0",
+      "title": "16-QAM 的波特率与比特率",
+      "skill_tags": [
+        "编码与调制",
+        "QAM",
+        "波特率"
+      ],
+      "objective": "检验 M 进制调制中 bit/符号与比特率关系。",
+      "stem": "某 16-QAM 系统的符号率为 8 kbaud。\n\n(1) 每符号携带多少 bit？(2) 比特率是多少？(3) 若改为 64-QAM，符号率不变，比特率是多少？",
+      "answer": "16-QAM 每符号 4 bit，比特率 32 kbps；64-QAM 每符号 6 bit，比特率 48 kbps。",
+      "final_value": "32 kbps；48 kbps",
+      "solution_steps": [
+        "M 进制每符号 log2 M bit；16=2^4，故 4 bit。",
+        "8 kbaud×4=32 kbps。",
+        "64=2^6，8 kbaud×6=48 kbps。"
+      ],
+      "key_points": [
+        "比特率=符号率×log2 M。",
+        "波特率≠比特率。"
+      ],
+      "common_errors": [
+        "把 16-QAM 当成 16 bit/符号。",
+        "直接 8×16。"
+      ],
+      "scope": "408 计算机网络·物理层；理想调制、无编码开销。",
+      "verification": {
+        "method": "modulation_calculator",
+        "result": "PASS",
+        "detail": "4 bit/符号，32 kbps；64-QAM 48 kbps。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "2*10",
+          "value": "20"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "cn-1e61-q2",
+      "kp_code": "cs408.cn.topic.1e611d5e4eb0",
+      "title": "曼彻斯特编码的波形与带宽",
+      "skill_tags": [
+        "曼彻斯特编码",
+        "带宽",
+        "基带传输"
+      ],
+      "objective": "在同一知识点内写出曼彻斯特编码并分析波特率/带宽。",
+      "stem": "采用曼彻斯特编码（1：高→低，0：低→高）传输比特串 1 0 1 1 0 0 1，比特率 10 Mbps。\n\n(1) 写出每个比特对应的电平跳变；(2) 求波特率；(3) 求最小信道带宽（第一零点）。",
+      "answer": "1:高低，0:低高，序列为 高低、低高、高低、高低、低高、低高、高低；波特率 20 Mbaud；最小带宽 20 MHz。",
+      "final_value": "20 Mbaud；20 MHz",
+      "solution_steps": [
+        "每个比特中间都有一次跳变：1 从高到低，0 从低到高。",
+        "每个比特对应两个信号码元，故波特率=2×10 Mbps=20 Mbaud。",
+        "曼彻斯特信号的最小基带带宽约为波特率 20 MHz（第一零点）。"
+      ],
+      "key_points": [
+        "曼彻斯特每比特至少一次跳变。",
+        "波特率=2×比特率。",
+        "带宽约等于波特率。"
+      ],
+      "common_errors": [
+        "跳变方向写反。",
+        "波特率等于比特率。",
+        "带宽算成 10 MHz。"
+      ],
+      "scope": "408 计算机网络·物理层；曼彻斯特编码、理想基带。",
+      "verification": {
+        "method": "encoding_analysis",
+        "result": "PASS",
+        "detail": "波特率 20 Mbaud；带宽约 20 MHz。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1+2",
+          "value": "3"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-201c-q1",
+      "kp_code": "cs408.cn.topic.201ce80c4dd6",
+      "title": "以太网交换机的自学习与转发",
+      "skill_tags": [
+        "以太网交换机",
+        "MAC 表",
+        "自学习"
+      ],
+      "objective": "检验交换机 MAC 地址表学习和转发/泛洪判定。",
+      "stem": "交换机初始 MAC 表为空，端口 1/2/3 分别连 A/B/C。依次发生：A→B、B→A、C→A、A→C。\n\n(1) 写出每帧后 MAC 表内容；(2) 说明每帧是泛洪还是定向转发。",
+      "answer": "A→B：学习 A:1，泛洪；B→A：学习 B:2，定向到 1；C→A：学习 C:3，定向到 1；A→C：表已全，定向到 3。",
+      "final_value": "A:1,B:2,C:3；首帧泛洪",
+      "solution_steps": [
+        "A→B：源 A 学习到端口 1；目的 B 未知，泛洪到 2、3。",
+        "B→A：源 B 学习到端口 2；目的 A 已知在 1，定向转发到 1。",
+        "C→A：源 C 学习到端口 3；目的 A 在 1，定向到 1。",
+        "A→C：源 A 已在表；目的 C 在 3，定向到 3。"
+      ],
+      "key_points": [
+        "按源 MAC 学习。",
+        "目的未知则泛洪。",
+        "目的已知则定向。"
+      ],
+      "common_errors": [
+        "按目的 MAC 学习。",
+        "首帧就定向到 B。"
+      ],
+      "scope": "408 计算机网络·数据链路层；单交换机、无 VLAN。",
+      "verification": {
+        "method": "switch_simulator",
+        "result": "PASS",
+        "detail": "MAC 表 A:1,B:2,C:3；首帧泛洪，其余定向。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 12,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "8/1",
+          "value": "8"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-201c-q2",
+      "kp_code": "cs408.cn.topic.201ce80c4dd6",
+      "title": "交换机冲突域与广播域",
+      "skill_tags": [
+        "交换机",
+        "冲突域",
+        "广播域"
+      ],
+      "objective": "在同一知识点内区分交换机端口的冲突域与广播域。",
+      "stem": "一台 8 口以太网交换机（无 VLAN）连接 8 台主机。\n\n(1) 有多少个冲突域？(2) 有多少个广播域？(3) 若把其中 4 口划入 VLAN 10、另 4 口划入 VLAN 20，冲突域和广播域各多少？",
+      "answer": "(1) 8 个冲突域；(2) 1 个广播域；(3) 8 个冲突域，2 个广播域。",
+      "final_value": "8 冲突域；1 广播域；VLAN 后 2 广播域",
+      "solution_steps": [
+        "交换机每个端口是独立冲突域，8 口=8 个。",
+        "无 VLAN 时所有端口同一广播域。",
+        "VLAN 10/20 各 4 口，冲突域仍每口一个=8；广播域按 VLAN 划分=2。"
+      ],
+      "key_points": [
+        "交换机隔离冲突域，不隔离广播域。",
+        "VLAN 隔离广播域。"
+      ],
+      "common_errors": [
+        "认为交换机只有一个冲突域。",
+        "VLAN 后冲突域变成 2。"
+      ],
+      "scope": "408 计算机网络·以太网交换机；无堆叠、无路由器。",
+      "verification": {
+        "method": "network_domain_analysis",
+        "result": "PASS",
+        "detail": "8 冲突域；无 VLAN 1 广播域；两 VLAN 2 广播域。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "2*4",
+          "value": "8"
+        },
+        {
+          "expression": "1+4",
+          "value": "5"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-4151-q1",
+      "kp_code": "cs408.cn.topic.415100bf0700",
+      "title": "HTTP 持久与非持久连接的 RTT",
+      "skill_tags": [
+        "HTTP",
+        "持久连接",
+        "RTT"
+      ],
+      "objective": "检验非持久/持久连接的 RTT 计算。",
+      "stem": "客户端访问一个包含 1 个 HTML 和 3 个图片的页面，RTT=100 ms，忽略传输时间。\n\n(1) 非持久 HTTP（每个对象新建 TCP）总时间；(2) 持久 HTTP（无流水线）总时间；(3) 持久 HTTP 流水线总时间。",
+      "answer": "非持久 8 RTT=800 ms；持久无流水线 5 RTT=500 ms；流水线 2 RTT=200 ms。",
+      "final_value": "800/500/200 ms",
+      "solution_steps": [
+        "非持久：每个对象 TCP 握手 1 RTT + 请求/响应 1 RTT=2 RTT；4 个对象=8 RTT=800 ms。",
+        "持久无流水线：1 次握手 1 RTT + 4 次请求各 1 RTT=5 RTT=500 ms。",
+        "流水线：1 次握手 + 1 次批量请求/响应=2 RTT=200 ms。"
+      ],
+      "key_points": [
+        "TCP 握手 1 RTT。",
+        "非持久每对象 2 RTT。",
+        "流水线把多个请求合并到一个 RTT。"
+      ],
+      "common_errors": [
+        "把 HTML 和图片算成 3 个对象。",
+        "持久连接忘记握手 RTT。"
+      ],
+      "scope": "408 计算机网络·应用层；HTTP/1.1、忽略传输时间。",
+      "verification": {
+        "method": "http_rtt_calculator",
+        "result": "PASS",
+        "detail": "8/5/2 RTT，即 800/500/200 ms。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "cn-4151-q2",
+      "kp_code": "cs408.cn.topic.415100bf0700",
+      "title": "HTTP 条件 GET 与缓存验证",
+      "skill_tags": [
+        "HTTP",
+        "条件GET",
+        "缓存",
+        "304"
+      ],
+      "objective": "在同一知识点内解释 If-Modified-Since/304 的缓存流程。",
+      "stem": "浏览器缓存了一个 HTML 文件，带 Last-Modified。再次访问时：\n\n(1) 浏览器发送什么请求头？(2) 服务器若文件未变，返回什么状态码与响应体？(3) 若已变化，返回什么？(4) 说明条件 GET 节省了什么。",
+      "answer": "发送 If-Modified-Since；未变返回 304 Not Modified 且无响应体；已变返回 200 和新内容；节省了对象体的传输。",
+      "final_value": "304 Not Modified；无 body",
+      "solution_steps": [
+        "浏览器用 If-Modified-Since 携带上次的 Last-Modified 时间。",
+        "服务器比较时间；未变化返回 304，不发送实体。",
+        "已变化返回 200 和新实体。",
+        "条件 GET 只传少量头部，避免重复传输未变化的对象体。"
+      ],
+      "key_points": [
+        "If-Modified-Since/Last-Modified。",
+        "304 无 body。",
+        "缓存验证节省带宽。"
+      ],
+      "common_errors": [
+        "304 返回新内容。",
+        "与 If-None-Match 混淆。"
+      ],
+      "scope": "408 计算机网络·应用层；HTTP 缓存验证。",
+      "verification": {
+        "method": "http_cache_reasoning",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "304 无 body；200 更新；节省对象体。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "100+1",
+          "value": "101"
+        },
+        {
+          "expression": "300+1",
+          "value": "301"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-8679-q1",
+      "kp_code": "cs408.cn.topic.8679c379d738",
+      "title": "TCP 可靠传输的序号与重传",
+      "skill_tags": [
+        "TCP",
+        "可靠传输",
+        "序号",
+        "重传"
+      ],
+      "objective": "检验丢包后的 ACK 与重传序号。",
+      "stem": "TCP 发送方依次发送 3 个报文段：1–100、101–200、201–300。第二个报文段丢失，第一、第三到达。\n\n(1) 接收方对第一、第三报文段分别返回什么 ACK？(2) 发送方超时后重传哪个报文段？(3) 最终累计确认是多少？",
+      "answer": "ACK 101、ACK 101；重传 101–200；最终 ACK 301。",
+      "final_value": "ACK 101/101；重传 101-200；最终 301",
+      "solution_steps": [
+        "接收方收到 1–100，期望 101，返回 ACK 101。",
+        "收到 201–300 但 101–200 缺失，仍返回 ACK 101（累计确认）。",
+        "发送方超时重传 101–200。",
+        "接收方补齐后累计确认 301。"
+      ],
+      "key_points": [
+        "ACK 是累计确认。",
+        "失序报文不改变 ACK 号。",
+        "超时重传缺失段。"
+      ],
+      "common_errors": [
+        "对 201–300 返回 ACK 301。",
+        "重传 201–300。"
+      ],
+      "scope": "408 计算机网络·TCP 可靠传输；无快速重传、仅超时。",
+      "verification": {
+        "method": "tcp_seq_simulator",
+        "result": "PASS",
+        "detail": "ACK 101/101；重传 101-200；最终 301。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "cn-8679-q2",
+      "kp_code": "cs408.cn.topic.8679c379d738",
+      "title": "快速重传与重复 ACK",
+      "skill_tags": [
+        "TCP",
+        "快速重传",
+        "重复ACK"
+      ],
+      "objective": "在同一知识点内说明 3 个重复 ACK 触发快速重传的条件。",
+      "stem": "发送方发送 1–100、101–200、201–300、301–400、401–500。101–200 丢失，其余到达。\n\n(1) 接收方对每个后续报文返回什么 ACK？(2) 收到几个重复 ACK 触发快速重传？(3) 快速重传与超时重传的区别？",
+      "answer": "对 201–300、301–400、401–500 均返回 ACK 101；第 3 个重复 ACK 触发快速重传 101–200；快速重传不等超时，通常更快。",
+      "final_value": "3 个重复 ACK；重传 101-200",
+      "solution_steps": [
+        "201–300 到达，缺少 101–200，返回 ACK 101（第 1 个重复）。",
+        "301–400 到达，仍缺 101–200，返回 ACK 101（第 2 个重复）。",
+        "401–500 到达，仍缺 101–200，返回 ACK 101（第 3 个重复）。",
+        "发送方收到 3 个重复 ACK，立即快速重传 101–200；不必等 RTO。"
+      ],
+      "key_points": [
+        "重复 ACK 的 ACK 号相同。",
+        "3 个重复 ACK 触发快速重传。",
+        "快速重传比超时更快。"
+      ],
+      "common_errors": [
+        "收到 1 个重复 ACK 就重传。",
+        "认为快速重传需要超时。"
+      ],
+      "scope": "408 计算机网络·TCP 可靠传输；无 SACK、接收窗口足够。",
+      "verification": {
+        "method": "tcp_dup_ack_reasoning",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "3 个 ACK 101 触发快速重传 101-200。"
+      }
+    }
+  ]
+}

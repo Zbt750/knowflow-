@@ -1,0 +1,13 @@
+# 向量检索依赖（可选但推荐）。
+#
+# 为什么单独放一个文件：
+# - torch 体积很大（几百 MB），装进基础镜像会让构建时间与镜像体积都失控；
+# - 缺少它时系统**仍然可用**：检索接口会明确返回 503（retrieval_unavailable），
+#   学习闭环、知识树、资料上传解析都不受影响；
+# - 需要向量检索时再装：pip install -r requirements-embed.txt
+#
+# 离线环境注意：模型必须在本地缓存中。把 HuggingFace 缓存目录挂载到
+# container 的 MODEL_CACHE_DIR（见 deploy/README-docker.md），
+# 并设置 HF_HUB_OFFLINE=1 与 TRANSFORMERS_OFFLINE=1。
+sentence-transformers>=3.0
+torch>=2.2

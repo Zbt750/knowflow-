@@ -1,0 +1,29 @@
+<script setup lang="ts">
+import type {HomeSystemRecommendation} from '../api/homeRecommendation';
+import {homePaperCount,homeNodeCount} from '../lib/homePaperSummary';
+const props=defineProps<{snapshot:HomeSystemRecommendation|null;loading:boolean;error:string;compact?:boolean}>();
+defineEmits<{use:[];reload:[]}>();
+const availableCount=(id:string)=>props.snapshot?.inventory?.recommendation_nodes?.find(node=>node.kp_id===id)?.practice_eligible_count;
+const availableLabel=(id:string)=>{const count=availableCount(id);return count===undefined?'可用题量暂未读取':`${count}道可用题`;};
+const assignedCount=(id:string)=>homeNodeCount(props.snapshot?.initial_paper,id);
+</script>
+<template>
+ <section class="baseline" :class="{'baseline--list':compact}" data-testid="workbench-system-recommendation" aria-label="系统初始推荐" :aria-busy="loading">
+  <header v-if="!compact"><div><span class="eyebrow">系统初案</span><h2>今天的推荐起点</h2></div><button type="button" :disabled="loading" @click="$emit('reload')">{{loading?'正在读取…':'更新初案'}}</button></header>
+  <p v-if="loading" role="status">正在读取推荐知识点、准入题量与计划用时…</p>
+  <div v-else-if="error" class="baseline-error" role="alert"><strong>暂时无法读取系统初案</strong><p>{{error}}</p><button type="button" @click="$emit('reload')">重试读取</button><small>没有把失败视为成功；已有话题仍可恢复，当前预览是否可确认由其独立状态决定。</small></div>
+  <template v-else-if="snapshot">
+   <p v-if="!snapshot.recommendations.length" role="status">暂无可推荐的知识点。可在下方手动选择现有知识点，或更新初案后重试；尚未生成试卷。</p>
+   <ul v-else class="baseline-directions"><li v-for="node in snapshot.recommendations.slice(0,compact?6:3)" :key="node.kp_id"><h3>{{node.name}} · {{availableLabel(node.kp_id)}}</h3><small>今日安排 {{assignedCount(node.kp_id)}} 道</small></li></ul>
+   <details v-if="snapshot.recommendations.length>(compact?6:3)"><summary>其余 {{snapshot.recommendations.length-(compact?6:3)}} 个推荐知识点</summary><ul><li v-for="node in snapshot.recommendations.slice(compact?6:3)" :key="node.kp_id"><strong>{{node.name}} · {{availableLabel(node.kp_id)}}</strong> · 今日安排 {{assignedCount(node.kp_id)}} 道</li></ul></details>
+   <div v-if="!compact" class="baseline-foot"><p v-if="snapshot.inventory">今日候选总量 <strong>{{snapshot.inventory.practice_eligible_count}}</strong> 道符合正式准入条件的题</p><p v-if="snapshot.initial_paper">本方案安排 <strong>{{homePaperCount(snapshot.initial_paper)}}</strong> 道 · 预计 <strong>{{snapshot.initial_paper.total_minutes}}</strong> 分钟 / 建议预算 {{snapshot.initial_paper.budget_minutes}} 分钟</p><button v-if="!compact" :disabled="loading||!homePaperCount(snapshot.initial_paper)" @click="$emit('use')">以系统初案开始预览</button></div>
+   <p v-for="reason in snapshot.blockers" :key="reason" role="status">{{reason}}</p>
+  </template>
+  <p v-else role="status">尚未读取到系统初案。请更新初案，或在下方手动选择范围；没有生成试卷。</p>
+ </section>
+</template>
+<style scoped>
+.baseline{border-bottom:1px solid var(--border);padding:0 0 20px;text-align:left;min-width:0}.baseline header,.baseline-foot{display:flex;gap:12px;justify-content:space-between;align-items:center;flex-wrap:wrap}.eyebrow{color:var(--text-tertiary);font-size:12px}.baseline h2{font-size:20px;margin:6px 0 12px}.baseline p{line-height:1.65;margin:6px 0;overflow-wrap:anywhere}.baseline-directions{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;list-style:none;padding:0;margin:12px 0}.baseline-directions li{background:var(--sidebar);border-radius:10px;padding:12px;min-width:0}.baseline-directions span{font-size:11px;color:var(--text-secondary)}.baseline h3{font-size:15px;margin:6px 0}.baseline-directions p,.baseline-note{font-size:12px;color:var(--text-secondary)}.baseline-foot{margin:12px 0}.baseline button{min-height:40px;max-width:100%;white-space:normal}.baseline details{margin-top:12px;font-size:13px}.baseline summary{cursor:pointer}.baseline-error{border-left:3px solid var(--danger,#b13b20);padding:10px 14px;background:var(--sidebar);border-radius:4px}.baseline-error small{display:block;color:var(--text-secondary);margin-top:8px;line-height:1.6}@media(max-width:640px){.baseline-directions{grid-template-columns:1fr}.baseline h2{font-size:18px}.baseline-foot{align-items:flex-start;flex-direction:column}}
+
+.baseline--list{border:0;padding-bottom:0}.baseline--list .baseline-directions{display:block;margin:0}.baseline--list .baseline-directions li{display:grid;grid-template-columns:minmax(130px,.8fr) minmax(0,1fr) auto;gap:4px 14px;background:transparent;border-bottom:1px solid var(--border);border-radius:0;padding:12px 0}.baseline--list .baseline-directions h3{grid-column:1;grid-row:1/3;margin:0;align-self:center}.baseline--list .baseline-directions span{grid-column:2;grid-row:1}.baseline--list .baseline-directions p{grid-column:2;grid-row:2;margin:0}.baseline--list .baseline-directions small{grid-column:3;grid-row:1/3;align-self:center;font-size:12px;color:var(--text-secondary);white-space:normal}.baseline--list .baseline-foot{justify-content:flex-start;gap:6px 20px}.baseline--list .baseline-note{line-height:1.65}@media(max-width:640px){.baseline--list .baseline-directions li{grid-template-columns:minmax(0,1fr) auto;gap:5px 12px}.baseline--list .baseline-directions h3{grid-column:1;grid-row:1}.baseline--list .baseline-directions span{grid-column:1;grid-row:2}.baseline--list .baseline-directions p{grid-column:1/-1;grid-row:3}.baseline--list .baseline-directions small{grid-column:2;grid-row:1/3;max-width:110px}}
+</style>

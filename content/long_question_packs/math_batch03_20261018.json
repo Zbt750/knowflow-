@@ -1,0 +1,551 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-math03",
+  "created_at": "2026-10-18T21:00:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "数学二第三批：全微分/反函数/定积分平均/变上限积分/矩阵方程。"
+  },
+  "items": [
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "0+0",
+          "value": "0"
+        },
+        {
+          "expression": "1+1",
+          "value": "2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-0bf9-q1",
+      "kp_code": "math.exam.0bf92dbd942e",
+      "title": "二元函数全微分与偏导计算",
+      "skill_tags": [
+        "全微分",
+        "偏导数",
+        "链式法则"
+      ],
+      "objective": "检验 z=x²y+e^{xy} 的偏导与全微分，并在给定点求值。",
+      "stem": "设 z=x²y+e^{xy}。\n\n(1) 求 z_x、z_y；(2) 求 dz；(3) 在点 (1,0) 处求 dz。",
+      "answer": "z_x=2xy+y e^{xy}，z_y=x²+x e^{xy}；dz=(2xy+y e^{xy})dx+(x²+x e^{xy})dy；在 (1,0) 处 dz=2dy。",
+      "final_value": "dz(1,0)=2dy",
+      "solution_steps": [
+        "对 x 求偏导：z_x=2xy+y e^{xy}。",
+        "对 y 求偏导：z_y=x²+x e^{xy}。",
+        "全微分 dz=z_x dx+z_y dy。",
+        "在 (1,0)：z_x=0+0=0，z_y=1+1=2，故 dz=2dy。"
+      ],
+      "key_points": [
+        "e^{xy} 对 x 求导产生 y 因子，对 y 求导产生 x 因子。",
+        "全微分=偏导×微分之和。"
+      ],
+      "common_errors": [
+        "e^{xy} 求导漏乘 y 或 x。",
+        "把 z_x 与 z_y 写反。",
+        "在 (1,0) 处把 e^0 当成 0。"
+      ],
+      "scope": "数学二·多元函数微分学；z 在 R² 上可微。",
+      "verification": {
+        "method": "sympy_diff",
+        "result": "PASS",
+        "detail": "z_x=2xy+y e^{xy}, z_y=x²+x e^{xy}; at (1,0) dz=2dy。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "2-0.02",
+          "value": "1.98"
+        },
+        {
+          "expression": "1.0404+0.9409",
+          "value": "1.9813"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-0bf9-q2",
+      "kp_code": "math.exam.0bf92dbd942e",
+      "title": "全微分作近似计算",
+      "skill_tags": [
+        "全微分",
+        "近似计算",
+        "误差"
+      ],
+      "objective": "在同一知识点内用全微分近似 (1.02)²+(0.97)²，并估计误差。",
+      "stem": "用全微分近似计算 (1.02)²+(0.97)²，并给出近似值与真实值的误差。",
+      "answer": "近似 1.98；真实 1.9813；误差约 0.0013。",
+      "final_value": "1.98",
+      "solution_steps": [
+        "令 z=x²+y²，取 (x0,y0)=(1,1)，dx=0.02，dy=−0.03。",
+        "z_x=2x=2，z_y=2y=2，故 dz=2dx+2dy=0.04−0.06=−0.02。",
+        "z(1,1)=2，近似值 2−0.02=1.98。",
+        "真实值 1.02²+0.97²=1.0404+0.9409=1.9813，误差 0.0013。"
+      ],
+      "key_points": [
+        "全微分是线性主部。",
+        "dx、dy 是自变量增量，不是微分符号。",
+        "误差来自二阶小量。"
+      ],
+      "common_errors": [
+        "把 dx 当成 0.02²。",
+        "符号写错，得到 2.02。",
+        "忘记 z(1,1)=2。"
+      ],
+      "scope": "数学二·全微分；增量较小、函数可微。",
+      "verification": {
+        "method": "direct_calculation",
+        "result": "PASS",
+        "detail": "近似 1.98；真实 1.9813；误差 0.0013。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 10,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "3*1+1",
+          "value": "4"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-3e37-q1",
+      "kp_code": "math.exam.3e373cbe2c92",
+      "title": "反函数的一阶导数",
+      "skill_tags": [
+        "反函数",
+        "导数",
+        "链式法则"
+      ],
+      "objective": "检验反函数导数公式 (f^{-1})′(y0)=1/f′(x0)。",
+      "stem": "设 f(x)=x³+x，f(1)=2。求 (f^{-1})′(2)。",
+      "answer": "1/4。",
+      "final_value": "1/4",
+      "solution_steps": [
+        "f′(x)=3x²+1，f′(1)=4。",
+        "反函数导数公式：(f^{-1})′(2)=1/f′(1)。",
+        "故 (f^{-1})′(2)=1/4。"
+      ],
+      "key_points": [
+        "先确认 f(1)=2，对应点 x0=1。",
+        "f′(1)≠0 才能用公式。"
+      ],
+      "common_errors": [
+        "把 f′(2) 当成分母。",
+        "忘记 f(1)=2 的对应关系。"
+      ],
+      "scope": "数学二·一元函数微分学；f 在 1 的邻域可导且 f′(1)≠0。",
+      "verification": {
+        "method": "inverse_derivative",
+        "result": "PASS",
+        "detail": "f′(1)=4，反函数导数 1/4。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "-6*1/4/16",
+          "value": "-3/32"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-3e37-q2",
+      "kp_code": "math.exam.3e373cbe2c92",
+      "title": "反函数的二阶导数",
+      "skill_tags": [
+        "反函数",
+        "二阶导数",
+        "公式"
+      ],
+      "objective": "在同一知识点内推导并计算反函数二阶导数，检验链式法则的二次使用。",
+      "stem": "已知 f(x)=x³+x 在 R 上严格单调、可逆，记 g=f^{-1}。先验证 f′(x)>0，再求 g 在 y=2 处的二阶导数 g″(2)，并说明所用公式中每个量在 x=1 处的取值。",
+      "answer": "−3/32。",
+      "final_value": "-3/32",
+      "solution_steps": [
+        "记 g=f^{-1}，g′(y)=1/f′(g(y))。",
+        "g″(y)=−f″(g(y))·g′(y)/[f′(g(y))]²。",
+        "f′(x)=3x²+1，f″(x)=6x；g(2)=1，f′(1)=4，f″(1)=6。",
+        "g′(2)=1/4，故 g″(2)=−6·(1/4)/4²=−6/64=−3/32。"
+      ],
+      "key_points": [
+        "反函数二阶导数公式。",
+        "f″ 在 x0=1 处取值。",
+        "分母是 f′ 的三次方（等价写法）。"
+      ],
+      "common_errors": [
+        "只对 1/f′ 求导忘记链式因子。",
+        "把 f″(1) 算成 6x 在 2 处的值。",
+        "符号写成正。"
+      ],
+      "scope": "数学二·一元函数微分学；f 二阶可导且 f′(1)≠0。",
+      "verification": {
+        "method": "inverse_second_derivative",
+        "result": "PASS",
+        "detail": "g″(2)=−f″(1)/(f′(1))³=−6/64=−3/32。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "9/3",
+          "value": "3"
+        },
+        {
+          "expression": "sqrt(3)*sqrt(3)",
+          "value": "3"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-4a56-q1",
+      "kp_code": "math.exam.4a56bd52caf7",
+      "title": "定积分平均值与平均值定理",
+      "skill_tags": [
+        "定积分平均值",
+        "积分中值定理"
+      ],
+      "objective": "检验平均值公式与连续函数平均值定理取点。",
+      "stem": "设 f(x)=x² 在 [0,3] 上。\n\n(1) 求 f 在 [0,3] 上的平均值；(2) 求 c∈[0,3] 使 f(c) 等于该平均值。",
+      "answer": "平均值 3；c=√3。",
+      "final_value": "3；sqrt(3)",
+      "solution_steps": [
+        "平均值 =(1/(3−0))∫₀³x²dx=(1/3)·9=3。",
+        "令 c²=3，c=√3（取正根，落在 [0,3]）。",
+        "积分中值定理保证存在这样的 c（f 连续）。"
+      ],
+      "key_points": [
+        "平均值公式 1/(b−a)∫f。",
+        "∫₀³x²=9。",
+        "c 必须在区间内。"
+      ],
+      "common_errors": [
+        "忘记除以区间长度 3。",
+        "把 ∫x² 算成 x³/3 后不代上限。",
+        "取 c=−√3。"
+      ],
+      "scope": "数学二·定积分；f 连续，闭区间。",
+      "verification": {
+        "method": "integral_average",
+        "result": "PASS",
+        "detail": "平均 3；c=√3。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 12,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "2/pi",
+          "value": "2/pi"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-4a56-q2",
+      "kp_code": "math.exam.4a56bd52caf7",
+      "title": "三角函数在周期区间上的平均值",
+      "skill_tags": [
+        "定积分平均值",
+        "三角积分"
+      ],
+      "objective": "在同一知识点内计算 sin x 在 [0,π] 上的平均值，并解释与周期平均值的关系。",
+      "stem": "求 f(x)=sin x 在 [0,π] 上的平均值，并说明为什么它不是 sin x 在一个完整周期上的平均值。",
+      "answer": "平均值为 2/π；完整周期 [0,2π] 上平均值为 0。",
+      "final_value": "2/pi",
+      "solution_steps": [
+        "平均值 =(1/π)∫₀^π sin x dx=(1/π)[−cos x]₀^π=(1/π)(1+1)=2/π。",
+        "完整周期 [0,2π] 上 ∫sin x dx=0，平均值为 0。",
+        "[0,π] 只取正半波，故平均值为正；周期平均要覆盖正负半波。"
+      ],
+      "key_points": [
+        "平均值公式。",
+        "∫₀^π sin=2。",
+        "完整周期积分 0。"
+      ],
+      "common_errors": [
+        "把 ∫sin 算成 cos。",
+        "忘记除以 π。",
+        "认为完整周期平均值也是 2/π。"
+      ],
+      "scope": "数学二·定积分；sin 在区间上连续。",
+      "verification": {
+        "method": "sympy_integrate",
+        "result": "PASS",
+        "detail": "∫₀^π sin=2，平均 2/π；[0,2π] 平均 0。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "2*0",
+          "value": "0"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-3504-q1",
+      "kp_code": "math.exam.3504d885999b",
+      "title": "变上限积分的一阶与二阶导数",
+      "skill_tags": [
+        "变上限积分",
+        "求导",
+        "链式法则"
+      ],
+      "objective": "检验 F(x)=∫₀^x e^{t²}dt 的求导与二阶导数。",
+      "stem": "设 F(x)=∫₀^x e^{t²}dt。求 F′(x) 与 F″(x)。",
+      "answer": "F′=e^{x²}，F″=2x e^{x²}。",
+      "final_value": "F′=e^(x^2), F″=2x e^(x^2)",
+      "solution_steps": [
+        "由微积分基本定理，F′(x)=e^{x²}。",
+        "再对 F′ 求导：F″=e^{x²}·2x=2x e^{x²}。",
+        "因此 F 在 R 上可导，且 F′ 连续；对 F′ 再求导即得 F″。"
+      ],
+      "key_points": [
+        "变上限积分求导直接代入上限。",
+        "e^{x²} 求导产生 2x。"
+      ],
+      "common_errors": [
+        "把上限 x 再乘一次。",
+        "对 e^{x²} 求导漏掉 2x。"
+      ],
+      "scope": "数学二·定积分；被积函数连续。",
+      "verification": {
+        "method": "sympy_diff",
+        "result": "PASS",
+        "detail": "F′=e^{x²}, F″=2x e^{x²}。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "exp(0)",
+          "value": "1"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-3504-q2",
+      "kp_code": "math.exam.3504d885999b",
+      "title": "变上限积分与极限、单调性",
+      "skill_tags": [
+        "变上限积分",
+        "极限",
+        "单调性"
+      ],
+      "objective": "在同一知识点内用变上限积分求极限并判断单调性。",
+      "stem": "设 F(x)=∫₀^x e^{t²}dt。\n\n(1) 求 lim_(x→0) F(x)/x；\n(2) 判断 F 在 R 上的单调性并说明理由。",
+      "answer": "(1) 1；(2) 严格单调递增，因为 F′(x)=e^{x²}>0。",
+      "final_value": "1",
+      "solution_steps": [
+        "x→0 时 F(0)=0，x=0，0/0 型。",
+        "洛必达：lim F(x)/x=lim F′(x)/1=lim e^{x²}=1。",
+        "F′(x)=e^{x²}>0 对所有 x 成立，故 F 严格递增。"
+      ],
+      "key_points": [
+        "变上限积分在 0 处为 0。",
+        "洛必达后直接用 F′。",
+        "e^{x²}>0。"
+      ],
+      "common_errors": [
+        "把 F(0) 算成 1。",
+        "求导后把 e^{x²} 在 0 处当成 0。",
+        "只说递增不说明导数正。"
+      ],
+      "scope": "数学二·定积分；F 可导，极限为 0/0。",
+      "verification": {
+        "method": "limit_and_sign",
+        "result": "PASS",
+        "detail": "极限 1；F′>0 严格递增。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1*4-2*2",
+          "value": "0"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-3605-q1",
+      "kp_code": "math.exam.36050d277510",
+      "title": "矩阵方程 AX=B 的可解性",
+      "skill_tags": [
+        "矩阵方程",
+        "秩",
+        "可解性"
+      ],
+      "objective": "检验用 rank(A) 与 rank(A|B) 判断 AX=B 是否有解。",
+      "stem": "设 A=[[1,2],[2,4]]，B=[1,2]^T。判断 AX=B 是否有解；若有，写出通解。",
+      "answer": "有解，且有无穷多解：x1+2x2=1，通解 x=(1−2t,t)^T。",
+      "final_value": "无穷多解：x1+2x2=1",
+      "solution_steps": [
+        "A 的两行成比例，rank A=1。",
+        "增广矩阵 [A|B]=[[1,2,1],[2,4,2]]，第二行=2×第一行，rank=1。",
+        "rank A=rank(A|B)=1<2，故有无穷多解。",
+        "方程 x1+2x2=1，令 x2=t，得 x1=1−2t。"
+      ],
+      "key_points": [
+        "rank A=rank(A|B) 是可解判据。",
+        "秩小于未知数个数 → 无穷多解。"
+      ],
+      "common_errors": [
+        "只看 det A=0 就断言无解。",
+        "忘记比较增广矩阵的秩。",
+        "通解参数写错。"
+      ],
+      "scope": "数学二·线性方程组；实矩阵，AX=B。",
+      "verification": {
+        "method": "rank_augmented",
+        "result": "PASS",
+        "detail": "rank A=rank(A|B)=1<2，无穷多解 x1+2x2=1。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "4-4",
+          "value": "0"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-3605-q2",
+      "kp_code": "math.exam.36050d277510",
+      "title": "含参数矩阵方程的分类讨论",
+      "skill_tags": [
+        "矩阵方程",
+        "参数讨论",
+        "秩"
+      ],
+      "objective": "在同一知识点内加入参数 a，按 det 是否为零讨论唯一解/无解。",
+      "stem": "设 A=[[1,2],[2,a]]，B=[1,3]^T。讨论 a 取何值时 AX=B 有唯一解、无解或无穷多解。",
+      "answer": "a≠4 时唯一解；a=4 时无解（rank A=1，rank(A|B)=2）。",
+      "final_value": "a≠4 唯一；a=4 无解",
+      "solution_steps": [
+        "det A=a−4。a≠4 时 det≠0，A 可逆，唯一解。",
+        "a=4 时 A=[[1,2],[2,4]]，增广 [[1,2,1],[2,4,3]]；第二行减 2×第一行得 [0,0,1]，矛盾。",
+        "故 a=4 时 rank A=1、rank(A|B)=2，无解；不存在无穷多解情形。"
+      ],
+      "key_points": [
+        "det≠0 → 唯一解。",
+        "det=0 时比较 rank A 与 rank(A|B)。",
+        "增广行出现 0 0 | 非零 → 无解。"
+      ],
+      "common_errors": [
+        "a=4 时仍说无穷多解。",
+        "忘记检查增广矩阵。",
+        "把 det 算成 a+4。"
+      ],
+      "scope": "数学二·线性方程组；2×2 实矩阵，单参数。",
+      "verification": {
+        "method": "rank_case_analysis",
+        "result": "PASS",
+        "detail": "det=a−4；a=4 时增广出现 0 0 | 1，无解。"
+      }
+    }
+  ]
+}

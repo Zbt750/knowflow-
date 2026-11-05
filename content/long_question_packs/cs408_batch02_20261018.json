@@ -1,0 +1,556 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-cs40802",
+  "created_at": "2026-10-18T20:20:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "408 第二批：循环链表、二分查找、寻址方式、经典同步、Nyquist/Shannon，参考模拟器复算。"
+  },
+  "items": [
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "7-3",
+          "value": "4"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "ds-6c57-q1",
+      "kp_code": "cs408.ds.topic.6c5786034fef",
+      "title": "循环链表的约瑟夫环淘汰顺序",
+      "skill_tags": [
+        "循环链表",
+        "约瑟夫环"
+      ],
+      "objective": "检验用循环链表模拟报数淘汰，正确给出淘汰顺序和指针推进。",
+      "stem": "7 个人围成一圈，编号 1–7，从 1 开始报数，每报到 3 的人出列，下一个人重新从 1 报数。\n\n(1) 用循环链表写出模拟过程；(2) 给出出列顺序；(3) 说明每轮删除后指针从哪里继续。",
+      "answer": "出列顺序：3, 6, 2, 7, 5, 1, 4。",
+      "final_value": "3,6,2,7,5,1,4",
+      "solution_steps": [
+        "初始链表 1→2→3→4→5→6→7→1，指针指向 1。",
+        "从 1 报 1、2 报 2、3 报 3，删除 3；指针移到 4。",
+        "剩余 1,2,4,5,6,7，从 4 报 1、5 报 2、6 报 3，删除 6；指针移到 7。",
+        "剩余 1,2,4,5,7，从 7 报 1、1 报 2、2 报 3，删除 2；指针移到 4。",
+        "剩余 1,4,5,7，从 4 报 1、5 报 2、7 报 3，删除 7；指针移到 1。",
+        "剩余 1,4,5，从 1 报 1、4 报 2、5 报 3，删除 5；指针移到 1。",
+        "剩余 1,4，从 1 报 1、4 报 2、1 报 3，删除 1；最后删除 4。"
+      ],
+      "key_points": [
+        "循环链表尾结点 next 指向头结点。",
+        "每轮从被删除结点的下一个结点重新报 1。",
+        "删除时先保存前驱，再改指针。"
+      ],
+      "common_errors": [
+        "删除后从被删除结点继续报数。",
+        "忘记把尾结点接回头结点导致断链。",
+        "剩余 2 人时报数起点算错。"
+      ],
+      "scope": "408 数据结构·循环链表；n=7、k=3、从 1 开始报数。",
+      "verification": {
+        "method": "josephus_simulator",
+        "result": "PASS",
+        "detail": "参考模拟得到 3,6,2,7,5,1,4。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "ds-6c57-q2",
+      "kp_code": "cs408.ds.topic.6c5786034fef",
+      "title": "循环链表对半拆分",
+      "skill_tags": [
+        "循环链表",
+        "快慢指针",
+        "拆分"
+      ],
+      "objective": "在同一知识点内加入快慢指针与断链，设计 O(n)/O(1) 的循环链表拆分算法。",
+      "stem": "给定一个带表头结点的循环单链表 L，设计算法把它拆成两个循环单链表 L1、L2：L1 含前一半结点（奇数个时多一个），L2 含后一半。\n\n(1) 说明设计思想；(2) 用 C/C++ 或伪代码写出算法；(3) 分析复杂度；(4) 对 1→2→3→4→5 给出拆分结果。",
+      "answer": "用快慢指针找中点；L1 从头到 slow，L2 从 slow->next 到尾，分别闭合成环。奇数时 L1 多一个。示例：L1=1,2,3；L2=4,5。",
+      "final_value": "L1 1,2,3；L2 4,5；O(n), O(1)",
+      "solution_steps": [
+        "若链表为空或只有一个结点，按题意直接处理。",
+        "快指针 fast 每次走两步，慢指针 slow 每次走一步；当 fast 到达尾结点或其 next 为头结点时，slow 指向 L1 的最后一个结点。",
+        "记录 second=slow->next；令 slow->next=head 使 L1 闭环；再从头遍历 second 到尾，令尾->next=second 使 L2 闭环。",
+        "参考伪代码：\n```text\nslow=head; fast=head;\nwhile (fast->next!=head && fast->next->next!=head) {\n  slow=slow->next; fast=fast->next->next;\n}\nsecond=slow->next;\nslow->next=head;\nif (second!=head) {\n  p=second;\n  while (p->next!=head) p=p->next;\n  p->next=second;\n}\n```",
+        "示例 1→2→3→4→5：slow 指向 3，second=4；L1=1→2→3→1，L2=4→5→4。",
+        "时间 O(n)，只用了常数个指针，空间 O(1)。"
+      ],
+      "key_points": [
+        "快慢指针找中点，注意循环链表的终止条件是回到 head。",
+        "L1 闭合到 head，L2 闭合到 second。",
+        "奇数个结点时 L1 多一个。"
+      ],
+      "common_errors": [
+        "终止条件写成 fast==NULL（循环链表没有 NULL）。",
+        "忘记把 L1 尾结点接回 head。",
+        "L2 尾结点仍指向原 head，导致两链表串在一起。"
+      ],
+      "scope": "408 数据结构·循环链表；带头结点，结点数≥1。",
+      "verification": {
+        "method": "list_split_simulator",
+        "result": "PASS",
+        "detail": "1..5 拆分得 L1=1,2,3、L2=4,5；复杂度 O(n)/O(1)。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "0+10",
+          "value": "10"
+        },
+        {
+          "expression": "4+4",
+          "value": "8"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "ds-8b04-q1",
+      "kp_code": "cs408.ds.topic.8b04b55a0408",
+      "title": "折半查找的比较序列与判定",
+      "skill_tags": [
+        "折半查找",
+        "比较次数",
+        "判定树"
+      ],
+      "objective": "检验能否按 mid=⌊(low+high)/2⌋ 正确模拟折半查找并统计比较次数。",
+      "stem": "有序表 A[0..10]={5,13,19,21,37,56,64,75,80,88,92}。\n\n分别查找 32 和 75：\n(1) 写出每次比较的 low、high、mid 与 A[mid]；\n(2) 给出比较次数与查找结果；\n(3) 若查找失败，最后停在哪个区间？",
+      "answer": "32：比较 56、19、21、37，4 次，失败；最后 low=4、high=3。75：比较 56、80、64、75，4 次，成功。",
+      "final_value": "32 失败 4 次；75 成功 4 次",
+      "solution_steps": [
+        "32：low=0,high=10,mid=5,A[5]=56>32→high=4；mid=2,A[2]=19<32→low=3；mid=3,A[3]=21<32→low=4；mid=4,A[4]=37>32→high=3，low>high，失败。共 4 次。",
+        "75：mid=5,A[5]=56<75→low=6；mid=8,A[8]=80>75→high=7；mid=6,A[6]=64<75→low=7；mid=7,A[7]=75，成功。共 4 次。",
+        "失败时最后 low=4、high=3，区间为空，32 应插在 A[3]=21 与 A[4]=37 之间。"
+      ],
+      "key_points": [
+        "mid 向下取整。",
+        "每次比较后只保留可能包含目标的一半。",
+        "失败条件 low>high。"
+      ],
+      "common_errors": [
+        "mid 向上取整导致序列不同。",
+        "比较次数把最后一次越界判断也算一次（题目按与 A[mid] 比较计）。",
+        "区间边界更新写成 low=mid 或 high=mid，造成死循环。"
+      ],
+      "scope": "408 数据结构·折半查找；数组下标 0 起，mid=⌊(low+high)/2⌋。",
+      "verification": {
+        "method": "binary_search_simulator",
+        "result": "PASS",
+        "detail": "32 比较 56/19/21/37 共 4 次失败；75 比较 56/80/64/75 共 4 次成功。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "ds-8b04-q2",
+      "kp_code": "cs408.ds.topic.8b04b55a0408",
+      "title": "含重复元素的第一个和最后一个位置",
+      "skill_tags": [
+        "折半查找",
+        "边界查找",
+        "重复元素"
+      ],
+      "objective": "在同一知识点内加入重复元素边界：用两次二分分别找 first/last，检验边界收缩和不存在处理。",
+      "stem": "给定非降序数组 A 和目标值 target，设计算法返回 target 的第一个和最后一个下标；不存在返回 [-1,-1]。要求 O(log n)。\n\n(1) 说明两次二分的区别；(2) 写出 C/C++ 函数；(3) 对 A={1,2,2,2,3,4,5}、target=2 给出结果；(4) 说明 target 不存在和数组为空时的处理。",
+      "answer": "第一次二分找左边界（相等时 high=mid−1），第二次找右边界（相等时 low=mid+1）。示例 first=1、last=3。时间 O(log n)，空间 O(1)。",
+      "final_value": "first=1, last=3",
+      "solution_steps": [
+        "左边界：若 A[mid]≥target，high=mid−1；否则 low=mid+1。循环结束 low 是第一个 ≥target 的位置。",
+        "右边界：若 A[mid]≤target，low=mid+1；否则 high=mid−1。循环结束 high 是最后一个 ≤target 的位置。",
+        "参考代码：\n```cpp\nint lowerBound(const vector<int>& a, int t) {\n  int lo=0, hi=a.size();\n  while (lo<hi) { int mid=(lo+hi)/2; if (a[mid]>=t) hi=mid; else lo=mid+1; }\n  return lo;\n}\nint upperBound(const vector<int>& a, int t) {\n  int lo=0, hi=a.size();\n  while (lo<hi) { int mid=(lo+hi)/2; if (a[mid]<=t) lo=mid+1; else hi=mid; }\n  return lo;\n}\n```",
+        "first=lowerBound(A,2)=1；last=upperBound(A,2)−1=4−1=3。",
+        "若 first==n 或 A[first]!=target，返回 [-1,-1]；空数组同样返回 [-1,-1]。"
+      ],
+      "key_points": [
+        "左边界用 >= 收缩 high；右边界用 <= 推进 low。",
+        "用半开区间 [lo,hi) 避免死循环。",
+        "最后要检查 first 是否越界或值不等。"
+      ],
+      "common_errors": [
+        "两次二分都用 A[mid]==target 就返回，得到任意一个重复位置。",
+        "边界更新写成 lo=mid 导致死循环。",
+        "忘记检查 target 不存在。"
+      ],
+      "scope": "408 数据结构·折半查找；非降序数组，允许重复元素。",
+      "verification": {
+        "method": "boundary_search_simulator",
+        "result": "PASS",
+        "detail": "A={1,2,2,2,3,4,5}, target=2 → first=1,last=3；不存在返回 [-1,-1]。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "8192+100",
+          "value": "8292"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-0eef-q1",
+      "kp_code": "cs408.co.topic.0eeff5219603",
+      "title": "基址寻址与间接寻址的 effective address",
+      "skill_tags": [
+        "寻址方式",
+        "有效地址",
+        "间接寻址"
+      ],
+      "objective": "检验基址+偏移、一次间接寻址的有效地址与操作数计算。",
+      "stem": "某机字长 16 位，按字节编址。指令 `LOAD R1, 100(R2)` 中 R2=2000H；内存 M[2064H]=1234H，M[1234H]=5678H。\n\n(1) 求直接基址寻址的有效地址与 R1 的值；\n(2) 若改为 `LOAD R1, @100(R2)`（一次间接），求有效地址与 R1 的值；\n(3) 两种方式各访问几次内存（不含取指）？",
+      "answer": "(1) EA=2064H，R1=1234H；(2) EA1=2064H，EA2=1234H，R1=5678H；(3) 直接 1 次，间接 2 次。",
+      "final_value": "EA 2064H；间接 R1=5678H",
+      "solution_steps": [
+        "基址寻址 EA=R2+100H=2000H+64H=2064H。",
+        "直接方式取 M[2064H]=1234H 送入 R1。",
+        "间接方式先算 EA1=2064H，再取 M[2064H]=1234H 作为最终地址 EA2，取 M[1234H]=5678H 送入 R1。",
+        "直接方式 1 次数据访存；间接方式 2 次（先取地址，再取操作数）。"
+      ],
+      "key_points": [
+        "有效地址=基址+位移。",
+        "@ 表示一次间接，需再访存一次。",
+        "取指访问不计入数据访存。"
+      ],
+      "common_errors": [
+        "把 100 当成十进制 100 而不是 64H。",
+        "间接方式只取一次内存。",
+        "把 EA 与操作数混淆。"
+      ],
+      "scope": "408 计算机组成原理·寻址方式；16 位地址、按字节编址、一次间接。",
+      "verification": {
+        "method": "addressing_calculator",
+        "result": "PASS",
+        "detail": "2000H+64H=2064H；直接 R1=1234H；间接 R1=5678H；访存 1/2 次。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "4096+4-512",
+          "value": "3588"
+        },
+        {
+          "expression": "4096+4+256",
+          "value": "4356"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-0eef-q2",
+      "kp_code": "cs408.co.topic.0eeff5219603",
+      "title": "PC 相对寻址的分支目标计算",
+      "skill_tags": [
+        "PC 相对寻址",
+        "分支目标",
+        "偏移"
+      ],
+      "objective": "在同一知识点内加入 PC 相对寻址：明确 PC 指向下一条指令，正确计算正/负偏移目标。",
+      "stem": "某机指令长 4 字节，按字节编址。分支指令位于地址 1000H，取指后 PC 指向下一条指令。\n\n(1) 偏移字段为 FE00H（16 位补码），求分支目标地址；\n(2) 偏移字段为 0100H，求目标地址；\n(3) 若误把 PC 当成当前指令地址，结果会偏多少？",
+      "answer": "(1) 1000H+4−512=0E04H；(2) 1000H+4+256=1104H；(3) 偏 4 字节。",
+      "final_value": "0E04H；1104H",
+      "solution_steps": [
+        "FE00H 作为 16 位补码 = −512（十进制）。",
+        "目标 = PC + 偏移 = (1000H+4) + (−512) = 1004H − 200H = 0E04H。",
+        "0100H=+256；目标 = 1004H+100H=1104H。",
+        "若把 PC 当成 1000H，会少加指令长度 4，目标偏 4 字节。"
+      ],
+      "key_points": [
+        "PC 相对寻址的基准是下一条指令地址。",
+        "16 位偏移要按补码解释。",
+        "指令长度影响目标。"
+      ],
+      "common_errors": [
+        "用当前指令地址 1000H 作基准。",
+        "把 FE00H 当成无符号 65024。",
+        "忘记指令长 4 字节。"
+      ],
+      "scope": "408 计算机组成原理·寻址方式；16 位偏移、4 字节指令、按字节编址。",
+      "verification": {
+        "method": "branch_target_calculator",
+        "result": "PASS",
+        "detail": "1000H+4−512=0E04H；1000H+4+256=1104H；误用当前 PC 偏 4 字节。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "basic",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "os-a280-q1",
+      "kp_code": "cs408.os.topic.a28022393ec2",
+      "title": "哲学家进餐的非对称拿叉方案",
+      "skill_tags": [
+        "哲学家进餐",
+        "死锁",
+        "信号量"
+      ],
+      "objective": "检验用非对称拿叉破坏循环等待，并分析是否仍可能饥饿。",
+      "stem": "5 位哲学家围坐圆桌，每两人之间一把叉子，共 5 把。哲学家需要同时拿起左右两把叉才能进餐。\n\n(1) 给出信号量定义与初值；\n(2) 采用“奇数号先拿左叉、偶数号先拿右叉”的非对称策略，写出伪代码；\n(3) 证明该策略不会发生死锁；\n(4) 是否会发生饥饿？说明理由。",
+      "answer": "fork[0..4]=1。奇数先 wait(fork[i]) 再 wait(fork[(i+1)%5])；偶数先右后左。不会死锁：5 人同时拿第一把叉时，至少一人能拿到第二把（相邻两人不会同时各持一把等待对方）。可能饥饿：信号量按 FIFO 时一般不会，但若释放后竞争不确定，理论上可能长期抢不到。",
+      "final_value": "非对称拿叉破坏循环等待，不会死锁",
+      "solution_steps": [
+        "定义 semaphore fork[5]，初值全为 1；哲学家 i 的左叉 fork[i]、右叉 fork[(i+1)%5]。",
+        "奇数 i：wait(fork[i]); wait(fork[(i+1)%5]); 进餐; signal 两把。偶数 i：先 wait 右叉，再 wait 左叉。",
+        "死锁需要 5 人各持一把叉并等待另一把，形成环。非对称策略下，若 5 人同时各拿第一把，则 0/2/4 号拿右叉，1/3 号拿左叉；相邻两人不可能同时各持一把并互相等待（例如 0 持右叉等左叉，1 持左叉等右叉，但 0 的右叉正是 1 的左叉，已被 1 持有，0 会阻塞；实际至少有一人能拿齐两把）。更严格地，按“资源有序分配”看，奇数与偶数的拿叉顺序不同，破坏了全局循环等待。",
+        "不会出现所有哲学家都持一把等待另一把的闭环，因此无死锁。",
+        "饥饿：若叉子释放后被其他哲学家反复抢到，某个哲学家可能长期等待；信号量若采用 FIFO 唤醒，通常可避免，但题目未规定公平性，理论上不能排除饥饿。"
+      ],
+      "key_points": [
+        "死锁四个必要条件之一：循环等待。",
+        "非对称拿叉破坏循环等待。",
+        "无死锁不等于无饥饿。"
+      ],
+      "common_errors": [
+        "5 人同时拿左叉，形成环。",
+        "认为非对称策略一定无饥饿。",
+        "signal 顺序写错导致叉子未释放。"
+      ],
+      "scope": "408 操作系统·经典同步；5 位哲学家、5 把叉、信号量初值 1。",
+      "verification": {
+        "method": "deadlock_state_analysis",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "非对称顺序破坏循环等待；未规定 FIFO 时不能断言无饥饿。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "os-a280-q2",
+      "kp_code": "cs408.os.topic.a28022393ec2",
+      "title": "睡眠理发师的信号量同步",
+      "skill_tags": [
+        "睡眠理发师",
+        "信号量",
+        "同步"
+      ],
+      "objective": "在同一知识点内加入睡眠理发师：设置顾客/理发师/互斥信号量，分析阻塞与唤醒。",
+      "stem": "理发店有 1 位理发师、N 把等待椅。没有顾客时理发师睡觉；顾客到来时若椅子未满则坐下等待，否则离开。\n\n(1) 给出信号量及初值；\n(2) 写出理发师与顾客的伪代码；\n(3) 说明为什么不会死锁；\n(4) 若 N=0（没有等待椅），语义如何变化？",
+      "answer": "customers=0（等待顾客数）、barber=0（理发师就绪）、mutex=1（保护 waiting）。顾客：wait(mutex); if waiting<N { waiting++; signal(customers); signal(mutex); wait(barber); } else { signal(mutex); 离开; }。理发师：wait(customers); wait(mutex); waiting--; signal(barber); signal(mutex); 理发。无死锁：信号量顺序一致，理发师不会持锁睡眠。N=0 时顾客必须立即理发，否则离开。",
+      "final_value": "customers/barber/mutex；无死锁",
+      "solution_steps": [
+        "semaphore customers=0, barber=0, mutex=1; int waiting=0。",
+        "顾客：wait(mutex)；若 waiting<N，waiting++，signal(customers)，signal(mutex)，wait(barber)，接受理发；否则 signal(mutex) 后离开。",
+        "理发师：wait(customers)（无顾客则睡眠）；wait(mutex)；waiting--；signal(barber) 唤醒一位顾客；signal(mutex)；理发。",
+        "不会死锁：理发师在 wait(customers) 时不持有 mutex；顾客在 wait(barber) 时也不持有 mutex；临界区只保护 waiting。",
+        "N=0 时 waiting<N 永不成立，顾客不等待直接离开；只有理发师空闲且立即被 signal 的顾客能理发。"
+      ],
+      "key_points": [
+        "customers 表示等待顾客数，barber 表示理发师就绪。",
+        "mutex 只保护 waiting，不在持锁时睡眠。",
+        "signal(customers) 与 wait(barber) 配对。"
+      ],
+      "common_errors": [
+        "理发师持 mutex 睡觉，顾客无法进入。",
+        "顾客先 wait(barber) 再 signal(customers)，顺序颠倒。",
+        "waiting 不减导致椅子假满。"
+      ],
+      "scope": "408 操作系统·经典同步；1 理发师、N 把等待椅、信号量 FIFO 唤醒假设。",
+      "verification": {
+        "method": "semaphore_state_analysis",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "临界区不包含睡眠；顾客/理发师信号量配对正确；N=0 语义清晰。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "2*4000*4",
+          "value": "32000"
+        },
+        {
+          "expression": "10**3",
+          "value": "1000"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-e09a-q1",
+      "kp_code": "cs408.cn.topic.e09a336289ea",
+      "title": "奈奎斯特与香农容量对比（4 kHz，16 电平）",
+      "skill_tags": [
+        "奈奎斯特",
+        "香农",
+        "信道容量"
+      ],
+      "objective": "检验在给定带宽、电平数和 SNR 下分别计算奈奎斯特速率与香农容量，并判断瓶颈。",
+      "stem": "某信道带宽 4 kHz，采用 16 电平调制，信噪比 30 dB。\n\n(1) 求奈奎斯特最大符号率与数据率；\n(2) 求香农信道容量；\n(3) 该信道实际可达到的最大数据率是多少？为什么？\n(4) 若想把数据率提高到 40 kbps，至少需要什么条件？",
+      "answer": "(1) 符号率 8 kbaud，数据率 32 kbps；(2) 30 dB→SNR=1000，C=4000 log2(1001)≈39.87 kbps；(3) 16 电平时受奈奎斯特限制为 32 kbps；(4) 增加电平数（需更高 SNR）或增加带宽。",
+      "final_value": "32 kbps；香农 39.87 kbps",
+      "solution_steps": [
+        "奈奎斯特：符号率 ≤2B=8 kbaud；16 电平每符号 4 bit，数据率 8k×4=32 kbps。",
+        "30 dB 对应 SNR=10^(30/10)=1000；香农 C=B log2(1+SNR)=4000×log2(1001)≈39.87 kbps。",
+        "16 电平方案的数据率 32 kbps 小于香农上限 39.87 kbps，因此瓶颈是奈奎斯特/电平数，实际最大 32 kbps。",
+        "要达 40 kbps，可增加电平数（如 32 电平，8k×5=40 kbps，但需要更高 SNR 支撑）或增加带宽。"
+      ],
+      "key_points": [
+        "奈奎斯特：2B log2 M。",
+        "香农：B log2(1+S/N)。",
+        "30 dB = 1000 倍功率比。",
+        "实际速率取奈奎斯特与香农的较小者。"
+      ],
+      "common_errors": [
+        "把 30 dB 当成 30 倍 SNR。",
+        "符号率算成 4 kbaud。",
+        "直接用香农 39.87 kbps 作为 16 电平的实际速率。"
+      ],
+      "scope": "408 计算机网络·物理层；理想低通信道、16 电平、SNR 30 dB。",
+      "verification": {
+        "method": "nyquist_shannon_calculator",
+        "result": "PASS",
+        "detail": "2B log2 16=32 kbps；C=4000 log2 1001≈39.87 kbps；实际 32 kbps。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "10**2",
+          "value": "100"
+        },
+        {
+          "expression": "2*3000",
+          "value": "6000"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-e09a-q2",
+      "kp_code": "cs408.cn.topic.e09a336289ea",
+      "title": "电话信道达到 56 kbps 所需的 SNR",
+      "skill_tags": [
+        "香农定理",
+        "SNR",
+        "信道容量"
+      ],
+      "objective": "在同一知识点内反向使用香农公式：由目标速率求所需 SNR，并判断电话信道是否可行。",
+      "stem": "某电话信道带宽 3 kHz，当前信噪比 20 dB。\n\n(1) 求香农容量；\n(2) 求奈奎斯特 2B 的符号率上限；\n(3) 若要在该 3 kHz 信道上达到 56 kbps，按香农公式至少需要多少 SNR（dB）？\n(4) 说明实际电话调制解调器为什么不能只靠提高 SNR 达到 56 kbps。",
+      "answer": "(1) 20 dB→SNR=100，C=3000 log2(101)≈19.97 kbps；(2) 6 kbaud；(3) 56 kbps 需 2^(56/3)≈416k 倍，SNR≈56.2 dB；(4) 电话信道带宽/SNR 受限，且实际还有噪声、串扰、滤波，不能仅靠提高 SNR。",
+      "final_value": "C≈19.97 kbps；需 SNR≈56.2 dB",
+      "solution_steps": [
+        "20 dB→SNR=100；C=3000×log2(101)≈19.97 kbps。",
+        "奈奎斯特符号率上限 2B=6 kbaud；每符号需 log2 M 位。",
+        "由 56000=3000 log2(1+SNR) 得 log2(1+SNR)=18.667，1+SNR=2^18.667≈416000，SNR≈56.2 dB。",
+        "电话信道实际带宽约 3 kHz、SNR 通常 20–30 dB，且存在非线性、串扰；56 kbps 需要更宽带宽或更好的线路条件，不能只靠提高 SNR。"
+      ],
+      "key_points": [
+        "香农公式反解 SNR。",
+        "20 dB=100。",
+        "56 kbps 在 3 kHz 上需要极高 SNR。"
+      ],
+      "common_errors": [
+        "把 56 kbps 直接除以 3 kHz 得 18.67 bit/Hz 后当成 SNR。",
+        "把 20 dB 当成 20 倍。",
+        "忘记 1+SNR 中的 1。"
+      ],
+      "scope": "408 计算机网络·物理层；3 kHz 理想信道、香农公式、无编码增益。",
+      "verification": {
+        "method": "shannon_calculator",
+        "result": "PASS",
+        "detail": "C≈19.97 kbps；56 kbps 需 SNR≈56.2 dB。"
+      }
+    }
+  ]
+}

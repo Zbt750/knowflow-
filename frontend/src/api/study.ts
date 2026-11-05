@@ -1,0 +1,133 @@
+import { api } from "./client";
+export function recordPracticeActivity(id:string,kind:'viewed'|'started'|'skipped'|'left',key:string):Promise<{event_id:string;kind:string}> {
+  return api.post(`/api/practice-items/${id}/activity`,{kind,idempotency_key:key});
+}
+export function createPracticeRetry(id: string, key: string): Promise<import('../types/practice').PlanItemView> {
+  return api.post(`/api/practice-items/${id}/retries`, {idempotency_key:key});
+}
+export function fetchPracticeRetry(id: string): Promise<import('../types/practice').PlanItemView> {
+  return api.get(`/api/practice-items/${id}/retry`);
+}
+import type { components } from "./types";
+export type ProcessReview = components["schemas"]["ProcessReviewResponse"];
+export interface ProcessReviewState {
+  result: ProcessReview | null; busy: boolean; error: string; kind: string;
+  loaded: boolean; previous: string; requestKey: string;
+  photoDraft: string;
+}
+export function createProcessReviewState(): ProcessReviewState {
+  return { result: null, busy: false, error: "", kind: "concept", loaded: false, previous: "", requestKey: "", photoDraft: "" };
+}
+export function fetchLatestProcessReview(itemId: string): Promise<ProcessReview | null> {
+  return api.get(`/api/practice-items/${itemId}/process-reviews/latest`);
+}
+export function reviewProcess(itemId: string, text: string, key: string, kind?: string): Promise<ProcessReview> {
+  return api.post(`/api/practice-items/${itemId}/process-reviews`, {
+    work_text: text, idempotency_key: key, subjective_kind: kind ?? null,
+  });
+}
+import type {
+  AssessmentResponse,
+  AnswerSubmissionResponse,
+  KnowledgeLessonResponse,
+  KnowledgeNodeDetail,
+  KnowledgeTreeResponse,
+  NodeSelfAssessmentResponse,
+  PracticeItemAnswer,
+  SelfGrade,
+  TodayResponse,
+} from "../types/practice";
+
+export function fetchToday(): Promise<TodayResponse> {
+  return api.get<TodayResponse>("/api/plans/today");
+}
+export function fetchTodayRecommendations(): Promise<import('../types/practice').TodaySetup> {
+  return api.get('/api/plans/today/recommendations');
+}
+
+export function generateTodayPlan(
+  selectedKpIds: string[],
+  budget: string = "standard",
+  confirmLegacySetTransitionIds: string[] = [],
+  extendExisting = false,
+): Promise<TodayResponse> {
+  return api.post<TodayResponse>("/api/plans/today/generate", {
+    selected_kp_ids: selectedKpIds,
+    ...(extendExisting ? { extend_existing: true } : {}),
+    confirm_legacy_set_transition_ids: confirmLegacySetTransitionIds,
+    // 时间预算决定卷子长度；后端按每道题的 estimated_minutes 裁剪。
+    budget,
+  });
+}
+
+export function appendQuestions(planId: string, questionIds: string[]): Promise<TodayResponse> {
+  return api.post<TodayResponse>(`/api/plans/${planId}/questions`, {
+    question_ids: questionIds,
+  });
+}
+
+export function appendExamReferencesToday(referenceIds: string[]): Promise<TodayResponse> {
+  return api.post<TodayResponse>("/api/plans/today/exam-references", {
+    reference_ids: referenceIds,
+  });
+}
+
+export function fetchAnswer(itemId: string): Promise<PracticeItemAnswer> {
+  // 纯读取：做题前后都可以调用，不影响掌握度与毕业。
+  return api.get<PracticeItemAnswer>(`/api/practice-items/${itemId}/answer`);
+}
+
+export function revealAnswer(itemId: string): Promise<PracticeItemAnswer> {
+  return api.post<PracticeItemAnswer>(`/api/practice-items/${itemId}/answer-reveal`, {});
+}
+
+export function fetchAnswerHistory(itemId: string): Promise<components["schemas"]["AnswerSubmissionHistory"]> {
+  return api.get(`/api/practice-items/${itemId}/answer-submissions`);
+}
+
+export function submitAnswer(itemId: string, key: string, rawAnswer?: string, selectedOption?: string, confidence?: string, previousAttemptId?: string): Promise<AnswerSubmissionResponse> {
+  return api.post<AnswerSubmissionResponse>(`/api/practice-items/${itemId}/answer-submissions`, {
+    idempotency_key: key, raw_answer: rawAnswer ?? null, selected_option: selectedOption ?? null,
+    confidence: confidence || null,
+    expected_previous_attempt_id: previousAttemptId ?? null,
+  });
+}
+
+export function submitSelfAssessment(
+  itemId: string,
+  selfGrade: SelfGrade,
+  idempotencyKey: string,
+  rawAnswer?: string,
+  selectedOption?: string,
+): Promise<AssessmentResponse> {
+  return api.post<AssessmentResponse>(`/api/practice-items/${itemId}/self-assessments`, {
+    self_grade: selfGrade,
+    idempotency_key: idempotencyKey,
+    raw_answer: rawAnswer ?? null,
+    // 只在选择题上填写；服务端据此写 objective_result，但它不参与毕业判定。
+    selected_option: selectedOption ?? null,
+  });
+}
+
+export function fetchKnowledgeTree(signal?: AbortSignal): Promise<KnowledgeTreeResponse> {
+  return api.get<KnowledgeTreeResponse>("/api/knowledge/tree", signal);
+}
+
+export function fetchKnowledgeNode(kpId: string, signal?: AbortSignal): Promise<KnowledgeNodeDetail> {
+  return api.get<KnowledgeNodeDetail>(`/api/knowledge/${kpId}`, signal);
+}
+
+export function fetchKnowledgeLesson(code: string): Promise<KnowledgeLessonResponse> {
+  return api.get<KnowledgeLessonResponse>("/api/knowledge/lessons/" + encodeURIComponent(code));
+}
+
+export function submitNodeSelfAssessment(
+  kpId: string,
+  selfGrade: "mastered" | "partial" | "not_mastered",
+  idempotencyKey: string,
+): Promise<NodeSelfAssessmentResponse> {
+  return api.post<NodeSelfAssessmentResponse>(`/api/knowledge/${kpId}/self-assessment`, {
+    self_grade: selfGrade,
+    idempotency_key: idempotencyKey,
+  });
+}

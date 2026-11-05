@@ -1,0 +1,33 @@
+{
+  "stem": "设 $S(x)=\\sum_{n=1}^{\\infty}\\frac{n^2+1}{n}x^{n}$。\n(1) 求 $S(x)$ 的收敛域；\n(2) 在收敛域内求 $S(x)$ 的初等函数表达式。",
+  "question_type": "calculation",
+  "options": null,
+  "correct_answer": "收敛域为 $[-1,1)$；在 $(-1,1)$ 内 $S(x)=\\dfrac{x(1+x)}{(1-x)^3}+\\dfrac{x}{1-x}+\\ln(1-x)$，端点 $x=-1$ 时 $S(-1)=-\\dfrac32-\\ln 2$。",
+  "explanation": "记 $a_n=\\frac{n^2+1}{n}$，则 $a_n=n+\\frac1n\\sim n$，故幂级数 $\\sum a_nx^n$ 的收敛半径 $R=1$。考察端点：$x=1$ 时通项 $n+\\frac1n\\to\\infty$，发散；$x=-1$ 时为 $\\sum(-1)^n\\left(n+\\frac1n\\right)$，其中 $\\sum(-1)^nn$ 发散但由莱布尼茨判别法可判部分和不对应收敛，逐项看 $\\sum(-1)^n n$ 与 $\\sum\\frac{(-1)^n}{n}$ 分别处理会涉及条件，先分拆为 $\\sum n(-1)^n+\\sum\\frac{(-1)^n}{n}$，前者通项不趋于0而发散，后者收敛，故整体发散。故收敛域为 $(-1,1)$ 与 $x=-1$ 处需重新判断，实际上 $\\sum(-1)^nn$ 通项不趋于0，故 $-1$ 处发散。因此收敛域为 $(-1,1)$。\n在 $(-1,1)$ 内，由 $\\sum_{n=1}^{\\infty}nx^n=\\frac{x}{(1-x)^2}$ 及求导得 $\\sum n^2x^n=x\\frac{d}{dx}\\frac{x}{(1-x)^2}=\\frac{x(1+x)}{(1-x)^3}$；又 $\\sum\\frac{x^n}{n}=-\\ln(1-x)$。故 $S(x)=\\frac{x(1+x)}{(1-x)^3}-\\ln(1-x)$。注意系数为 $n+1/n$，即 $S(x)=\\sum n x^n+\\sum x^n/n=\\frac{x(1+x)}{(1-x)^3}-\\ln(1-x)$。",
+  "final_value": "$S(x)=\\dfrac{x(1+x)}{(1-x)^3}-\\ln(1-x)$，$x\\in(-1,1)$。",
+  "steps": [
+    {
+      "expression": "\\sum_{n=1}^{\\infty}nx^n",
+      "value": "\\frac{x}{(1-x)^2},\\ |x|<1"
+    },
+    {
+      "expression": "\\sum_{n=1}^{\\infty}n^2x^n",
+      "value": "\\frac{x(1+x)}{(1-x)^3},\\ |x|<1"
+    },
+    {
+      "expression": "\\sum_{n=1}^{\\infty}\\frac{x^n}{n}",
+      "value": "-\\ln(1-x),\\ |x|<1"
+    }
+  ],
+  "difficulty_assessment": {
+    "estimated_level": "hard",
+    "relative_change": "harder",
+    "reason": "在原题一次多项式系数求和基础上引入分母与二次多项式系数，需分解系数、组合导数与积分方法并单独判断端点收敛性。",
+    "mechanisms": [
+      "knowledge_depth",
+      "reasoning_steps",
+      "method_combination",
+      "parameter_structure"
+    ]
+  }
+}

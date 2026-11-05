@@ -1,0 +1,130 @@
+{
+  "phase": "Phase 5 Product Acceptance",
+  "date": "2026-10-15",
+  "status": "PHASE5_PRODUCT_ACCEPTANCE_INCOMPLETE",
+  "live_database": {
+    "access_mode": "read_only",
+    "identity": {
+      "host": "127.0.0.1",
+      "port": 5433,
+      "database": "kaoyan",
+      "postgresql_version": "18.4",
+      "system_identifier": "7686825087296682120",
+      "alembic_revision": "f54c8a1d7e20"
+    },
+    "counts_readable_by_business_role": {
+      "questions": 1935,
+      "attempts": 28,
+      "learning_events": 29,
+      "kp_states": 284,
+      "daily_plans": 10,
+      "practice_items": 87
+    },
+    "sync_report_baseline": {
+      "question_versions": 2322,
+      "current_formal_review_events": 1804,
+      "active_v3_sets": 253,
+      "active_v3_members": 1804
+    },
+    "writes_performed": false,
+    "limitations": [
+      "QuestionVersion, formal review event and v3 set tables were not independently queryable by the business role due to SELECT permissions.",
+      "An initial read-only query used a stale table name for the set table; it failed before modifying data."
+    ]
+  },
+  "environment": {
+    "python": "3.12.10",
+    "node": "24.18.0",
+    "npm": "11.16.0",
+    "postgresql": "18.4",
+    "browser": "Google Chrome",
+    "docker_daemon_available": false,
+    "docker_compose_config_syntax": "passed",
+    "deploy_static_check": "passed",
+    "docker_compose_up_executed": false,
+    "real_model_calls": 0
+  },
+  "backend_pytest": {
+    "command": "python -m pytest",
+    "database": "isolated PostgreSQL on port 59241",
+    "database_name": "phase5_product_acceptance_final_20261014_test",
+    "total_reported_items": 2674,
+    "passed": 2597,
+    "failed": 69,
+    "errors": 6,
+    "skipped": 2,
+    "exit_code": 1,
+    "log": "storage/quality-audits/phase5-product-acceptance-20261014/pytest-final-elevated/pytest.log",
+    "notes": [
+      "A prior full run had 73 failures, 2593 passed and 6 errors; the final elevated run avoided Windows sandbox filesystem false failures and is the reported result.",
+      "Desktop ZIP backup suite was separately rerun against an isolated database: 15 passed.",
+      "Six agent_learning_journey integration cases errored in the full-run log because plan snapshot creation failed before the response could expose task_id. Current code fingerprints the bound QuestionVersion, but targeted confirmation could not run: the disposable PG harness reported desktop_postgres_start_failed; a second owner-verified test cluster failed to start accepting connections, performed PostgreSQL startup fsync/recovery, then shut down normally after a fast-shutdown request. Neither run reached pytest or executed test SQL. The second attempt appended startup/recovery/shutdown lines to storage/quality-audits/phase45i-agent-real-20261010/run-06/postgres.log; a newly initialized, stopped temp cluster remains at tmp/managed-test-clusters/kaoyan-phase45e-anicxstx."
+    ]
+  },
+  "frontend": {
+    "commands": [
+      "npm run typecheck",
+      "npm run test:unit",
+      "npm run build"
+    ],
+    "typecheck": "passed",
+    "unit_test_files_passed": 21,
+    "unit_tests_passed": 89,
+    "unit_tests_failed": 0,
+    "production_build": "passed",
+    "notes": [
+      "Typecheck, unit tests and build passed; unit/build initially hit Windows sandbox native realpath EPERM and passed on elevated rerun."
+    ]
+  },
+  "browser_e2e": {
+    "command": "npx playwright test",
+    "browser": "system Google Chrome",
+    "database": "isolated PostgreSQL on port 59241",
+    "provider": "OfflineProvider (no paid/model network calls)",
+    "expected": 219,
+    "passed": 207,
+    "failed": 7,
+    "skipped": 5,
+    "flaky": 0,
+    "duration_human": "16.8 minutes (rounded by Playwright)",
+    "earlier_full_run_report": {
+      "path": "storage/quality-audits/phase5-product-acceptance-20261014/e2e-report.json",
+      "counts": {"passed": 144, "failed": 70, "skipped": 5},
+      "note": "This is an earlier run, not the latest full-suite result."
+    },
+    "latest_full_run_log": "storage/quality-audits/phase5-product-acceptance-20261014/e2e-final-run.log",
+    "targeted_reruns_after_fixes": {
+      "chat_spec": {"passed": 12, "failed": 0, "skipped": 1},
+      "history_spec": {"passed": 4, "failed": 0, "skipped": 0},
+      "state_matrix_spec": {"passed": 29, "failed": 0, "skipped": 0},
+      "combined_passed": 45,
+      "combined_failed": 0,
+      "combined_skipped": 1,
+      "full_suite_rerun": false,
+      "evidence_dirs": [
+        "eval/reports/phase5-fix-chat-elevated-20261014",
+        "eval/reports/phase5-fix-history3-20261014",
+        "eval/reports/phase5-fix-state3-20261014"
+      ]
+    },
+    "failure_clusters": {
+      "latest_full_run_failed_tests": 7,
+      "targeted_browser_specs_rerun": 3
+    },
+    "observed_issue": "The latest full suite had 7 failures and was not rerun after fixes. The targeted chat/history/state-matrix reruns passed 45 tests and skipped 1 offline attribution case. Study-plan flows still require a full run with current QuestionVersion, formal-review eligibility, and v3 set bindings."
+  },
+  "rag": {
+    "local_embedding_model": "BAAI/bge-small-zh-v1.5",
+    "test_materials": 3,
+    "indexed_chunks": 19,
+    "upload_parse_index_search_rebuild": "partially passed in browser E2E",
+    "citation_and_delete_behavior": "not fully accepted; full end-to-end suite contains failures"
+  },
+  "security": {
+    "live_database_migrations": 0,
+    "live_database_writes": 0,
+    "historical_learning_data_mutations": 0,
+    "paid_model_requests": 0,
+    "git_commit_push_reset_clean": false
+  }
+}

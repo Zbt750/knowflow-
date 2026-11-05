@@ -1,0 +1,562 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-cs40803",
+  "created_at": "2026-10-18T21:20:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "408 第三批：邻接表/BFS/对齐与大小端/缓冲区/网络性能。"
+  },
+  "items": [
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "2*5",
+          "value": "10"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "ds-0eb5-q1",
+      "kp_code": "cs408.ds.topic.0eb5ea0549e9",
+      "title": "无向图邻接表的建立与遍历",
+      "skill_tags": [
+        "邻接表",
+        "图的遍历"
+      ],
+      "objective": "检验由边集建立邻接表、读出度数与 BFS/DFS 顺序。",
+      "stem": "无向图 G 的顶点为 A,B,C,D,E，边为 A-B、A-C、B-D、C-D、D-E。\n\n(1) 画出邻接表；(2) 求各顶点度数与边结点总数；(3) 从 A 出发按字母序写出 BFS 与 DFS 序列。",
+      "answer": "邻接表：A:B,C；B:A,D；C:A,D；D:B,C,E；E:D。度数 2,2,2,3,1；边结点 10。BFS A,B,C,D,E；DFS A,B,D,C,E。",
+      "final_value": "BFS A,B,C,D,E；DFS A,B,D,C,E",
+      "solution_steps": [
+        "每个顶点一个表头，边 (u,v) 在 u、v 的表各插入一个结点。",
+        "A: B,C；B: A,D；C: A,D；D: B,C,E；E: D。",
+        "度数=表长：2,2,2,3,1；无向图边结点=2e=10。",
+        "BFS：A 入队；出 A 访问 B,C；出 B 访问 D；出 C 的 D 已访问；出 D 访问 E；序列 A,B,C,D,E。",
+        "DFS：A→B→D→C（A 已访问）→E；回溯后 A→C 已访问；序列 A,B,D,C,E。"
+      ],
+      "key_points": [
+        "邻接表空间 O(n+e)。",
+        "无向图每条边存两次。",
+        "遍历顺序依赖邻接点顺序。"
+      ],
+      "common_errors": [
+        "无向图边结点只算 e。",
+        "DFS 写成 A,B,D,E,C（忽略字母序）。",
+        "度数用入度/出度混淆。"
+      ],
+      "scope": "408 数据结构·图；无向图、按字母序访问邻接点。",
+      "verification": {
+        "method": "graph_simulator",
+        "result": "PASS",
+        "detail": "邻接表与 BFS/DFS 顺序由参考程序核对。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 15,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "ds-0eb5-q2",
+      "kp_code": "cs408.ds.topic.0eb5ea0549e9",
+      "title": "邻接表与邻接矩阵的转换和空间比较",
+      "skill_tags": [
+        "邻接表",
+        "邻接矩阵",
+        "空间复杂度"
+      ],
+      "objective": "在同一知识点内比较两种存储并完成转换，检验对稠密/稀疏图取舍的理解。",
+      "stem": "仍使用上一题的无向图（5 个顶点、5 条边）。\n\n(1) 写出邻接矩阵；(2) 比较邻接表与邻接矩阵的空间开销；(3) 说明稠密图应选哪种存储并说明理由；(4) 给出由邻接表转邻接矩阵的算法与复杂度。",
+      "answer": "矩阵为 5×5 对称 0/1 矩阵；邻接表 5+10=15 个结点，矩阵 25 个元素；稠密图矩阵更省指针开销；转换 O(n+e)。",
+      "final_value": "邻接表 15，矩阵 25；转换 O(n+e)",
+      "solution_steps": [
+        "邻接矩阵 A[i][j]=1 当且仅当有边：A-B,A-C,B-D,C-D,D-E 对称置 1，其余 0。",
+        "邻接表：5 个表头+10 个边结点=15；邻接矩阵：25 个元素。",
+        "稀疏图邻接表省空间；稠密图 e≈n² 时矩阵无指针开销、访问 O(1)，更合适。",
+        "转换：初始化 n×n 零矩阵；遍历每个顶点的链表，对每个邻接点置 1；时间 O(n+e)，空间 O(n²)。"
+      ],
+      "key_points": [
+        "无向图矩阵对称。",
+        "邻接表空间 O(n+e)，矩阵 O(n²)。",
+        "稠密图矩阵更紧凑。"
+      ],
+      "common_errors": [
+        "矩阵只置一个方向。",
+        "把边结点数算成 e。",
+        "转换复杂度写成 O(n²)。"
+      ],
+      "scope": "408 数据结构·图；无向图、n=5、e=5。",
+      "verification": {
+        "method": "matrix_conversion",
+        "result": "PASS",
+        "detail": "矩阵对称；邻接表 15 vs 矩阵 25；转换 O(n+e)。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1+1+1",
+          "value": "3"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "ds-525f-q1",
+      "kp_code": "cs408.ds.topic.525fc6e99b95",
+      "title": "BFS 求无权图最短路径",
+      "skill_tags": [
+        "BFS",
+        "最短路径",
+        "层次"
+      ],
+      "objective": "检验 BFS 层次扩展与最短路径长度，记录队列状态。",
+      "stem": "无向图顶点 A–E，边 A-B、A-C、B-D、C-D、D-E。从 A 出发做 BFS。\n\n(1) 写出队列变化与访问序列；(2) 求 A 到 E 的最短距离；(3) 给出两条不同的最短路径。",
+      "answer": "访问序列 A,B,C,D,E；A 到 E 距离 3；路径 A-B-D-E 与 A-C-D-E。",
+      "final_value": "距离 3",
+      "solution_steps": [
+        "队列初始 [A]，dist[A]=0。",
+        "出 A，访问 B,C，dist=1，队列 [B,C]。",
+        "出 B，访问 D，dist[D]=2，队列 [C,D]。",
+        "出 C，D 已访问；出 D，访问 E，dist[E]=3。",
+        "访问序列 A,B,C,D,E；A→E 距离 3；两条路径 A-B-D-E、A-C-D-E。"
+      ],
+      "key_points": [
+        "BFS 第一次访问即最短距离。",
+        "dist[v]=dist[u]+1。",
+        "队列 FIFO 保证层次顺序。"
+      ],
+      "common_errors": [
+        "用 DFS 求最短路径。",
+        "距离按边数+1 算成 4。",
+        "重复入队未访问标记。"
+      ],
+      "scope": "408 数据结构·图；无权无向图，BFS。",
+      "verification": {
+        "method": "bfs_simulator",
+        "result": "PASS",
+        "detail": "dist[E]=3；路径 A-B-D-E、A-C-D-E。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "ds-525f-q2",
+      "kp_code": "cs408.ds.topic.525fc6e99b95",
+      "title": "BFS 染色判定二分图",
+      "skill_tags": [
+        "BFS",
+        "二分图",
+        "染色"
+      ],
+      "objective": "在同一知识点内用 BFS 染色判定二分图，并识别奇环冲突。",
+      "stem": "(1) 对上一题的无向图做 BFS 二染色，写出各顶点颜色并判断是否为二分图；\n(2) 若加入边 B-C，图是否还是二分图？说明 BFS 染色会在哪一步冲突；\n(3) 给出判定二分图的算法与复杂度。",
+      "answer": "(1) 是二分图；A 红，B/C 蓝，D 红，E 蓝。\n(2) 加入 B-C 后出现三角形 A-B-C-A，不是二分图；B、C 同色（蓝）时边 B-C 冲突。\n(3) BFS 染色，未染色赋反色，遇同色边则非二分图；O(n+e)。",
+      "final_value": "原图是二分图；加 B-C 后不是",
+      "solution_steps": [
+        "从 A 染红；B、C 染蓝；D 与 B/C 相邻染红；E 与 D 相邻染蓝。",
+        "检查所有边两端异色，故原图二分。",
+        "加入 B-C 后 A-B-C-A 形成奇环；B、C 都为蓝，边 B-C 两端同色，染色冲突。",
+        "算法：对每个未染色顶点 BFS，起点染 0，邻居染 1；若邻居已染且颜色相同，返回 false；复杂度 O(n+e)。"
+      ],
+      "key_points": [
+        "二分图 ⇔ 无奇环。",
+        "BFS 染色冲突即非二分图。",
+        "每个顶点/边访问一次。"
+      ],
+      "common_errors": [
+        "只检查一条边就下结论。",
+        "把 B、C 染成不同色导致后续矛盾。",
+        "忘记处理非连通分量。"
+      ],
+      "scope": "408 数据结构·图；无向图、BFS 二染色。",
+      "verification": {
+        "method": "bipartite_simulator",
+        "result": "PASS",
+        "detail": "原图二分；加 B-C 出现奇环，B/C 同色冲突。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1+3+4+2+2",
+          "value": "12"
+        },
+        {
+          "expression": "4+2+1+1",
+          "value": "8"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-236e-q1",
+      "kp_code": "cs408.co.topic.236ea41712f9",
+      "title": "结构体对齐与 sizeof 计算",
+      "skill_tags": [
+        "数据对齐",
+        "sizeof",
+        "内存布局"
+      ],
+      "objective": "检验 32 位系统下 char/int/short 结构体的偏移、填充与总大小。",
+      "stem": "32 位系统，默认对齐。结构体 `struct S { char a; int b; short c; };`\n\n(1) 写出各成员偏移；(2) 求 sizeof(S)；(3) 若调整为 `int b; short c; char a;`，求 sizeof(S)。",
+      "answer": "(1) a=0,b=4,c=8；(2) 12；(3) 8。",
+      "final_value": "12；重排后 8",
+      "solution_steps": [
+        "char 占 1 字节，int 需 4 字节对齐，故 a 后填充 3 字节，b 从偏移 4 开始。",
+        "b 占 4–7；short 需 2 字节对齐，c 从 8 开始占 8–9；结构体总大小需为最大对齐 4 的倍数，补到 12。",
+        "重排 int(0–3)、short(4–5)、char(6)，补 1 字节到 8。"
+      ],
+      "key_points": [
+        "成员按自身对齐要求放置。",
+        "结构体总大小是最大对齐的倍数。",
+        "重排可减少填充。"
+      ],
+      "common_errors": [
+        "直接 1+4+2=7。",
+        "忘记结构体尾部填充。",
+        "认为 short 从 5 开始。"
+      ],
+      "scope": "408 计算机组成原理·数据对齐；32 位、默认对齐、无 pack。",
+      "verification": {
+        "method": "layout_calculator",
+        "result": "PASS",
+        "detail": "原布局偏移 0/4/8，大小 12；重排大小 8。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "0x12*256+0x34",
+          "value": "4660"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-236e-q2",
+      "kp_code": "cs408.co.topic.236ea41712f9",
+      "title": "大小端与多字节数据存放",
+      "skill_tags": [
+        "大小端",
+        "字节序",
+        "内存"
+      ],
+      "objective": "在同一知识点内判断 32 位整数在大端/小端下的字节序列，并解释网络字节序。",
+      "stem": "32 位整数 x=12345678H 存放在地址 1000H 起。\n\n(1) 写出大端方式的 4 个字节（地址 1000–1003）；(2) 写出小端方式的 4 个字节；(3) 网络字节序采用哪种？为什么？\n(4) 若从地址 1000H 读到一个 16 位值 0x1234，在小端下这两个字节是什么？",
+      "answer": "(1) 12 34 56 78；(2) 78 56 34 12；(3) 大端，保证跨平台一致；(4) 34 12。",
+      "final_value": "大端 12 34 56 78；小端 78 56 34 12",
+      "solution_steps": [
+        "大端：高位字节存低地址，依次 12,34,56,78。",
+        "小端：低位字节存低地址，依次 78,56,34,12。",
+        "网络字节序为大端，避免不同主机字节序解释不一致。",
+        "16 位 0x1234 小端存放为 34 12（低字节 34 在低地址）。"
+      ],
+      "key_points": [
+        "大端=高位在低地址。",
+        "小端=低位在低地址。",
+        "网络字节序=大端。"
+      ],
+      "common_errors": [
+        "大小端写反。",
+        "认为网络字节序是小端。",
+        "16 位值按 32 位顺序写。"
+      ],
+      "scope": "408 计算机组成原理·大小端；32 位整数、按字节编址。",
+      "verification": {
+        "method": "endian_calculator",
+        "result": "PASS",
+        "detail": "0x12345678 大端 12 34 56 78，小端 78 56 34 12；网络序大端。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "4*1.5",
+          "value": "6"
+        },
+        {
+          "expression": "1+3*1+0.5",
+          "value": "4.5"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "os-4daa-q1",
+      "kp_code": "cs408.os.topic.4daa9addd7e4",
+      "title": "单缓冲与双缓冲的块处理时间",
+      "skill_tags": [
+        "缓冲区",
+        "单缓冲",
+        "双缓冲"
+      ],
+      "objective": "检验单缓冲串行与双缓冲重叠的时间计算。",
+      "stem": "磁盘读一个块需 1 ms，CPU 处理一个块需 0.5 ms。处理 4 个块。\n\n(1) 单缓冲的总时间；(2) 双缓冲的总时间（假设先读入第一块，处理与读入可重叠）；(3) 双缓冲相对单缓冲节省多少时间？",
+      "answer": "单缓冲 6 ms；双缓冲 4.5 ms；节省 1.5 ms（25%）。",
+      "final_value": "单 6 ms，双 4.5 ms",
+      "solution_steps": [
+        "单缓冲：每块必须“读 1 ms + 处理 0.5 ms”串行，4 块 4×1.5=6 ms。",
+        "双缓冲：第 1 块读 1 ms；之后每块处理 0.5 ms 与下一块读 1 ms 重叠，瓶颈是读 1 ms；总时间 =1 + 3×1 + 0.5=4.5 ms。",
+        "节省 6−4.5=1.5 ms，占 25%。"
+      ],
+      "key_points": [
+        "单缓冲不能重叠读与处理。",
+        "双缓冲流水线总时间=首块读+（n−1）×max+末块处理。",
+        "瓶颈是较慢的一侧。"
+      ],
+      "common_errors": [
+        "双缓冲也算 4×1.5。",
+        "忘记最后一块的处理时间。",
+        "把 0.5 ms 当成瓶颈。"
+      ],
+      "scope": "408 操作系统·设备管理；单生产者、单缓冲/双缓冲、忽略切换开销。",
+      "verification": {
+        "method": "buffer_timing",
+        "result": "PASS",
+        "detail": "单 6 ms；双 1+3×1+0.5=4.5 ms。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1+3*1+0.5",
+          "value": "4.5"
+        },
+        {
+          "expression": "4/4.5",
+          "value": "8/9"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "os-4daa-q2",
+      "kp_code": "cs408.os.topic.4daa9addd7e4",
+      "title": "多缓冲池的吞吐分析",
+      "skill_tags": [
+        "缓冲池",
+        "流水线",
+        "吞吐"
+      ],
+      "objective": "在同一知识点内分析 3 个缓冲区的流水线吞吐，判断增加缓冲区是否继续提升。",
+      "stem": "同上，磁盘 1 ms/块、CPU 0.5 ms/块，现有 3 个缓冲区。\n\n(1) 处理 4 个块的总时间；(2) 平均每块时间与吞吐率；(3) 再增加到 10 个缓冲区，吞吐是否提升？说明理由。",
+      "answer": "总时间 4.5 ms（与双缓冲相同）；平均 1.125 ms/块；吞吐约 0.889 块/ms；增加到 10 个缓冲区不提升，因为瓶颈是磁盘 1 ms/块。",
+      "final_value": "4.5 ms；吞吐 0.889 块/ms",
+      "solution_steps": [
+        "3 个缓冲区足以让读与处理重叠；首块读 1 ms，之后每块 1 ms 读、0.5 ms 处理重叠，末块处理 0.5 ms。",
+        "总时间 =1+3×1+0.5=4.5 ms。",
+        "平均 4.5/4=1.125 ms/块；吞吐 4/4.5≈0.889 块/ms。",
+        "继续加缓冲区不能超过磁盘 1 ms/块的瓶颈，吞吐上限 1 块/ms；只有提高磁盘速度或并行读才能提升。"
+      ],
+      "key_points": [
+        "缓冲区数量超过“够重叠”后不再提升。",
+        "吞吐由瓶颈设备决定。",
+        "首块和末块有填充/排空开销。"
+      ],
+      "common_errors": [
+        "认为缓冲区越多吞吐越高。",
+        "把总时间算成 4×1。",
+        "忽略末块处理。"
+      ],
+      "scope": "408 操作系统·缓冲管理；单磁盘、单 CPU、理想重叠。",
+      "verification": {
+        "method": "pipeline_timing",
+        "result": "PASS",
+        "detail": "总 4.5 ms；平均 1.125 ms/块；吞吐 0.889 块/ms，上限 1 块/ms。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "100*20",
+          "value": "2000"
+        },
+        {
+          "expression": "64000*8/0.02",
+          "value": "25600000"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-658f-q1",
+      "kp_code": "cs408.cn.topic.658f7cffbc1f",
+      "title": "带宽时延积与窗口利用率",
+      "skill_tags": [
+        "带宽时延积",
+        "吞吐",
+        "窗口"
+      ],
+      "objective": "检验 BDP、窗口限制吞吐与利用率的计算。",
+      "stem": "一条链路速率 100 Mbps，RTT=20 ms，发送窗口 64 KB（1 KB=1000 B 便于计算）。\n\n(1) 求带宽时延积（bit 与 Byte）；(2) 求窗口限制下的最大吞吐；(3) 求链路利用率；(4) 要填满链路，窗口至少多大？",
+      "answer": "BDP=2 Mbit=250 KB；吞吐=64 KB/20 ms=25.6 Mbps；利用率 25.6%；需 250 KB 窗口。",
+      "final_value": "BDP 250 KB；吞吐 25.6 Mbps",
+      "solution_steps": [
+        "BDP=100 Mbps×20 ms=100×10^6×0.02=2×10^6 bit=2 Mbit；按 1 KB=1000 B 得 250 KB。",
+        "窗口 64 KB=64,000 B=512,000 bit；吞吐=512,000/0.02=25.6 Mbps。",
+        "利用率=25.6/100=25.6%。",
+        "填满链路需窗口=BDP=250 KB。"
+      ],
+      "key_points": [
+        "BDP=速率×RTT。",
+        "窗口限制吞吐=窗口/RTT。",
+        "要满利用率窗口≥BDP。"
+      ],
+      "common_errors": [
+        "RTT 用单向时延。",
+        "单位 KB/bit 混用。",
+        "认为窗口 64 KB 就能填满 100 Mbps。"
+      ],
+      "scope": "408 计算机网络·性能指标；1 KB=1000 B，RTT 已给出，忽略协议开销。",
+      "verification": {
+        "method": "bdp_calculator",
+        "result": "PASS",
+        "detail": "BDP=2 Mbit=250 KB；64 KB/20 ms=25.6 Mbps；利用率 25.6%。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1000*0.04",
+          "value": "40"
+        },
+        {
+          "expression": "8/0.04",
+          "value": "200"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "cn-658f-q2",
+      "kp_code": "cs408.cn.topic.658f7cffbc1f",
+      "title": "1 Gbps 链路的窗口与吞吐",
+      "skill_tags": [
+        "带宽时延积",
+        "吞吐",
+        "长肥管道"
+      ],
+      "objective": "在同一知识点内计算 1 Gbps/40 ms 链路的 BDP，分析 1 MB 窗口的吞吐和填满条件。",
+      "stem": "链路速率 1 Gbps，RTT=40 ms，窗口 1 MB（1 MB=10^6 B）。\n\n(1) 求 BDP（bit 与 MB）；(2) 求窗口限制吞吐；(3) 求利用率；(4) 若要把利用率提高到 80%，窗口至少多大？",
+      "answer": "BDP=40 Mbit=5 MB；吞吐=1 MB/40 ms=200 Mbps；利用率 20%；80% 需 4 MB 窗口（按 BDP 80%）。",
+      "final_value": "BDP 5 MB；吞吐 200 Mbps",
+      "solution_steps": [
+        "BDP=1 Gbps×40 ms=40 Mbit=5 MB（10^6 B）。",
+        "窗口 1 MB=8 Mbit；吞吐=8 Mbit/0.04 s=200 Mbps。",
+        "利用率=200/1000=20%。",
+        "80% 利用率需吞吐 800 Mbps，窗口=800 Mbps×0.04=32 Mbit=4 MB。"
+      ],
+      "key_points": [
+        "BDP=5 MB。",
+        "吞吐=窗口/RTT。",
+        "长肥管道需要大窗口。"
+      ],
+      "common_errors": [
+        "把 1 MB 当成 1 Mbit。",
+        "RTT 用 20 ms。",
+        "80% 窗口算成 5 MB。"
+      ],
+      "scope": "408 计算机网络·性能指标；1 MB=10^6 B，忽略协议开销。",
+      "verification": {
+        "method": "bdp_calculator",
+        "result": "PASS",
+        "detail": "BDP=40 Mbit=5 MB；1 MB 窗口吞吐 200 Mbps；80% 需 4 MB。"
+      }
+    }
+  ]
+}

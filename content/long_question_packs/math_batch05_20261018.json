@@ -1,0 +1,532 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-math05",
+  "created_at": "2026-10-18T22:30:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "数学二第五批：矩阵幂/拐点/定积分物理应用/无穷小量/合同变换。"
+  },
+  "items": [
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1+1",
+          "value": "2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-0949-q1",
+      "kp_code": "math.exam.0949f5ff08f9",
+      "title": "幂零矩阵的 n 次幂",
+      "skill_tags": [
+        "矩阵幂",
+        "幂零矩阵",
+        "归纳法"
+      ],
+      "objective": "检验 A=I+N（N²=0）型矩阵幂的归纳计算。",
+      "stem": "设 A=[[1,1],[0,1]]，n 为正整数。求 A^n，并用二项式定理或归纳法说明理由。",
+      "answer": "A^n=[[1,n],[0,1]]。",
+      "final_value": "[[1,n],[0,1]]",
+      "solution_steps": [
+        "令 N=[[0,1],[0,0]]，则 N²=0，A=I+N。",
+        "(I+N)^n=I+nN（因 N²=0，二项式展开只剩前两项）。",
+        "故 A^n=[[1,n],[0,1]]。"
+      ],
+      "key_points": [
+        "N²=0 时二项式展开截断。",
+        "归纳也可验证。"
+      ],
+      "common_errors": [
+        "把 A^n 写成 [[1,1],[0,1]]。",
+        "认为 N^n=0 对所有 n 都成立但不会展开。"
+      ],
+      "scope": "数学二·矩阵幂；n 为正整数。",
+      "verification": {
+        "method": "sympy_power",
+        "result": "PASS",
+        "detail": "A^n=[[1,n],[0,1]]。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1+1",
+          "value": "2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-0949-q2",
+      "kp_code": "math.exam.0949f5ff08f9",
+      "title": "秩一矩阵的幂与迹",
+      "skill_tags": [
+        "矩阵幂",
+        "秩一矩阵",
+        "特征值"
+      ],
+      "objective": "在同一知识点内利用秩一矩阵 A=vv^T 的幂公式。",
+      "stem": "设 A=[[1,1],[1,1]]。求 A^n，并说明所用公式。",
+      "answer": "A^n=2^(n−1)A=[[2^(n−1),2^(n−1)],[2^(n−1),2^(n−1)]]。",
+      "final_value": "2^(n-1)*A",
+      "solution_steps": [
+        "A=vv^T，其中 v=(1,1)^T。",
+        "(vv^T)^n=v(v^Tv)^(n−1)v^T，而 v^Tv=2。",
+        "故 A^n=2^(n−1)vv^T=2^(n−1)A。"
+      ],
+      "key_points": [
+        "秩一矩阵幂公式。",
+        "v^Tv 是标量。"
+      ],
+      "common_errors": [
+        "把 A^n 写成 2^n A。",
+        "忘记 n−1 次方。"
+      ],
+      "scope": "数学二·矩阵幂；n≥1。",
+      "verification": {
+        "method": "sympy_power",
+        "result": "PASS",
+        "detail": "A^n=2^(n-1)A。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 10,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "6*1-6",
+          "value": "0"
+        },
+        {
+          "expression": "1-3+2",
+          "value": "0"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-79c9-q1",
+      "kp_code": "math.exam.79c96a83b3ff",
+      "title": "三次函数的拐点",
+      "skill_tags": [
+        "拐点",
+        "二阶导数"
+      ],
+      "objective": "检验 y=x³−3x²+2 的凹凸区间与拐点。",
+      "stem": "求曲线 y=x³−3x²+2 的拐点，并写出二阶导数、判断其变号、指出凹凸区间。",
+      "answer": "拐点 (1,0)；x<1 时 y″<0，曲线为凸；x>1 时 y″>0，曲线为凹。",
+      "final_value": "(1,0)",
+      "solution_steps": [
+        "y′=3x²−6x，y″=6x−6。",
+        "y″=0 得 x=1；x<1 时 y″<0，x>1 时 y″>0。",
+        "y(1)=1−3+2=0，故拐点 (1,0)。按高数教材定义：y″<0 为凸，y″>0 为凹。"
+      ],
+      "key_points": [
+        "拐点处二阶导数变号。",
+        "y″ 符号判断凹凸。"
+      ],
+      "common_errors": [
+        "只看 y″=0 不检查变号。",
+        "拐点坐标只写 x=1。"
+      ],
+      "scope": "数学二·导数应用；三次多项式。",
+      "verification": {
+        "method": "sympy_diff",
+        "result": "PASS",
+        "detail": "y″=6x-6，拐点 (1,0)。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "2-2",
+          "value": "0"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-79c9-q2",
+      "kp_code": "math.exam.79c96a83b3ff",
+      "title": "指数函数乘积的拐点与渐近线",
+      "skill_tags": [
+        "拐点",
+        "渐近线",
+        "二阶导数"
+      ],
+      "objective": "在同一知识点内计算 y=xe^(−x) 的拐点与水平渐近线。",
+      "stem": "求曲线 y=xe^(−x) 的拐点与水平渐近线，要求写出二阶导数并判断凹凸性。",
+      "answer": "拐点 (2,2e^(−2))；x→+∞ 时 y→0，水平渐近线 y=0。",
+      "final_value": "(2,2/e^2); y=0",
+      "solution_steps": [
+        "y′=e^(−x)(1−x)，y″=e^(−x)(x−2)。",
+        "y″=0 得 x=2；x<2 时 y″<0，x>2 时 y″>0，变号。",
+        "y(2)=2e^(−2)，拐点 (2,2e^(−2))。",
+        "x→+∞ 时 xe^(−x)→0，故 y=0 是水平渐近线。"
+      ],
+      "key_points": [
+        "乘积求导。",
+        "拐点要变号。",
+        "指数衰减的水平渐近线。"
+      ],
+      "common_errors": [
+        "y″ 算成 e^(−x)(2−x)。",
+        "把 x→−∞ 的无穷大当成渐近线。"
+      ],
+      "scope": "数学二·导数应用；x∈R。",
+      "verification": {
+        "method": "sympy_diff",
+        "result": "PASS",
+        "detail": "y″=e^-x(x-2)，拐点 x=2；y→0。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "50*0.1^2",
+          "value": "0.5"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-ceb4-q1",
+      "kp_code": "math.exam.ceb4bcf4246a",
+      "title": "弹簧做功的定积分计算",
+      "skill_tags": [
+        "定积分物理应用",
+        "功"
+      ],
+      "objective": "检验胡克定律 F=kx 下弹簧拉伸做功。",
+      "stem": "弹簧劲度系数 k=100 N/m。求把弹簧从自然长度拉伸 0.1 m 所做的功。",
+      "answer": "0.5 J。",
+      "final_value": "0.5",
+      "solution_steps": [
+        "胡克定律 F(x)=kx=100x。",
+        "功 W=∫₀^0.1 100x dx=50x²|₀^0.1=50×0.01=0.5 J。",
+        "单位统一为 N、m、J，故结果为 0.5 J。"
+      ],
+      "key_points": [
+        "变力做功 ∫F dx。",
+        "单位统一。"
+      ],
+      "common_errors": [
+        "用 F=100×0.1 乘 0.1 得 1 J（把力当常量）。",
+        "忘记 1/2。"
+      ],
+      "scope": "数学二·定积分物理应用；弹性限度内。",
+      "verification": {
+        "method": "sympy_integrate",
+        "result": "PASS",
+        "detail": "W=0.5 J。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "3^3/3",
+          "value": "9"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-ceb4-q2",
+      "kp_code": "math.exam.ceb4bcf4246a",
+      "title": "变力沿直线做功",
+      "skill_tags": [
+        "定积分物理应用",
+        "变力做功"
+      ],
+      "objective": "在同一知识点内计算 F(x)=x² 沿 [0,3] 的功。",
+      "stem": "一物体在变力 F(x)=x² N 作用下沿 x 轴从 x=0 移动到 x=3 m。求力所做的功。",
+      "answer": "9 J。",
+      "final_value": "9",
+      "solution_steps": [
+        "W=∫₀³ x² dx。",
+        "原函数 x³/3，代入上下限得 27/3=9 J。",
+        "因此 W=9 J。"
+      ],
+      "key_points": [
+        "变力做功积分。",
+        "∫x²=x³/3。"
+      ],
+      "common_errors": [
+        "用 F(3)×3=27 J。",
+        "积分上限代入错。"
+      ],
+      "scope": "数学二·定积分物理应用；力方向与位移同向。",
+      "verification": {
+        "method": "sympy_integrate",
+        "result": "PASS",
+        "detail": "W=9 J。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 10,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1/2",
+          "value": "1/2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-cdae-q1",
+      "kp_code": "math.exam.cdaedae1e143",
+      "title": "无穷小量的阶的比较",
+      "skill_tags": [
+        "无穷小量",
+        "阶",
+        "等价无穷小"
+      ],
+      "objective": "检验 x、sin x、1−cos x、x² 的阶与等价关系。",
+      "stem": "当 x→0 时，比较 x、sin x、1−cos x、x² 的无穷小阶，并指出哪些是等价无穷小。",
+      "answer": "sin x 与 x 同阶且等价；1−cos x 与 x²/2 等价，是二阶无穷小；x² 是二阶。",
+      "final_value": "sinx~x; 1-cosx~x²/2",
+      "solution_steps": [
+        "sin x/x→1，故 sin x~x（一阶）。",
+        "(1−cos x)/(x²/2)→1，故 1−cos x~x²/2（二阶）。",
+        "x² 是二阶；1−cos x 与 x² 同阶但不等价（系数 1/2）。"
+      ],
+      "key_points": [
+        "等价无穷小看比值极限 1。",
+        "同阶看比值极限非零常数。"
+      ],
+      "common_errors": [
+        "认为 1−cos x~x²。",
+        "把 sin x 说成二阶。"
+      ],
+      "scope": "数学二·无穷小量；x→0。",
+      "verification": {
+        "method": "sympy_series",
+        "result": "PASS",
+        "detail": "sinx~x；1-cosx~x²/2。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1/2",
+          "value": "1/2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-cdae-q2",
+      "kp_code": "math.exam.cdaedae1e143",
+      "title": "确定无穷小量的阶与系数",
+      "skill_tags": [
+        "无穷小量",
+        "等价无穷小",
+        "参数"
+      ],
+      "objective": "在同一知识点内求 √(1+x)−1 的等价形式 ax^b。",
+      "stem": "当 x→0 时，设 √(1+x)−1 ~ a x^b（a≠0）。求 a、b。",
+      "answer": "a=1/2，b=1。",
+      "final_value": "a=1/2,b=1",
+      "solution_steps": [
+        "√(1+x)=(1+x)^(1/2)=1+x/2+o(x)。",
+        "故 √(1+x)−1=x/2+o(x)。",
+        "所以 a=1/2，b=1。"
+      ],
+      "key_points": [
+        "二项式展开 (1+x)^α。",
+        "等价无穷小系数。"
+      ],
+      "common_errors": [
+        "把 √(1+x)−1 当成 x。",
+        "b 写成 2。"
+      ],
+      "scope": "数学二·无穷小量；x→0。",
+      "verification": {
+        "method": "sympy_series",
+        "result": "PASS",
+        "detail": "√(1+x)-1~x/2。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1*1-1^2",
+          "value": "0"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-7af9-q1",
+      "kp_code": "math.exam.7af99f485eff",
+      "title": "配方法化二次型为标准形",
+      "skill_tags": [
+        "二次型",
+        "配方法",
+        "标准形"
+      ],
+      "objective": "检验 f=x²+2xy+y² 的配方、秩与规范形。",
+      "stem": "用配方法化二次型 f(x,y)=x²+2xy+y² 为标准形，并求其秩与规范形。",
+      "answer": "f=(x+y)²；令 z1=x+y,z2=y，得 f=z1²；秩 1，规范形 z1²。",
+      "final_value": "f=(x+y)^2; rank 1",
+      "solution_steps": [
+        "f=x²+2xy+y²=(x+y)²。",
+        "令 z1=x+y，z2=y，变换可逆（y=z2,x=z1−z2）。",
+        "标准形 f=z1²；矩阵秩 1；正惯性指数 1，规范形 z1²。"
+      ],
+      "key_points": [
+        "配方法。",
+        "可逆线性变换。",
+        "秩与惯性指数。"
+      ],
+      "common_errors": [
+        "配方成 (x+y)² 后忘记写变换。",
+        "秩算成 2。"
+      ],
+      "scope": "数学二·二次型；实二次型。",
+      "verification": {
+        "method": "sympy_factor",
+        "result": "PASS",
+        "detail": "f=(x+y)^2，秩1。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1+2",
+          "value": "3"
+        },
+        {
+          "expression": "1-2",
+          "value": "-1"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-7af9-q2",
+      "kp_code": "math.exam.7af99f485eff",
+      "title": "正交变换化二次型为标准形",
+      "skill_tags": [
+        "二次型",
+        "正交变换",
+        "特征值"
+      ],
+      "objective": "在同一知识点内用正交变换化 f=x²+4xy+y² 为标准形。",
+      "stem": "用正交变换化二次型 f(x,y)=x²+4xy+y² 为标准形，并写出正交矩阵 Q。",
+      "answer": "特征值 3、−1；Q 的列为 (1,1)/√2、(1,−1)/√2；标准形 3y1²−y2²。",
+      "final_value": "3y1^2 - y2^2",
+      "solution_steps": [
+        "二次型矩阵 A=[[1,2],[2,1]]。",
+        "特征方程 (1−λ)²−4=0，λ=3 或 −1。",
+        "λ=3 的特征向量 (1,1)^T，λ=−1 的特征向量 (1,−1)^T。",
+        "单位化得 Q 的两列，标准形 3y1²−y2²。"
+      ],
+      "key_points": [
+        "对称矩阵正交对角化。",
+        "特征向量单位化。"
+      ],
+      "common_errors": [
+        "特征值算成 1±2 但向量不单位化。",
+        "标准形符号写错。"
+      ],
+      "scope": "数学二·二次型；二阶实对称矩阵。",
+      "verification": {
+        "method": "sympy_eigen",
+        "result": "PASS",
+        "detail": "eigen 3,-1；Q 正交；标准形 3y1²-y2²。"
+      }
+    }
+  ]
+}

@@ -1,0 +1,148 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-api-20261018-candidate",
+  "created_at": "2026-10-18T22:54:00",
+  "authoring": {
+    "mode": "deepseek_api",
+    "model_calls": 0,
+    "real_model_called": true,
+    "note": "candidate"
+  },
+  "items": [
+    {
+      "slug": "api-cs408-ds-topic-56a82ba8b1ba-q1",
+      "kp_code": "cs408.ds.topic.56a82ba8b1ba",
+      "title": "先序与中序构造二叉树及非递归先序栈模拟",
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 15,
+      "role": "basic",
+      "skill_tags": [
+        "先序遍历",
+        "中序遍历",
+        "后序遍历",
+        "非递归遍历",
+        "栈模拟"
+      ],
+      "objective": "考查由先序序列和中序序列唯一确定二叉树，并能结合非递归先序遍历过程分析栈内元素变化与先序序号。",
+      "stem": "已知一棵二叉树的先序序列为 A,B,D,H,I,E,J,C,F,G，中序序列为 H,D,I,B,J,E,A,F,C,G，约定所有结点值互不相同。回答下列问题：(1) 构造该二叉树，并写出它的后序序列；(2) 采用如下非递归先序遍历算法：先将根结点入栈；每次弹出栈顶结点并访问，然后依次将右孩子、左孩子（若存在）压入栈中。求遍历全过程中栈内元素个数的最大值；(3) 求先序序列中第7个结点，并写出结点 J 的先序序号（从1开始计）。",
+      "answer": "(1) 由先序首元素 A 知根为 A；在中序中 A 左侧 H,D,I,B,J,E 构成左子树，右侧 F,C,G 构成右子树。左子树先序为 B,D,H,I,E,J，中序为 H,D,I,B,J,E，根为 B；其中 D 为左子树根，E 为右子树根，依此类推可构造出：A 的左孩子为 B，右孩子为 C；B 的左孩子为 D，右孩子为 E；D 的左孩子为 H，右孩子为 I；E 的左孩子为 J，右孩子为空；C 的左孩子为 F，右孩子为 G；其余为空。该树后序序列为 H,I,D,J,E,B,F,G,C,A，即 HIDJEBFGCA。(2) 模拟栈变化：初始 [A]，大小1；访问 A 后压入 C、B，栈 [B,C]，大小2；访问 B 后压入 E、D，栈 [D,E,C]，大小3；访问 D 后压入 I、H，栈 [H,I,E,C]，大小4；以后依次出栈访问，栈大小不会超过4。因此栈内元素个数最大值为4。(3) 先序序列 A,B,D,H,I,E,J,C,F,G 中第7个结点为 J，结点 J 的先序序号为7。",
+      "final_value": "后序序列为 H I D J E B F G C A；栈内元素个数最大值为 4；先序第7个结点为 J，J 的先序序号为 7。",
+      "solution_steps": [
+        "由先序序列确定根结点，再由中序序列划分左右子树，递归构造出整棵二叉树。",
+        "对构造出的二叉树按“左子树—右子树—根”的顺序求后序序列，得到 H I D J E B F G C A。",
+        "按指定非递归算法逐步模拟：压栈时先右后左，记录每一步栈中元素个数，最大值出现在访问 D 后，栈为 [H,I,E,C]，大小为 4。",
+        "直接读取先序序列第7项，得到 J，并确认其序号为 7。"
+      ],
+      "key_points": [
+        "先序序列的第一个结点是根结点",
+        "中序序列中根结点左侧为左子树、右侧为右子树",
+        "非递归先序遍历压栈顺序为先右孩子后左孩子",
+        "后序遍历顺序为左、右、根"
+      ],
+      "common_errors": [
+        "把非递归先序遍历的压栈顺序写成先左后右，导致栈内最大深度变化",
+        "由先序和中序划分左右子树时边界计算错误",
+        "把后序序列误写成先序序列的逆序或左右子树顺序颠倒"
+      ],
+      "scope": "结点值互不相同的二叉树；栈容量按栈内元素个数计算；先序序号从1开始。",
+      "verification_steps": [
+        {
+          "expression": "len('HIDJEBFGCA')",
+          "value": "10"
+        },
+        {
+          "expression": "max([1,2,3,4,3,2,2,1,2,1])",
+          "value": "4"
+        },
+        {
+          "expression": "['A','B','D','H','I','E','J','C','F','G'].index('J')+1",
+          "value": "7"
+        }
+      ],
+      "verification": {
+        "method": "Python 序列长度校验与栈模拟",
+        "result": "PASS",
+        "detail": "后序序列长度为10，与结点数一致；模拟栈大小序列最大值为4；J在先序序列中的下标为6，从1起序号为7。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "source": "ai_generated_original",
+      "identity_label": "原创题",
+      "reference_program": "",
+      "reference_output": ""
+    },
+    {
+      "slug": "api-cs408-ds-topic-56a82ba8b1ba-q2",
+      "kp_code": "cs408.ds.topic.56a82ba8b1ba",
+      "title": "前序线索二叉树的前驱后继判定",
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 12,
+      "role": "comprehensive",
+      "skill_tags": [
+        "前序遍历",
+        "前序线索二叉树",
+        "前驱与后继",
+        "线索判定"
+      ],
+      "objective": "考查前序线索化的次序含义，能根据二叉树结构填写指定结点的前驱、后继，并给出 O(1) 查找前序后继的分情况规则。",
+      "stem": "一棵二叉树的结点值互不相同，结构描述为：根结点为 A；A 的左孩子为 B，右孩子为 C；B 的左孩子为 D，右孩子为 E；C 的左孩子为 F，右孩子为 G；D 的右孩子为 H，左孩子为空；E 的左孩子为 I，右孩子为空；H、I、F、G 均为叶子结点。对该二叉树按前序次序进行前序线索化，约定：结点左指针为空时指向其前序前驱，右指针为空时指向其前序后继。回答：(1) 写出该树的前序序列；(2) 分别写出结点 D、H、I、G 的前序前驱和前序后继，不存在时写 NULL；(3) 在前序线索二叉树中，给定任意结点 p，如何用 O(1) 时间找到 p 的前序后继？请结合左、右线索标志分情况说明。",
+      "answer": "(1) 前序序列为 A,B,D,H,E,I,C,F,G。(2) 按前序序列 A,B,D,H,E,I,C,F,G 判断：D 的前驱为 B，后继为 H；H 的前驱为 D，后继为 E；I 的前驱为 E，后继为 C；G 的前驱为 F，后继为 NULL。(3) 设结点 p 的左、右线索标志分别为 ltag、rtag，ltag=0 表示左指针指向左孩子，ltag=1 表示左指针为前驱线索；rtag=0 表示右指针指向右孩子，rtag=1 表示右指针为后继线索。前序后继按如下规则 O(1) 求得：若 ltag=0，则 p 有左孩子，前序后继为 p->lchild；否则若 rtag=0，则 p 有右孩子，前序后继为 p->rchild；否则 p 的右指针为后继线索，前序后继为 p->rchild（可能为 NULL）。",
+      "final_value": "前序序列：A B D H E I C F G；D:(前驱B,后继H)，H:(前驱D,后继E)，I:(前驱E,后继C)，G:(前驱F,后继NULL)；前序后继规则：有左孩子取左孩子，否则有右孩子取右孩子，否则取右线索。",
+      "solution_steps": [
+        "按“根—左子树—右子树”的顺序遍历，得到前序序列 A,B,D,H,E,I,C,F,G。",
+        "在前序序列中定位各结点：D 前一项为 B、后一项为 H；H 前一项为 D、后一项为 E；I 前一项为 E、后一项为 C；G 为最后一项，故后继为 NULL，前驱为 F。",
+        "前序线索化后，若结点有左孩子，则前序后继必为左孩子；否则若有右孩子，则为右孩子；否则右空指针已被线索化为后继。"
+      ],
+      "key_points": [
+        "前序遍历顺序为根、左、右",
+        "前序线索化中空左指针指向前序前驱，空右指针指向前序后继",
+        "查找前序后继优先看左孩子，再看右孩子，最后沿右线索"
+      ],
+      "common_errors": [
+        "把前序线索与中序线索混淆，错误地优先考虑右线索",
+        "忽略“有左孩子时前序后继一定是左孩子”这一性质",
+        "将叶子结点 G 的后继误写为 NULL 以外的结点"
+      ],
+      "scope": "采用二叉链表存储且进行前序线索化的二叉树；线索标志约定为 ltag/rtag=1 表示线索；结点值互不相同。",
+      "verification_steps": [
+        {
+          "expression": "'A B D H E I C F G'.split().index('H') + 1",
+          "value": "4"
+        },
+        {
+          "expression": "'A B D H E I C F G'.split().index('C') + 1",
+          "value": "7"
+        },
+        {
+          "expression": "len('A B D H E I C F G'.split()) - 1",
+          "value": "8"
+        }
+      ],
+      "verification": {
+        "method": "前序序列下标计算",
+        "result": "PASS",
+        "detail": "H 在前序序列中序号为4，D 的序号为3，所以 D 的后继为 H；C 的序号为7，I 的序号为6，所以 I 的后继为 C；G 的0基下标为8，是最后结点，后继为 NULL。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "source": "ai_generated_original",
+      "identity_label": "原创题",
+      "reference_program": "",
+      "reference_output": ""
+    }
+  ]
+}

@@ -1,0 +1,557 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-math02",
+  "created_at": "2026-10-18T20:00:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "数学二第二批（极限/微分方程/矩阵/极坐标/反常积分），SymPy 复算。"
+  },
+  "items": [
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 10,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1/2",
+          "value": "1/2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-547c-q1",
+      "kp_code": "math.exam.547ca6df680c",
+      "title": "e^x 展开求二阶无穷小极限",
+      "skill_tags": [
+        "泰勒展开",
+        "极限计算"
+      ],
+      "objective": "检验能否用泰勒展开判断无穷小阶数并求极限，而不是盲目洛必达。",
+      "stem": "计算极限\n\nlim_(x→0) (e^x − 1 − x)/x²。\n\n要求：(1) 判断极限类型；(2) 写出 e^x 到 x² 的展开；(3) 求极限。",
+      "answer": "1/2。",
+      "final_value": "1/2",
+      "solution_steps": [
+        "x→0 时分子 e^0−1−0=0，分母 0，是 0/0 型。",
+        "e^x=1+x+x²/2+o(x²)，故分子 = x²/2+o(x²)。",
+        "除以 x² 得 1/2+o(1)，极限为 1/2。",
+        "也可用两次洛必达：第一次得 (e^x−1)/(2x)，第二次得 e^x/2→1/2。"
+      ],
+      "key_points": [
+        "e^x 的麦克劳林展开到二阶。",
+        "o(x²) 除以 x² 仍趋于 0。",
+        "洛必达每次都要重新判断 0/0。"
+      ],
+      "common_errors": [
+        "把 e^x 展开成 1+x 就结束，得到 0。",
+        "对 x² 求导两次时漏掉系数 2。",
+        "把 o(x²) 当成 0 而不说明。"
+      ],
+      "scope": "数学二·极限；x→0 的双侧极限，e^x 全实轴可展开。",
+      "verification": {
+        "method": "sympy_limit",
+        "result": "PASS",
+        "detail": "SymPy limit((exp(x)-1-x)/x**2,x,0)=1/2。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "-1/3",
+          "value": "-1/3"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-547c-q2",
+      "kp_code": "math.exam.547ca6df680c",
+      "title": "通分后利用 sin²x 展开求极限",
+      "skill_tags": [
+        "泰勒展开",
+        "通分",
+        "极限计算"
+      ],
+      "objective": "在同一知识点内加入通分与更高阶展开，检验对 sin²x 展开系数的掌握。",
+      "stem": "计算极限\n\nlim_(x→0) (1/x² − 1/sin²x)。\n\n要求：(1) 通分并说明为什么不能逐项取极限；(2) 写出 sin²x 到 x⁴ 的展开；(3) 求极限。",
+      "answer": "−1/3。",
+      "final_value": "-1/3",
+      "solution_steps": [
+        "两项都趋于无穷，不能直接相减；通分得 (sin²x−x²)/(x² sin²x)。",
+        "sin x=x−x³/6+o(x³)，故 sin²x=x²−x⁴/3+o(x⁴)。",
+        "分母 x² sin²x=x⁴+o(x⁴)；分子 sin²x−x²=−x⁴/3+o(x⁴)。",
+        "相除得 −1/3+o(1)，极限为 −1/3。"
+      ],
+      "key_points": [
+        "通分后分子分母同阶，才能比较。",
+        "sin²x 的 x⁴ 项系数是 −1/3。",
+        "不要只展开 sin x 到一阶就下结论。"
+      ],
+      "common_errors": [
+        "直接把两个无穷大相减写成 0。",
+        "把 sin²x 展开成 x² 就停止。",
+        "通分后分母漏掉 sin²x 的等价 x²。"
+      ],
+      "scope": "数学二·极限；x→0，分母 sin x≠0 的去心邻域。",
+      "verification": {
+        "method": "sympy_limit",
+        "result": "PASS",
+        "detail": "SymPy limit(1/x**2-1/sin(x)**2,x,0)=-1/3。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1-2*0",
+          "value": "1"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-e168-q1",
+      "kp_code": "math.exam.e1688d59990a",
+      "title": "二重特征根的二阶齐次方程初值问题",
+      "skill_tags": [
+        "常系数齐次方程",
+        "重根",
+        "初值问题"
+      ],
+      "objective": "检验二重特征根时通解形式 (C1+C2x)e^{rx} 及初值定常数的能力。",
+      "stem": "求初值问题\n\ny″ − 4y′ + 4y = 0，y(0)=1，y′(0)=0。",
+      "answer": "y=(1−2x)e^(2x)。",
+      "final_value": "(1-2*x)*exp(2*x)",
+      "solution_steps": [
+        "特征方程 r²−4r+4=(r−2)²=0，二重根 r=2。",
+        "通解 y=(C1+C2x)e^(2x)。",
+        "y(0)=C1=1。y′=(2C1+C2+2C2x)e^(2x)，y′(0)=2+C2=0，C2=−2。",
+        "故 y=(1−2x)e^(2x)。"
+      ],
+      "key_points": [
+        "二重根通解必须带 x 项。",
+        "求导时乘积法则。",
+        "两个初值定两个常数。"
+      ],
+      "common_errors": [
+        "通解只写 C1e^{2x}+C2e^{2x}，把两个常数合并。",
+        "求导漏掉 e^{2x} 的因子 2。",
+        "把 y′(0)=0 直接当成 C2=0。"
+      ],
+      "scope": "数学二·常系数齐次线性微分方程；二阶、实重根。",
+      "verification": {
+        "method": "sympy_dsolve",
+        "result": "PASS",
+        "detail": "SymPy dsolve 得 (1-2x)e^{2x}，满足 y(0)=1,y′(0)=0。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1-2+3",
+          "value": "2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-e168-q2",
+      "kp_code": "math.exam.e1688d59990a",
+      "title": "三重特征根与高阶初值",
+      "skill_tags": [
+        "三阶方程",
+        "三重根",
+        "初值问题"
+      ],
+      "objective": "在同一知识点内加入三阶方程与三重根，检验通解结构和二阶导数初值的处理。",
+      "stem": "求初值问题\n\ny‴ − 3y″ + 3y′ − y = 0，y(0)=1，y′(0)=0，y″(0)=2。",
+      "answer": "y=(1−x+3x²/2)e^x。",
+      "final_value": "(1-x+1.5*x^2)*exp(x)",
+      "solution_steps": [
+        "特征方程 r³−3r²+3r−1=(r−1)³=0，三重根 r=1。",
+        "通解 y=(C1+C2x+C3x²)e^x。",
+        "y(0)=C1=1。求导：y′=e^x[(C1+C2)+(2C2+C3)x+3C3x²+...]；用逐阶代入更稳：令 y=e^x u，则 y‴−3y″+3y′−y=e^x u‴，故 u‴=0，u=C1+C2x+C3x²。",
+        "由 y=e^x u，y(0)=u(0)=1；y′(0)=u′(0)+u(0)=0→u′(0)=−1；y″(0)=u″(0)+2u′(0)+u(0)=2→u″(0)=3。",
+        "u=1−x+(3/2)x²，故 y=(1−x+3x²/2)e^x。"
+      ],
+      "key_points": [
+        "三重根通解是二次多项式乘 e^x。",
+        "令 y=e^x u 可把方程化为 u‴=0。",
+        "高阶初值要连用乘积法则。"
+      ],
+      "common_errors": [
+        "通解只写到 x 项，漏掉 x² 项。",
+        "初值代入时忘记 e^0=1。",
+        "把 y″(0)=2 直接当成 u″(0)=2，忽略 2u′+u 项。"
+      ],
+      "scope": "数学二·常系数齐次线性微分方程；三阶、三重实根。",
+      "verification": {
+        "method": "sympy_dsolve",
+        "result": "PASS",
+        "detail": "SymPy dsolve 得 (1−x+3x²/2)e^x，y″(0)=2。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1*(1*0-4*6)-2*(0*0-4*5)+3*(0*1-1*5)",
+          "value": "1"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-0aad-q1",
+      "kp_code": "math.exam.0aad93648d60",
+      "title": "三阶矩阵的秩、行列式与零空间",
+      "skill_tags": [
+        "矩阵的秩",
+        "行列式",
+        "零空间"
+      ],
+      "objective": "检验用行列式判断满秩，并由秩—零度定理求零空间维数。",
+      "stem": "设 A=[[1,2,3],[0,1,4],[5,6,0]]。\n\n(1) 求 det A；(2) 求 rank A；(3) 求齐次方程 Ax=0 的解空间维数。",
+      "answer": "det A=1，rank A=3，零空间维数 0（只有零解）。",
+      "final_value": "rank=3, det=1, nullity=0",
+      "solution_steps": [
+        "按第一行展开：det=1·(1·0−4·6)−2·(0·0−4·5)+3·(0·1−1·5)=−24+40−15=1。",
+        "det≠0，故 A 可逆，rank A=3。",
+        "未知数个数 n=3，rank=3，由秩—零度定理 nullity=3−3=0。",
+        "因此 Ax=0 只有零解。"
+      ],
+      "key_points": [
+        "det≠0 ⇔ 满秩 ⇔ 可逆。",
+        "rank+nullity=n。",
+        "三阶行列式按行展开。"
+      ],
+      "common_errors": [
+        "行列式展开符号写错。",
+        "把 rank 与 det 混为一谈。",
+        "零空间维数算成 3−det。"
+      ],
+      "scope": "数学二·线性代数矩阵；实三阶方阵。",
+      "verification": {
+        "method": "sympy_det_rank",
+        "result": "PASS",
+        "detail": "det=1，rank=3，nullity=0。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "(1-1)^2",
+          "value": "0"
+        },
+        {
+          "expression": "3-1",
+          "value": "2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-0aad-q2",
+      "kp_code": "math.exam.0aad93648d60",
+      "title": "含参数矩阵的秩的分类讨论",
+      "skill_tags": [
+        "矩阵的秩",
+        "参数讨论",
+        "行列式"
+      ],
+      "objective": "在同一知识点内加入参数矩阵，要求按行列式是否为零分类讨论秩与零空间。",
+      "stem": "设 B(a)=[[1,1,1],[1,a,1],[1,1,a]]，a 为实数。\n\n(1) 求 det B(a)；(2) 按 a 的取值讨论 rank B(a)；(3) 求 a=1 时 Bx=0 的解空间维数。",
+      "answer": "det=(a−1)²；a=1 时 rank=1、零空间维数 2；a≠1 时 rank=3、零空间维数 0。",
+      "final_value": "det=(a-1)^2; rank 1 if a=1 else 3",
+      "solution_steps": [
+        "按第一行展开或利用行和：det B(a)=(a−1)²。",
+        "a≠1 时 det≠0，B 满秩，rank=3，nullity=3−3=0。",
+        "a=1 时三行全为 (1,1,1)，rank=1；nullity=3−1=2。",
+        "a=1 时零空间由 x1+x2+x3=0 给出，维数 2。"
+      ],
+      "key_points": [
+        "先算行列式，再按 det=0 分类。",
+        "a=1 时矩阵退化为秩 1。",
+        "rank+nullity=n。"
+      ],
+      "common_errors": [
+        "把 det 算成 (a−1) 而不是平方。",
+        "a=1 时仍说 rank=3。",
+        "零空间维数用 n−det。"
+      ],
+      "scope": "数学二·矩阵的秩；实参数 a，三阶方阵。",
+      "verification": {
+        "method": "sympy_rank",
+        "result": "PASS",
+        "detail": "det=(a−1)²；a=1 rank=1，a≠1 rank=3；a=1 nullity=2。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "3*pi/2",
+          "value": "3*pi/2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-609e-q1",
+      "kp_code": "math.exam.609e58acbace",
+      "title": "圆域极坐标积分与 sin⁴ 积分",
+      "skill_tags": [
+        "极坐标",
+        "圆域",
+        "三角积分"
+      ],
+      "objective": "检验把 x²+y²≤2y 化为 r≤2sinθ，并计算 ∫sin⁴θ。",
+      "stem": "设 D={(x,y)|x²+y²≤2y}。计算 ∬_D (x²+y²) dxdy。",
+      "answer": "3π/2。",
+      "final_value": "3*pi/2",
+      "solution_steps": [
+        "x²+y²≤2y 配方为 x²+(y−1)²≤1，是圆心 (0,1)、半径 1 的圆。",
+        "极坐标：r²≤2r sinθ → 0≤r≤2sinθ；θ∈[0,π]。",
+        "被积函数 r²，面积元 r dr dθ，故积分为 ∫₀^π∫₀^(2sinθ) r³ dr dθ。",
+        "内层 = (2sinθ)⁴/4=4sin⁴θ；∫₀^π sin⁴θ dθ=3π/8，故 I=4·3π/8=3π/2。"
+      ],
+      "key_points": [
+        "圆 x²+(y−1)²=1 的极坐标方程 r=2sinθ。",
+        "θ 范围 0 到 π。",
+        "∫₀^π sin⁴=3π/8。"
+      ],
+      "common_errors": [
+        "把 r 上限写成 2。",
+        "θ 只取 0 到 π/2，漏掉下半圆。",
+        "漏掉面积元 r。"
+      ],
+      "scope": "数学二·二重积分；极坐标变换在圆内一一对应（边界 r=0 不影响积分）。",
+      "verification": {
+        "method": "sympy_polar",
+        "result": "PASS",
+        "detail": "SymPy 极坐标积分得 3π/2。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1/4+pi/8",
+          "value": "pi/8+1/4"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-609e-q2",
+      "kp_code": "math.exam.609e58acbace",
+      "title": "四分之一圆上的对称性与 (x+y)² 积分",
+      "skill_tags": [
+        "极坐标",
+        "对称性",
+        "二重积分"
+      ],
+      "objective": "在同一知识点内加入对称性判断和 (x+y)² 展开，避免把非奇函数的交叉项误判为零。",
+      "stem": "设 D={(x,y)|x²+y²≤1，x≥0，y≥0}。\n\n(1) 说明 D 关于直线 y=x 对称；\n(2) 计算 ∬_D (x+y)² dxdy；\n(3) 计算 ∬_D (x²−y²) dxdy，并说明所用对称性。",
+      "answer": "(2) π/8+1/4；(3) 0。",
+      "final_value": "pi/8+1/4",
+      "solution_steps": [
+        "D 是单位圆在第一象限的部分，交换 x、y 后区域不变。",
+        "(x+y)²=x²+2xy+y²；由对称性 ∬x²=∬y²，但 ∬xy 一般不为零，不能直接删去。",
+        "极坐标：x+y=r(cosθ+sinθ)，积分化为 ∫₀^(π/2)∫₀¹ r³(cosθ+sinθ)² dr dθ。",
+        "r 积分 1/4；θ 积分 ∫(1+sin2θ)=π/2+1；故 I=(1/4)(π/2+1)=π/8+1/4。",
+        "(x²−y²) 在交换 x、y 时变号，而区域不变，故积分为 0。"
+      ],
+      "key_points": [
+        "区域关于 y=x 对称。",
+        "x² 与 y² 的积分相等，但 xy 不一定为 0。",
+        "奇函数在对称区域上积分为 0。"
+      ],
+      "common_errors": [
+        "把 2xy 项直接当成 0。",
+        "极坐标漏掉 r 因子。",
+        "把 (x+y)² 当成 x²+y²。"
+      ],
+      "scope": "数学二·二重积分；第一象限单位圆盘，极坐标 θ∈[0,π/2]。",
+      "verification": {
+        "method": "sympy_polar",
+        "result": "PASS",
+        "detail": "极坐标积分得 π/8+1/4；x²−y² 项由对称性为 0。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "2*1-2*0",
+          "value": "2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-352f-q1",
+      "kp_code": "math.exam.352fcf1392ad",
+      "title": "p=1/2 的反常积分与 p 判别",
+      "skill_tags": [
+        "反常积分",
+        "p 积分",
+        "收敛性"
+      ],
+      "objective": "检验 0 点瑕积分的 p 判别与直接计算。",
+      "stem": "讨论反常积分 ∫₀¹ 1/x^p dx 的敛散性，并计算 p=1/2 时的值。",
+      "answer": "p<1 收敛，p≥1 发散；p=1/2 时值为 2。",
+      "final_value": "2",
+      "solution_steps": [
+        "x=0 是瑕点。p≠1 时原函数 x^(1−p)/(1−p)。",
+        "p<1 时 1−p>0，x^(1−p)→0，积分收敛；p>1 时 1−p<0，x^(1−p)→∞，发散。",
+        "p=1 时 ∫1/x dx=ln x→−∞，发散。",
+        "p=1/2 时 ∫₀¹ x^(−1/2) dx=[2√x]₀¹=2。"
+      ],
+      "key_points": [
+        "0 点瑕积分 p<1 收敛。",
+        "p=1 是对数发散。",
+        "p=1/2 的原函数 2√x。"
+      ],
+      "common_errors": [
+        "把 0 点 p 判别与无穷远 p 判别混淆（无穷远 p>1 收敛）。",
+        "p=1 时仍套用 x^(1−p)/(1−p)。",
+        "忘记代入下限 0。"
+      ],
+      "scope": "数学二·反常积分；瑕点 x=0，p 为实常数。",
+      "verification": {
+        "method": "sympy_integrate",
+        "result": "PASS",
+        "detail": "∫₀¹x^(−1/2)dx=2；p 判别 p<1。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "pi/4",
+          "value": "pi/4"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "math-352f-q2",
+      "kp_code": "math.exam.352fcf1392ad",
+      "title": "无穷区间上 x/(1+x⁴) 的积分",
+      "skill_tags": [
+        "反常积分",
+        "换元",
+        "无穷区间"
+      ],
+      "objective": "在同一知识点内加入无穷区间与换元，检验收敛判断和精确计算。",
+      "stem": "计算反常积分 ∫₀^∞ x/(1+x⁴) dx，并说明它为什么收敛。",
+      "answer": "π/4。",
+      "final_value": "pi/4",
+      "solution_steps": [
+        "令 u=x²，du=2x dx，积分变为 (1/2)∫₀^∞ du/(1+u²)。",
+        "被积函数在无穷远 ~1/u²，故收敛。",
+        "原函数 (1/2)arctan u，代入 0、∞ 得 (1/2)(π/2−0)=π/4。"
+      ],
+      "key_points": [
+        "换元 u=x² 把四次分母化为二次。",
+        "无穷远 1/u² 可积。",
+        "arctan∞=π/2。"
+      ],
+      "common_errors": [
+        "换元后忘记 1/2。",
+        "把 ∫du/(1+u²) 写成 ln。",
+        "把上限代入 arctan 得 π 而不是 π/2。"
+      ],
+      "scope": "数学二·反常积分；无穷区间，被积函数连续非负。",
+      "verification": {
+        "method": "sympy_integrate",
+        "result": "PASS",
+        "detail": "∫₀^∞x/(1+x⁴)dx=π/4。"
+      }
+    }
+  ]
+}

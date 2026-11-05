@@ -1,0 +1,614 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-os01",
+  "created_at": "2026-10-18T14:20:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "408 操作系统第一批（5 个知识点 × 2 题）。调度/银行家/页表题用参考模拟器复算；信号量与状态分析题标记 REVIEW，不阻塞批次。"
+  },
+  "items": [
+    {
+      "slug": "os-ad10-q1",
+      "kp_code": "cs408.os.topic.ad106d393729",
+      "title": "单进程状态转换与就绪时间统计",
+      "question_type": "subjective",
+      "difficulty": "medium",
+      "estimated_minutes": 10,
+      "role": "basic",
+      "skill_tags": [
+        "进程状态",
+        "状态转换",
+        "上下文切换"
+      ],
+      "objective": "检验能否按事件时间轴正确写出新建、就绪、运行、阻塞、终止五态序列，并区分 I/O 阻塞与等待子进程阻塞。",
+      "stem": "某单 CPU 系统按下列事件运行一个进程 P1：\n\nt0 创建 P1；t1 P1 被调度；t4 P1 时间片用完；t5 P1 再次被调度；t7 P1 请求磁盘 I/O；t12 I/O 完成；t13 P1 被调度；t15 P1 调用 wait 等待子进程结束；t20 子进程结束；t21 P1 被调度；t24 P1 退出。\n\n回答：\n(1) 按时间段写出 P1 的状态序列；\n(2) P1 在就绪队列中的时间段及累计时长；\n(3) 共发生几次调度（分派）？\n(4) t7 与 t15 都进入阻塞态，二者被唤醒的原因有何本质不同？",
+      "answer": "状态序列：新建 0–1；运行 1–4；就绪 4–5；运行 5–7；阻塞 7–12；就绪 12–13；运行 13–15；阻塞 15–20；就绪 20–21；运行 21–24；终止 24。就绪共 3 个时间段，累计 3 个时间单位。共 4 次调度（t1、t5、t13、t21）。t7 等 I/O 完成中断，t15 等子进程退出（进程间同步事件）。",
+      "final_value": "4 次调度；就绪累计 3 个时间单位",
+      "solution_steps": [
+        "按事件画时间轴：创建后先进入就绪队列；被调度才进入运行态；时间片用完或被抢占回到就绪态；请求 I/O 或等待事件进入阻塞态；事件完成回到就绪态；退出进入终止态。",
+        "逐段对应：0–1 新建；1–4 运行；4–5 就绪（时间片用完）；5–7 运行；7–12 阻塞（磁盘 I/O）；12–13 就绪（I/O 完成）；13–15 运行；15–20 阻塞（wait 子进程）；20–21 就绪（子进程退出）；21–24 运行；24 终止。",
+        "就绪区间为 [4,5)、[12,13)、[20,21)，每段 1 个时间单位，累计 3。",
+        "调度发生在 t1、t5、t13、t21，共 4 次；每次调度都是一次上下文切换（t1 前 CPU 空闲，不计切换）。",
+        "t7 的阻塞是等待外设 I/O，由 I/O 完成中断唤醒；t15 的阻塞是等待另一个进程（子进程）结束，由子进程退出/信号唤醒。二者都属于阻塞态，但唤醒源不同。"
+      ],
+      "key_points": [
+        "运行→就绪：时间片用完或被更高优先级进程抢占。",
+        "运行→阻塞：主动请求 I/O 或等待事件，CPU 让出。",
+        "阻塞→就绪：事件完成，不能直接变为运行。",
+        "就绪队列时间只统计“就绪但未运行”的区间。"
+      ],
+      "common_errors": [
+        "把 I/O 完成直接写成“阻塞→运行”，漏掉就绪态。",
+        "把 t15 的 wait 也当成 I/O 阻塞，忽略它是进程间同步。",
+        "把调度次数算成 3 次（漏掉 t1 首次分派）。",
+        "把就绪时间算成 4 个时间单位（把阻塞或运行算进去）。"
+      ],
+      "scope": "408 操作系统·进程管理；单 CPU、单进程示例，忽略调度器自身开销。",
+      "verification_steps": [
+        {
+          "expression": "1+1+1",
+          "value": "3"
+        },
+        {
+          "expression": "4",
+          "value": "4"
+        }
+      ],
+      "verification": {
+        "method": "manual_timeline_check",
+        "result": "PASS",
+        "detail": "按事件逐段核对状态与区间；就绪区间 3 段、调度 4 次，与时间轴一致。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "slug": "os-ad10-q2",
+      "kp_code": "cs408.os.topic.ad106d393729",
+      "title": "进程状态转换的合法性辨析",
+      "question_type": "subjective",
+      "difficulty": "medium",
+      "estimated_minutes": 10,
+      "role": "comprehensive",
+      "skill_tags": [
+        "状态转换",
+        "抢占",
+        "阻塞与唤醒"
+      ],
+      "objective": "通过判断一组状态转换是否合法，检验对五态模型、抢占与非抢占差异、以及“阻塞不能直接运行”的理解。",
+      "stem": "判断下列进程状态转换是否合法，并说明理由：\n\n(a) 运行 → 就绪\n(b) 运行 → 阻塞\n(c) 阻塞 → 运行\n(d) 就绪 → 阻塞\n(e) 阻塞 → 就绪\n(f) 就绪 → 运行\n(g) 运行 → 终止\n(h) 新建 → 阻塞\n\n并回答：哪些转换只可能出现在抢占式系统中？为什么？",
+      "answer": "(a) 合法（时间片到/被抢占）；(b) 合法（请求 I/O 或等待事件）；(c) 不合法，必须先到就绪；(d) 不合法，未运行不能请求 I/O；(e) 合法（事件完成）；(f) 合法（调度）；(g) 合法；(h) 不合法，新建必须先就绪。运行→就绪只可能出现在抢占式系统；非抢占系统中运行进程只在阻塞或终止时让出 CPU。",
+      "final_value": "合法的有 a、b、e、f、g；c、d、h 不合法",
+      "solution_steps": [
+        "五态模型的基本边：新建→就绪；就绪→运行（调度）；运行→就绪（时间片到/被抢占）；运行→阻塞（请求 I/O 或等待事件）；阻塞→就绪（事件完成）；运行→终止。",
+        "(a) 合法：时间片用完或被更高优先级进程抢占，运行进程回到就绪队列。",
+        "(b) 合法：运行进程主动请求 I/O、申请资源或等待事件，进入阻塞态。",
+        "(c) 不合法：阻塞进程被唤醒后只能进入就绪队列，必须重新参与调度，不能直接抢占 CPU。",
+        "(d) 不合法：进程尚未运行，不可能主动请求 I/O；就绪态只能转为运行。",
+        "(e) 合法：I/O 完成或等待的事件发生，阻塞→就绪。",
+        "(f) 合法：调度程序从就绪队列选中进程，就绪→运行。",
+        "(g) 合法：进程执行结束或异常终止。",
+        "(h) 不合法：新建进程必须先进入就绪队列，等待调度后才能运行并请求 I/O。",
+        "运行→就绪需要“把正在运行的进程强行换下”，只有抢占式调度才会发生；非抢占系统中，运行进程会一直执行到阻塞或结束。"
+      ],
+      "key_points": [
+        "阻塞→就绪，不是阻塞→运行。",
+        "就绪→阻塞不合法，因为就绪进程没有 CPU，无法发起 I/O。",
+        "运行→就绪是抢占式系统的标志。",
+        "新建→就绪→运行，不能跳过就绪。"
+      ],
+      "common_errors": [
+        "认为 I/O 完成后可以直接运行，忽略就绪队列。",
+        "把“等待 I/O”写成就绪→阻塞。",
+        "认为所有系统都有运行→就绪。",
+        "把新建→阻塞当成合法（例如创建即等待资源）。"
+      ],
+      "scope": "408 操作系统·进程管理；基于经典五态模型，不讨论挂起/就绪挂起等七态扩展。",
+      "verification_steps": [],
+      "verification": {
+        "method": "manual_logic_review",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "逐条对照五态模型的标准边；未发现与教材定义冲突的转换。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      }
+    },
+    {
+      "slug": "os-bc23-q1",
+      "kp_code": "cs408.os.topic.bc235cd7a2fb",
+      "title": "FCFS、SJF、SRTF、RR 四种调度对比",
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 20,
+      "role": "basic",
+      "skill_tags": [
+        "CPU 调度",
+        "SJF",
+        "SRTF",
+        "时间片轮转"
+      ],
+      "objective": "检验能否对同一组进程正确画出四种调度算法的甘特图，并计算平均等待时间与平均周转时间。",
+      "stem": "4 个进程到达时间与 CPU 执行时间如下（时间单位相同）：\n\n| 进程 | 到达时间 | 执行时间 |\n|---|---:|---:|\n| P1 | 0 | 7 |\n| P2 | 2 | 4 |\n| P3 | 4 | 1 |\n| P4 | 5 | 4 |\n\n分别按 FCFS、非抢占 SJF、SRTF、时间片 q=2 的 RR 调度，要求：\n(1) 画出甘特图；\n(2) 求各进程完成时间、等待时间；\n(3) 求平均等待时间与平均周转时间。\n\nRR 约定：同一时刻先让新到达进程入队，再把时间片用完的进程放到队尾。",
+      "answer": "FCFS：完成 7/11/12/16，等待 0/5/7/7，平均等待 4.75，平均周转 8.75。SJF：完成 7/12/8/16，等待 0/6/3/7，平均等待 4.0，平均周转 8.0。SRTF：完成 16/7/5/11，等待 9/1/0/2，平均等待 3.0，平均周转 7.0。RR(q=2)：完成 16/9/7/15，等待 9/3/2/6，平均等待 5.0，平均周转 9.0。",
+      "final_value": "平均等待：FCFS 4.75，SJF 4.0，SRTF 3.0，RR 5.0",
+      "solution_steps": [
+        "FCFS 按到达顺序执行：P1 0–7，P2 7–11，P3 11–12，P4 12–16。等待 = 完成 − 到达 − 执行：P1 0、P2 5、P3 7、P4 7；平均等待 19/4=4.75。周转 = 完成 − 到达：7、9、8、11，平均 8.75。",
+        "非抢占 SJF：t=0 只有 P1，执行到 7；t=7 时 P2、P3、P4 均已到达，选最短的 P3（1），7–8；再选 P2（4），8–12；最后 P4（4），12–16。等待：P1 0、P2 6、P3 3、P4 7；平均 4.0。周转：7、10、4、11，平均 8.0。",
+        "SRTF：t=0 P1 运行；t=2 P2 到达，剩余 4<7，抢占 P1；t=4 P3 到达，剩余 1<4，抢占 P2；P3 4–5 完成；P2 5–7 完成；t=5 P4 到达，剩余 4>P2 剩余 2，继续 P2；P4 7–11；P1 11–16。等待：P1 9、P2 1、P3 0、P4 2；平均 3.0。周转：16、5、1、6，平均 7.0。",
+        "RR(q=2)：P1 0–2；t=2 P2 到达并入队，P1 时间片到，P2 2–4；P1 4–6；t=4 P3 到达，P3 6–7 完成；P2 7–9 完成；t=5 P4 到达，P4 9–11；P1 11–13；P4 13–15 完成；P1 15–16 完成。等待：P1 9、P2 3、P3 2、P4 6；平均 5.0。周转：16、7、3、10，平均 9.0。",
+        "对比：SRTF 平均等待最短，但抢占次数多；FCFS 最简单但短作业可能被长作业拖住；RR 通过时间片保证响应性，但上下文切换开销更大。"
+      ],
+      "key_points": [
+        "等待时间 = 完成时间 − 到达时间 − 执行时间。",
+        "周转时间 = 完成时间 − 到达时间。",
+        "SRTF 每次选择剩余时间最短者，新短作业到达可抢占。",
+        "RR 的新到达与时间片用完的入队顺序会影响结果，题目已明确约定。"
+      ],
+      "common_errors": [
+        "SJF 在 t=7 选 P2（先到）而不是 P3（更短）。",
+        "SRTF 在 t=4 不抢占 P2，退化成 SJF。",
+        "RR 把时间片用完的进程放在新到达进程之前。",
+        "等待时间忘记减执行时间，算成周转时间。"
+      ],
+      "scope": "408 操作系统·CPU 调度；忽略调度开销与 I/O，所有进程 CPU 密集型。",
+      "verification_steps": [
+        {
+          "expression": "(0+5+7+7)/4",
+          "value": "4.75"
+        },
+        {
+          "expression": "(0+6+3+7)/4",
+          "value": "4"
+        },
+        {
+          "expression": "(9+1+0+2)/4",
+          "value": "3"
+        },
+        {
+          "expression": "(9+3+2+6)/4",
+          "value": "5"
+        }
+      ],
+      "verification": {
+        "method": "scheduling_simulator",
+        "result": "PASS",
+        "detail": "逐时间单位模拟四种算法，得到平均等待 4.75/4.0/3.0/5.0；甘特图与题解一致。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "slug": "os-bc23-q2",
+      "kp_code": "cs408.os.topic.bc235cd7a2fb",
+      "title": "时间片大小对 RR 响应时间与切换次数的影响",
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "skill_tags": [
+        "时间片轮转",
+        "响应时间",
+        "上下文切换"
+      ],
+      "objective": "在同一组进程上比较 q=1、2、4 的 RR：计算平均等待、首次响应与切换次数，理解时间片权衡。",
+      "stem": "仍使用上一题的 4 个进程：P1(0,7)、P2(2,4)、P3(4,1)、P4(5,4)。\n\n对 RR 分别取时间片 q=1、q=2、q=4（约定同上：新到达先入队，时间片用完的进程后入队），求：\n(1) 平均等待时间；\n(2) 各进程首次获得 CPU 的时间，以及平均首次响应时间；\n(3) 调度段数（近似上下文切换次数）；\n(4) 结合结果说明时间片过大、过小分别有什么问题。",
+      "answer": "q=1：平均等待 5.5；首次响应 P1 0、P2 2、P3 5、P4 7，平均 3.5；15 段。q=2：平均等待 5.0；首次响应 0、2、6、9，平均 4.25；9 段。q=4：平均等待 4.5；首次响应 0、4、8、12，平均 6.0；5 段。时间片越小响应越快但切换越多；越大切换越少但短作业响应变差，退化为接近 FCFS。",
+      "final_value": "平均等待 5.5/5.0/4.5；平均首次响应 3.5/4.25/6.0",
+      "solution_steps": [
+        "q=1：P1 0–2（t=1 时无其他就绪进程，连续执行两个时间片）、P2 2–3、P1 3–4、P2 4–5、P3 5–6（完成）、P1 6–7、P4 7–8、P2 8–9、P1 9–10、P4 10–11、P2 11–12（完成）、P1 12–13、P4 13–14、P1 14–15、P4 15–16（完成）。完成时间 P1 15、P2 12、P3 6、P4 16；等待 = 完成−到达−执行：8、6、1、7，平均 22/4=5.5。首次响应：0、2、5、7，平均 14/4=3.5；共 15 个调度段。",
+        "q=2：P1 0–2、P2 2–4、P1 4–6、P3 6–7、P2 7–9、P4 9–11、P1 11–13、P4 13–15、P1 15–16。完成 P1 16、P2 9、P3 7、P4 15；等待 9、3、2、6，平均 20/4=5.0。首次响应 0、2、6、9，平均 17/4=4.25；共 9 段。",
+        "q=4：P1 0–4、P2 4–8、P3 8–9、P1 9–12、P4 12–16。完成 P1 12、P2 8、P3 9、P4 16；等待 5、2、4、7，平均 18/4=4.5。首次响应 0、4、8、12，平均 24/4=6.0；共 5 段。",
+        "时间片过小：切换频繁，CPU 用于上下文切换的比例上升，吞吐量下降；但响应时间短。时间片过大：切换少，但短作业可能等长作业用完整个时间片，响应变差，极端情况退化为 FCFS。",
+        "经验取值：让时间片略大于一次典型交互的 CPU 需求，使多数进程在一个时间片内完成，同时保持可接受的响应。"
+      ],
+      "key_points": [
+        "RR 的平均等待不一定随 q 单调变化，需具体计算。",
+        "首次响应时间看进程第一次被调度的时间，不是完成时间。",
+        "切换次数可用调度段数近似。",
+        "时间片权衡：响应性 vs 切换开销。"
+      ],
+      "common_errors": [
+        "把首次响应时间当成完成时间。",
+        "q=4 时让 P2 在 t=2 抢占 P1（忽略时间片未用完不切换）。",
+        "认为 q 越小平均等待一定越小。",
+        "切换次数只数进程数（4 次），忽略同一进程多次获得 CPU。"
+      ],
+      "scope": "408 操作系统·CPU 调度；同一组进程、同一 RR 入队约定；忽略切换开销的具体数值。",
+      "verification_steps": [
+        {
+          "expression": "(8+6+1+7)/4",
+          "value": "5.5"
+        },
+        {
+          "expression": "(9+3+2+6)/4",
+          "value": "5"
+        },
+        {
+          "expression": "(5+2+4+7)/4",
+          "value": "4.5"
+        },
+        {
+          "expression": "(0+2+5+7)/4",
+          "value": "3.5"
+        }
+      ],
+      "verification": {
+        "method": "scheduling_simulator",
+        "result": "PASS",
+        "detail": "q=1/2/4 分别模拟，平均等待 5.5/5.0/4.5，首次响应 3.5/4.25/6.0，调度段 15/9/5。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "5-1",
+          "value": "4"
+        },
+        {
+          "expression": "3-1",
+          "value": "2"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "os-630c-q1",
+      "kp_code": "cs408.os.topic.630c531fe924",
+      "title": "银行家算法：安全序列与请求判定",
+      "skill_tags": [
+        "银行家算法",
+        "安全状态",
+        "死锁避免"
+      ],
+      "objective": "检验能否由 Allocation/Max/Available 求 Need、找安全序列，并判断两个资源请求能否立即满足。",
+      "stem": "系统有 3 类资源 A、B、C，5 个进程。当前状态：\n\n| 进程 | Allocation (A,B,C) | Max (A,B,C) |\n|---|---|---|\n| P0 | 0,1,0 | 7,5,3 |\n| P1 | 2,0,0 | 3,2,2 |\n| P2 | 3,0,2 | 9,0,2 |\n| P3 | 2,1,1 | 2,2,2 |\n| P4 | 0,0,2 | 4,3,3 |\n\nAvailable = (3,3,2)。\n\n(1) 求 Need 矩阵；\n(2) 给出一个安全序列并验证；\n(3) P1 请求 (1,0,2)，能否立即满足？\n(4) P4 请求 (3,3,0)，能否立即满足？",
+      "answer": "Need：P0(7,4,3)、P1(1,2,2)、P2(6,0,0)、P3(0,1,1)、P4(4,3,1)。安全序列之一：P1→P3→P0→P2→P4。P1 请求 (1,0,2) 可满足，满足后仍安全；P4 请求 (3,3,0) 会使 Available=(0,0,2)，无进程能完成，拒绝。",
+      "final_value": "P1 请求可满足；P4 请求不安全，拒绝",
+      "solution_steps": [
+        "Need = Max − Allocation：P0(7,4,3)、P1(1,2,2)、P2(6,0,0)、P3(0,1,1)、P4(4,3,1)。",
+        "初始 Work=(3,3,2)。P1 Need(1,2,2)≤Work，假设 P1 完成并归还 Allocation(2,0,0)，Work=(5,3,2)；P3 Need(0,1,1)≤Work，归还 (2,1,1)，Work=(7,4,3)；P0 Need(7,4,3)≤Work，归还 (0,1,0)，Work=(7,5,3)；P2 Need(6,0,0)≤Work，归还 (3,0,2)，Work=(10,5,5)；P4 Need(4,3,1)≤Work，完成。安全序列 P1→P3→P0→P2→P4。",
+        "P1 请求 (1,0,2)：先检查 Request≤Need（1≤1、0≤2、2≤2）且 Request≤Available（1≤3、0≤3、2≤2）。试分配后 Available=(2,3,0)，Allocation(P1)=(3,0,2)，Need(P1)=(0,2,0)。仍可找到安全序列 P1→P3→P0→P2→P4，故可立即满足。",
+        "P4 请求 (3,3,0)：Request≤Need(4,3,1) 且 ≤Available(3,3,2)。试分配后 Available=(0,0,2)，P1 需要 (1,2,2) 无法满足，P3 需要 (0,1,1) 中 B 不足，其余进程也无法完成，系统进入不安全状态，因此拒绝。",
+        "结论：银行家算法在每次分配前做“试分配 + 安全性检查”，只有在仍存在安全序列时才真正分配。"
+      ],
+      "key_points": [
+        "Need=Max−Allocation。",
+        "安全序列要求每一步 Need≤Work，完成后 Work+=Allocation。",
+        "Request 必须同时满足 ≤Need 与 ≤Available。",
+        "试分配后不安全就回滚并拒绝。"
+      ],
+      "common_errors": [
+        "把 Need 算成 Max+Allocation。",
+        "只看 Request≤Available，不做安全性检查。",
+        "试分配后忘记更新 Need/Allocation/Available。",
+        "把“存在安全序列”误写成“不会死锁”的充分必要条件（它只是避免死锁的充分条件）。"
+      ],
+      "scope": "408 操作系统·死锁避免；资源类型固定、进程数固定；忽略资源释放的时序细节。",
+      "verification": {
+        "method": "banker_simulator",
+        "result": "PASS",
+        "detail": "参考模拟器求得安全序列 P1,P3,P0,P2,P4；P1 请求后仍安全，P4 请求后 Available=(0,0,2) 且无可完成进程。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "os-630c-q2",
+      "kp_code": "cs408.os.topic.630c531fe924",
+      "title": "等待图判死锁与最小恢复",
+      "skill_tags": [
+        "死锁检测",
+        "等待图",
+        "资源分配图"
+      ],
+      "objective": "检验能否从等待图找环、区分死锁进程与被牵连的阻塞进程，并给出最小恢复方案。",
+      "stem": "某系统每类资源只有一个实例。进程等待关系为：P1→P2、P2→P3、P3→P1、P4→P1、P5→P4（箭头表示“等待”）。\n\n(1) 画出等待图并找出所有环；\n(2) 哪些进程处于死锁？P4、P5 是否死锁？\n(3) 若只终止一个进程来解除死锁，最小应终止哪个？说明理由；\n(4) 如果每类资源有多个实例，图中存在环是否一定死锁？为什么？",
+      "answer": "环为 P1→P2→P3→P1，死锁进程是 P1、P2、P3。P4、P5 只是被阻塞，不在环上；终止 P2 即可打破环，P1/P3 可继续，P4/P5 随后可完成。多实例时环只是死锁的必要条件，不一定充分，需要资源分配图化简。",
+      "final_value": "死锁进程 P1、P2、P3；终止 P2 可解除",
+      "solution_steps": [
+        "把等待关系画成有向图：P1→P2→P3→P1 构成一个环；P4→P1、P5→P4 是挂在环上的两条等待边。",
+        "单实例资源下，等待图中的环与死锁等价。P1、P2、P3 互相等待，永远无法推进，处于死锁。",
+        "P4 等待 P1，P5 等待 P4；它们本身不构成环，但因为 P1 死锁而永远等不到，属于“被牵连的阻塞”，不是死锁集合的成员。",
+        "只终止一个进程时，终止 P1、P2、P3 中任意一个都能破环；选择代价最小的即可。例如终止 P2，P3 可继续并最终释放资源，P1 也能完成，P4、P5 随之解除阻塞。",
+        "多实例资源下，环不一定死锁：环上的进程可能还能从其他实例获得资源而继续推进。判断死锁需要对资源分配图做可化简性分析，只有不可完全化简才死锁。"
+      ],
+      "key_points": [
+        "单实例：等待图有环 ⇔ 死锁。",
+        "多实例：有环只是必要条件，不是充分条件。",
+        "环上的进程才是死锁进程；挂在环上的等待者只是被阻塞。",
+        "恢复手段：终止进程、抢占资源、回滚。"
+      ],
+      "common_errors": [
+        "把 P4、P5 也算进死锁集合。",
+        "认为多实例下“有环=死锁”。",
+        "只找一个环就结束，漏掉其他环。",
+        "终止环外进程（如 P5）不能解除死锁。"
+      ],
+      "scope": "408 操作系统·死锁检测与恢复；单实例与多实例两种情形分开讨论。",
+      "verification": {
+        "method": "manual_graph_review",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "等待图逐边核对：唯一环为 P1-P2-P3；P4/P5 不在环上。单实例环等价死锁；多实例结论按资源分配图化简。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "os-8608-q1",
+      "kp_code": "cs408.os.topic.86089b973451",
+      "title": "有界缓冲区的生产者-消费者同步",
+      "skill_tags": [
+        "信号量",
+        "生产者-消费者",
+        "同步与互斥"
+      ],
+      "objective": "检验能否正确设置 empty/full/mutex 的初值、写出 wait/signal 顺序，并解释顺序颠倒为何会死锁。",
+      "stem": "有界缓冲区大小为 4，生产者不断放入产品，消费者不断取出。用信号量实现同步与互斥：\n\n(1) 给出信号量名称、含义与初值；\n(2) 写出生产者与消费者的伪代码；\n(3) 生产 6 个产品、消费 4 个产品的某个执行序列如下，填出缓冲区数量与三个信号量的值：P 生产 1、P 生产 2、C 消费、P 生产 3、P 生产 4、P 生产 5、P 再生产 6、C 消费、C 消费、C 消费、C 消费；\n(4) 若把生产者的 wait(empty) 与 wait(mutex) 顺序颠倒，可能发生什么？",
+      "answer": "empty=4、full=0、mutex=1。生产者：wait(empty); wait(mutex); 放入; signal(mutex); signal(full)。消费者：wait(full); wait(mutex); 取出; signal(mutex); signal(empty)。序列中生产第 6 个时缓冲区已满，生产者阻塞在 empty；消费者取走一个后唤醒。顺序颠倒时，生产者先拿到 mutex 再等 empty，若缓冲区满则持有 mutex 睡眠，消费者无法进入临界区取产品，形成死锁。",
+      "final_value": "empty=4，full=0，mutex=1；顺序颠倒会死锁",
+      "solution_steps": [
+        "empty 表示空槽数，初值 4；full 表示已放产品数，初值 0；mutex 保证缓冲区互斥访问，初值 1。",
+        "生产者：wait(empty)（申请空槽）→ wait(mutex)（进入临界区）→ 放入产品 → signal(mutex) → signal(full)（通知消费者）。消费者：wait(full) → wait(mutex) → 取出产品 → signal(mutex) → signal(empty)。",
+        "执行序列表（缓冲数 / empty / full / mutex）：初始 0/4/0/1；P1 后 1/3/1/1；P2 后 2/2/2/1；C 后 1/3/1/1；P3 后 2/2/2/1；P4 后 3/1/3/1；P5 后 4/0/4/1；P 再放 6 时 wait(empty) 阻塞（empty=0），缓冲区仍 4；C 消费后 3/1/3/1，唤醒生产者；P6 放入后 4/0/4/1；后续 4 次消费依次 3/1/3/1、2/2/2/1、1/3/1/1、0/4/0/1。",
+        "顺序颠倒：生产者先 wait(mutex) 再 wait(empty)。若缓冲区已满，生产者在持有 mutex 的情况下阻塞在 empty；消费者要取产品必须先 wait(mutex)，但 mutex 被生产者占用，消费者永远进不了临界区，也就无法 signal(empty)，形成死锁。",
+        "原则：同步信号量（empty/full）的 wait 放在互斥信号量（mutex）之前；signal 顺序通常与 wait 相反。"
+      ],
+      "key_points": [
+        "empty+full=缓冲区大小（任意时刻）。",
+        "同步 wait 在前，互斥 wait 在后。",
+        "signal 顺序与 wait 相反，避免唤醒丢失。",
+        "mutex 只保护缓冲区，不保护整个生产/消费过程。"
+      ],
+      "common_errors": [
+        "empty 初值写成 0、full 初值写成 4。",
+        "生产者先 wait(mutex) 再 wait(empty)，缓冲区满时死锁。",
+        "消费者 signal(empty) 写成 signal(full)。",
+        "把 mutex 也用于同步，导致并发度下降或死锁。"
+      ],
+      "scope": "408 操作系统·进程同步；单生产者、单消费者、有界缓冲区；忽略产品内容与具体耗时。",
+      "verification": {
+        "method": "manual_semaphore_review",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "逐条核对 wait/signal 顺序与信号量守恒；缓冲区满时生产者阻塞、消费者唤醒的路径成立。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "os-8608-q2",
+      "kp_code": "cs408.os.topic.86089b973451",
+      "title": "写优先的读者-写者问题",
+      "skill_tags": [
+        "读者-写者",
+        "写优先",
+        "信号量"
+      ],
+      "objective": "检验能否用信号量实现写优先的读者-写者协议，并分析读者/写者饥饿与临界区条件。",
+      "stem": "读者-写者问题要求：允许多个读者同时读；写者与其他读者/写者互斥；采用写优先（一旦有写者等待，后续新读者不得再进入）。\n\n(1) 给出信号量及初值；\n(2) 写出读者与写者的伪代码；\n(3) 分析序列：R1 在读，W1 到达，R2 到达，R1 结束，W1 开始写；说明 R2 在哪些时刻被阻塞；\n(4) 该方案是否会导致读者饥饿或写者饥饿？为什么？",
+      "answer": "信号量：mutex=1（保护 read_count）、rw=1（读者/写者互斥）、w=1（写优先闸门）；read_count=0。写者：wait(w); wait(rw); 写; signal(rw); signal(w)。读者：wait(w); wait(mutex); read_count++; if(read_count==1) wait(rw); signal(mutex); signal(w); 读; wait(mutex); read_count--; if(read_count==0) signal(rw); signal(mutex)。R2 在 W1 持有 w 时被阻塞在 wait(w)，直到 W1 完成。写者不会饥饿；读者可能被连续写者延迟（不是永久饥饿，取决于到达率）。",
+      "final_value": "写优先闸门 w 使新读者在写者等待时阻塞；写者不饥饿",
+      "solution_steps": [
+        "mutex 保护 read_count 的加减；rw 保证“第一个读者进入时锁住写者、最后一个读者离开时释放写者”；w 是写优先闸门。",
+        "写者：wait(w) 取得写优先权 → wait(rw) 等待当前读者全部退出 → 写 → signal(rw) → signal(w)。",
+        "读者：wait(w) 检查是否有写者等待 → wait(mutex) 修改 read_count → 若是第一个读者则 wait(rw) 阻止写者 → signal(mutex) → signal(w) → 读 → 退出时减少 read_count，最后一个读者 signal(rw)。",
+        "序列分析：R1 先取得 w、rw（read_count=1），释放 w，开始读。W1 到达，wait(w) 成功，随后 wait(rw) 阻塞（R1 持有 rw），但 W1 持有 w。R2 到达，wait(w) 阻塞。R1 结束，read_count=0，signal(rw)，W1 获得 rw 开始写。W1 完成后 signal(rw)、signal(w)，R2 才能继续。",
+        "写优先的效果：写者一旦持有 w，后续读者都被挡在 w 上，避免写者被源源不断的读者饿死。写者之间按 w 的等待队列推进，不会饥饿。读者在写者持续到达时可能长时间等待，但只要写者队列有间隙就能进入；不是严格意义上的永久饥饿，但可能出现延迟。"
+      ],
+      "key_points": [
+        "read_count 是共享变量，必须用 mutex 保护。",
+        "第一个读者 wait(rw)，最后一个读者 signal(rw)。",
+        "w 信号量实现写优先：写者等待时阻断新读者。",
+        "写者不会饥饿；读者可能被连续写者延迟。"
+      ],
+      "common_errors": [
+        "读者修改 read_count 不加 mutex。",
+        "第一个/最后一个读者的判断写反。",
+        "忘记 signal(w)，导致后续读者永远阻塞。",
+        "认为写优先一定导致读者永久饥饿（题目条件下是延迟而非永久）。"
+      ],
+      "scope": "408 操作系统·进程同步；写优先的读者-写者问题；假设信号量等待队列按 FIFO 唤醒。",
+      "verification": {
+        "method": "manual_semaphore_review",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "逐条验证 read_count、rw、w 的作用与序列推进；写者持有 w 时 R2 阻塞在 w 的路径成立。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "4*1024",
+          "value": "4096"
+        },
+        {
+          "expression": "53*4096+36",
+          "value": "217124"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "os-2711-q1",
+      "kp_code": "cs408.os.topic.27116033ab0c",
+      "title": "两级页表地址转换与有效访问时间",
+      "skill_tags": [
+        "页式管理",
+        "两级页表",
+        "地址转换",
+        "EAT"
+      ],
+      "objective": "检验能否拆分 32 位虚拟地址、求页目录/页表索引、完成物理地址转换，并计算带 TLB 的有效访问时间。",
+      "stem": "某机按字节编址，虚拟地址 32 位，页大小 4 KB，采用两级页表，虚拟地址划分为 10 位页目录号、10 位页表索引、12 位页内偏移；页表项 4 B。\n\n已知虚拟地址 VA=00403024H，页目录物理基址为 00001000H，页目录项 PDE[1] 指向的页表物理基址为 00002000H，该页表中 PTE[3] 的页框号为 00035H。\n\n(1) 写出 VA 的页内偏移、页目录号、页表索引；\n(2) 求 PDE 与 PTE 的物理地址；\n(3) 求转换后的物理地址；\n(4) 若 TLB 命中率 90%，TLB 访问 10 ns，内存访问 100 ns，求平均有效访问时间（EAT）。",
+      "answer": "偏移 024H，页目录号 1，页表索引 3；PDE 地址 00001004H，PTE 地址 0000200CH；物理地址 00035024H；EAT = 0.9×(10+100)+0.1×(10+100+100+100)=130 ns。",
+      "final_value": "130",
+      "solution_steps": [
+        "页大小 4 KB=2^12，页内偏移 12 位：VA 低 12 位 024H。VA>>12=00403H 为虚拟页号；页目录号 = VPN>>10 = 1；页表索引 = VPN & 3FFH = 3。",
+        "PDE 地址 = 页目录物理基址 + 页目录号×4 = 00001000H+1×4=00001004H。PTE 地址 = 页表基址 + 页表索引×4 = 00002000H+3×4=0000200CH。",
+        "PTE[3] 的页框号为 00035H，物理地址 = 页框号×页大小 + 页内偏移 = 00035H×1000H+024H = 00035024H。",
+        "TLB 命中：1 次 TLB + 1 次内存 = 110 ns；TLB 未命中：1 次 TLB + 2 次页表访问 + 1 次数据访问 = 10+100+100+100=310 ns。EAT=0.9×110+0.1×310=99+31=130 ns。",
+        "注意：两级页表未命中需要访问两级页表（PDE、PTE）再访问数据，共 3 次内存；题目已把页表项大小与两级结构写死。"
+      ],
+      "key_points": [
+        "偏移位=log2(页大小)。",
+        "VPN=VA>>12；页目录号=VPN>>10；页表索引=VPN&1023。",
+        "物理地址=页框号×页大小+偏移。",
+        "EAT 要区分 TLB 命中与未命中的内存访问次数。"
+      ],
+      "common_errors": [
+        "把页目录号和页表索引的位数弄反。",
+        "PTE 地址忘记乘 4（页表项大小）。",
+        "物理地址忘记加页内偏移。",
+        "未命中路径只算 1 次页表访问（两级要算 2 次）。"
+      ],
+      "scope": "408 操作系统·页式管理；两级页表、4 KB 页、4 B 页表项；忽略 TLB 替换与缺页。",
+      "verification": {
+        "method": "address_translation_calculator",
+        "result": "PASS",
+        "detail": "VA=00403024H → 偏移 024H、VPN 403H、PDE 1、PTE 3；PDE 00001004H、PTE 0000200CH；页框 35H → PA 00035024H；EAT=130 ns。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "4*1024*1024/4096",
+          "value": "1024"
+        },
+        {
+          "expression": "64*4",
+          "value": "256"
+        },
+        {
+          "expression": "5*4",
+          "value": "20"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "os-2711-q2",
+      "kp_code": "cs408.os.topic.27116033ab0c",
+      "title": "四级页表的空间开销与 TLB 覆盖范围",
+      "skill_tags": [
+        "多级页表",
+        "页表空间",
+        "TLB reach"
+      ],
+      "objective": "在同一知识点内加入页表空间与 TLB 覆盖范围：比较多级页表单级页表，理解多级页表按需分配的意义。",
+      "stem": "某机虚拟地址 48 位，页大小 4 KB，采用四级页表，每级 9 位索引，页内偏移 12 位；页表项 8 B。\n\n(1) 每级页表有多少项、占多少字节？\n(2) 某进程只使用从 0 开始的连续 4 MB 虚拟地址，求最后一级页表数量、各级页表总数量与页表总空间；\n(3) 若改用单级页表，页表需要多少项、多少空间？\n(4) TLB 有 64 项，页大小 4 KB，求 TLB 覆盖范围；若要把覆盖范围扩大到 1 MB，可以怎么做？",
+      "answer": "每级 512 项、4 KB。4 MB=1024 页，最后一级需 2 个页表；四级共 1+1+1+2=5 个页表，共 20 KB。单级页表 2^36 项×8 B=512 GB。TLB 覆盖 64×4 KB=256 KB；要覆盖 1 MB，可用 16 KB 大页（64×16 KB=1 MB）或增加 TLB 项数。",
+      "final_value": "20 KB；单级 512 GB；TLB 256 KB",
+      "solution_steps": [
+        "每级索引 9 位 → 2^9=512 项；每项 8 B → 每级页表 512×8=4096 B=4 KB。",
+        "4 MB=4×1024 KB=4096 KB=1024 个 4 KB 页。最后一级每个页表 512 项，1024/512=2 个最后一级页表。上一级只需覆盖这 2 个页表，各 1 个；四级共 1+1+1+2=5 个页表。总空间 5×4 KB=20 KB。",
+        "单级页表需要覆盖 48−12=36 位 VPN，共 2^36 项；每项 8 B，总空间 2^36×8 B=2^39 B=512 GB。这还没有算进程实际只用了 4 MB，绝大部分是浪费。",
+        "TLB 覆盖范围 = TLB 项数×页大小 = 64×4 KB=256 KB。要覆盖 1 MB，可把页大小提高到 16 KB（64×16 KB=1 MB），或把 TLB 扩到 256 项；前者还能减少页表级数。",
+        "结论：多级页表用“按需分配 + 多一次访存”换取空间；TLB 覆盖范围由项数和页大小共同决定。"
+      ],
+      "key_points": [
+        "每级页表大小=2^索引位×PTE 大小。",
+        "多级页表只为实际使用的区域分配下级页表。",
+        "单级页表空间=2^VPN 位×PTE 大小。",
+        "TLB reach=项数×页大小。"
+      ],
+      "common_errors": [
+        "把 4 MB 当成 4×1000 KB 计算页数。",
+        "忘记最后一级需要 2 个页表。",
+        "单级页表项数算成 2^48 而不是 2^36。",
+        "认为 TLB 项数增加一倍就一定能覆盖 1 MB（还要看页大小）。"
+      ],
+      "scope": "408 操作系统·多级页表；48 位 VA、4 KB 页、9 位分级、8 B PTE；不考虑页表项中的权限位。",
+      "verification": {
+        "method": "page_table_calculator",
+        "result": "PASS",
+        "detail": "每级 512 项/4 KB；4 MB 对应 1024 页、2 个末级表、共 5 表 20 KB；单级 2^36 项=512 GB；TLB 64×4 KB=256 KB。"
+      }
+    }
+  ]
+}

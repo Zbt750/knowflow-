@@ -1,0 +1,635 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-co01",
+  "created_at": "2026-10-18T15:20:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "408 计算机组成原理第一批（5 个知识点 × 2 题）。编码/浮点/流水线/TLB/DMA 均用参考计算复算。"
+  },
+  "items": [
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "2^4",
+          "value": "16"
+        },
+        {
+          "expression": "2^3",
+          "value": "8"
+        },
+        {
+          "expression": "2^5",
+          "value": "32"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-fbea-q1",
+      "kp_code": "cs408.co.topic.fbea44bd988b",
+      "title": "16 位指令格式的字段划分与译码",
+      "skill_tags": [
+        "指令格式",
+        "操作码",
+        "立即数",
+        "译码"
+      ],
+      "objective": "检验能否从指令字长和字段划分推出操作码数量、立即数范围，并正确译码一条机器指令。",
+      "stem": "某机指令字长 16 位，格式为：操作码 4 位、目的寄存器 Rd 3 位、源寄存器 Rs 3 位、立即数 imm 6 位（补码）。\n\n(1) 该格式最多有多少条操作码？最多有多少个通用寄存器？\n(2) imm 的表示范围是多少？\n(3) 译码指令 3A5CH：写出操作码、Rd、Rs、imm 的十进制值；若操作码 3 表示 ADDI Rd,Rs,imm，写出执行的操作。\n(4) 若把 imm 改为无符号数，表示范围如何变化？",
+      "answer": "(1) 16 条操作码，8 个寄存器。\n(2) −32～31。\n(3) 3A5CH = 0011 1010 0101 1100B：操作码 3，Rd=5，Rs=1，imm=28；执行 R5=R1+28。\n(4) 无符号 6 位范围 0～63。",
+      "final_value": "opcode 3, Rd 5, Rs 1, imm 28",
+      "solution_steps": [
+        "操作码 4 位 → 2^4=16 条；寄存器字段 3 位 → 2^3=8 个通用寄存器。",
+        "补码 6 位表示范围 −2^5～2^5−1，即 −32～31。",
+        "3A5CH 展开为 0011 1010 0101 1100：高 4 位 0011=3；接着 3 位 101=5（Rd）；接着 3 位 001=1（Rs）；最后 6 位 011100=28。",
+        "ADDI R5,R1,28：把 R1 的内容加 28，结果写回 R5。",
+        "若 imm 为无符号 6 位，范围 0～63；补码与无符号的区别只在最高位的权值。"
+      ],
+      "key_points": [
+        "操作码位数决定指令条数。",
+        "寄存器字段位数决定寄存器个数。",
+        "补码 6 位范围 −32～31。",
+        "译码时按字段从高位到低位切分。"
+      ],
+      "common_errors": [
+        "把 Rd 与 Rs 的字段顺序弄反。",
+        "把补码范围写成 0～63。",
+        "把 3A5CH 的操作码算成 0x3A。",
+        "认为 3 位寄存器字段能表示 8 个以上寄存器。"
+      ],
+      "scope": "408 计算机组成原理·指令格式；16 位定长指令，字段连续排列、无扩展操作码。",
+      "verification": {
+        "method": "bitfield_calculator",
+        "result": "PASS",
+        "detail": "0x3A5C 按 4/3/3/6 位切分：op=3、Rd=5、Rs=1、imm=28；补码范围 −32..31。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "9*2097152+10*65536+8*2048+32",
+          "value": "19546144"
+        },
+        {
+          "expression": "2^6",
+          "value": "64"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-fbea-q2",
+      "kp_code": "cs408.co.topic.fbea44bd988b",
+      "title": "32 位 R/I 型指令编码与分支范围",
+      "skill_tags": [
+        "指令编码",
+        "R 型",
+        "I 型",
+        "分支范围"
+      ],
+      "objective": "在同一知识点内加入 32 位指令编码：按字段拼出机器码，并计算 PC 相对分支的寻址范围。",
+      "stem": "某 32 位指令系统：R 型格式为 opcode 6 位、rs 5 位、rt 5 位、rd 5 位、shamt 5 位、funct 6 位；I 型格式为 opcode 6 位、rs 5 位、rt 5 位、imm16。\n\n(1) 最多有多少条操作码？多少个寄存器？\n(2) 分支指令 beq 使用 I 型，imm16 左移 2 位并符号扩展后与 PC 相加，求分支范围；\n(3) 已知 add 的 opcode=0、funct=20H，寄存器编号 t0=8、t1=9、t2=10，写出 `add $t0,$t1,$t2` 的机器码（十六进制）；\n(4) 写出 `beq $t0,$t1,-4` 的机器码（opcode=4，偏移以指令字为单位）。",
+      "answer": "(1) 64 条操作码，32 个寄存器。\n(2) ±2^15 条指令 ×4 B = ±128 KB。\n(3) 012A4020H。\n(4) 1109FFFCH。",
+      "final_value": "012A4020H；1109FFFCH",
+      "solution_steps": [
+        "opcode 6 位 → 64 条；寄存器 5 位 → 32 个。",
+        "imm16 左移 2 位后是 18 位有符号数，范围 −2^17～2^17−4 字节，即 ±128 KB（以指令字为单位是 ±2^15 条）。",
+        "R 型拼接：opcode=0<<26；rs=9<<21；rt=10<<16；rd=8<<11；shamt=0<<6；funct=0x20。计算 9×2^21 + 10×2^16 + 8×2^11 + 0x20 = 0x012A4020。",
+        "I 型拼接：opcode=4<<26；rs=8<<21；rt=9<<16；imm16=(−4)&0xFFFF=0xFFFC。计算得 0x1109FFFC。",
+        "注意：分支偏移以指令字为单位，硬件会左移 2 位；题目给出的 −4 表示向前跳 4 条指令（−16 字节）。"
+      ],
+      "key_points": [
+        "R 型按 opcode/rs/rt/rd/shamt/funct 顺序拼接。",
+        "I 型 imm16 需要按位与 0xFFFF 处理负数。",
+        "分支偏移以指令字为单位，实际字节偏移要左移 2 位。",
+        "6 位 opcode 最多 64 条指令。"
+      ],
+      "common_errors": [
+        "add 的 rs/rt/rd 顺序写错（t0 是 rd，不是 rs）。",
+        "beq 偏移 −4 直接写 0x0004，忘记补码。",
+        "分支范围算成 ±2^15 字节（忘记左移 2 位）。",
+        "把 opcode 位数算成 5 位。"
+      ],
+      "scope": "408 计算机组成原理·指令格式；32 位定长指令、PC 相对寻址、按字节编址。",
+      "verification": {
+        "method": "instruction_encoder",
+        "result": "PASS",
+        "detail": "add=0x012A4020、beq=0x1109FFFC；分支范围 ±2^15 条指令=±128 KB。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "127+3",
+          "value": "130"
+        },
+        {
+          "expression": "12.375*8",
+          "value": "99"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-89cf-q1",
+      "kp_code": "cs408.co.topic.89cfd05c8418",
+      "title": "IEEE754 单精度表示与译码",
+      "skill_tags": [
+        "IEEE754",
+        "浮点表示",
+        "规格化"
+      ],
+      "objective": "检验能否把十进制小数转成单精度浮点格式，并由十六进制机器数反解真值。",
+      "stem": "IEEE754 单精度浮点数为 1 位符号、8 位阶码（偏移 127）、23 位尾数。\n\n(1) 把 −12.375 表示为单精度浮点的十六进制机器数；\n(2) 译码 41A00000H，写出其十进制真值；\n(3) 说明 −12.375 的规格化形式（1.xxx×2^e）与阶码、尾数的对应关系。",
+      "answer": "(1) C1460000H。\n(2) 20.0。\n(3) −12.375=−1.100011×2^3；符号 1，阶码 127+3=130=10000010，尾数 100011000…，拼成 C1460000H。",
+      "final_value": "C1460000H；20.0",
+      "solution_steps": [
+        "12.375=12+0.375=1100.011B；规格化 −1.100011×2^3。",
+        "符号位 1；阶码 = 3+127=130=10000010B；尾数去掉隐含的 1，取 100011 后补 0 到 23 位：10001100000000000000000。",
+        "拼接：1 10000010 10001100000000000000000 = 1100 0001 0100 0110 0000 0000 0000 0000 = C1460000H。",
+        "译码 41A00000H：0100 0001 1010 0000…；符号 0，阶码 10000011=131，实际指数 131−127=4；尾数 0100000…，隐含 1 后为 1.01B=1.25；真值 1.25×2^4=20.0。",
+        "检查：−12.375 的绝对值在 8～16 之间，指数为 3；20.0 在 16～32 之间，指数为 4，阶码 131 正确。"
+      ],
+      "key_points": [
+        "规格化形式 1.xxx×2^e。",
+        "阶码 = e+127。",
+        "尾数去掉前导 1，补足 23 位。",
+        "译码时阶码减 127，尾数加隐含 1。"
+      ],
+      "common_errors": [
+        "阶码忘记加 127。",
+        "把 0.375 转成 0.011B 时算错（应为 0.011B）。",
+        "尾数补位方向错。",
+        "把 41A00000H 的阶码当成 130。"
+      ],
+      "scope": "408 计算机组成原理·浮点表示；单精度、规格化数、无 NaN/无穷大。",
+      "verification": {
+        "method": "ieee754_converter",
+        "result": "PASS",
+        "detail": "−12.375 → 0xC1460000；0x41A00000 → 20.0；阶码 130/131 与指数 3/4 一致。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "2^23",
+          "value": "8388608"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-89cf-q2",
+      "kp_code": "cs408.co.topic.89cfd05c8418",
+      "title": "浮点加法舍入与机器精度",
+      "skill_tags": [
+        "浮点加法",
+        "舍入",
+        "机器精度"
+      ],
+      "objective": "在同一知识点内加入浮点运算：用对阶、舍入规则解释 1.0+2^-24 的结果，并计算机器精度。",
+      "stem": "在 IEEE754 单精度下计算 1.0 + 2^−24，并回答：\n\n(1) 写出 1.0 与 2^−24 的阶码和尾数；对阶后 2^−24 的尾数如何右移？\n(2) 按“就近舍入、偶数优先”规则，结果是多少？为什么？\n(3) 单精度的机器精度（1 与下一个可表示数之差）是多少？\n(4) 同样的加法在双精度下结果如何？说明精度差异。",
+      "answer": "(1) 1.0 的阶码 127、尾数全 0；2^−24 的阶码 103、尾数全 0。对阶到 2^0 时，2^−24 的尾数要右移 24 位。\n(2) 结果仍是 1.0：2^−24 正好是 1.0 的半个 ULP，处于两个可表示数的正中间，按偶数优先舍入到 1.0。\n(3) 机器精度 2^−23≈1.19×10^−7。\n(4) 双精度下 1.0+2^−24 可表示，结果为 1.0000000596046448…；双精度精度高得多。",
+      "final_value": "结果仍为 1.0；机器精度 2^-23",
+      "solution_steps": [
+        "1.0=1.0×2^0，阶码 127，尾数 23 位全 0。2^−24=1.0×2^−24，阶码 127−24=103，尾数全 0。",
+        "对阶：把 2^−24 的尾数右移 24 位，才能与 1.0 的阶码对齐。右移后尾数只剩第 24 位为 1，超出 23 位尾数范围。",
+        "1.0 的 ULP 是 2^−23；2^−24 是半个 ULP，正好落在 1.0 与 1.0+2^−23 的正中间。按就近舍入、偶数优先，选择尾数最低位为 0 的 1.0，所以结果为 1.0。",
+        "机器精度（unit roundoff）为 2^−23≈1.1920929×10^−7；它是 1.0 与下一个单精度数 1.0000001192… 的差。",
+        "双精度尾数 52 位，ULP 为 2^−52；2^−24 远大于半个双精度 ULP，因此 1.0+2^−24 在双精度下可以表示，结果约为 1.000000059604644775。"
+      ],
+      "key_points": [
+        "对阶时小阶向大阶看齐，尾数右移。",
+        "半个 ULP 的舍入遵循偶数优先。",
+        "单精度机器精度 2^-23。",
+        "双精度尾数 52 位，精度高得多。"
+      ],
+      "common_errors": [
+        "认为 2^-24 会被直接加进去得到 1.00000006。",
+        "把 ULP 算成 2^-24。",
+        "舍入时选择奇数尾数。",
+        "认为双精度下结果仍为 1.0。"
+      ],
+      "scope": "408 计算机组成原理·浮点运算；IEEE754 单/双精度、规格化数、就近舍入偶数优先。",
+      "verification": {
+        "method": "float32_simulation",
+        "result": "PASS",
+        "detail": "struct 单精度计算 1.0+2^-24 得 1.0；1.0+2^-23 得 1.0000001192；双精度可表示 1+2^-24。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "100*5*2",
+          "value": "1000"
+        },
+        {
+          "expression": "(5+100-1)*2",
+          "value": "208"
+        },
+        {
+          "expression": "(5+99+15)*2",
+          "value": "238"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-7b4d-q1",
+      "kp_code": "cs408.co.topic.7b4d965d0d36",
+      "title": "五段流水线的加速比与停顿影响",
+      "skill_tags": [
+        "流水线",
+        "加速比",
+        "停顿"
+      ],
+      "objective": "检验能否计算理想流水线与带停顿流水线的执行时间、加速比，并理解停顿对性能的稀释。",
+      "stem": "某 CPU 采用 5 段流水线，每段 1 个时钟周期，时钟频率 500 MHz（周期 2 ns）。执行 100 条指令。\n\n(1) 不考虑流水线时，执行完需要多少时间？\n(2) 理想流水线（无停顿）需要多少时间？加速比是多少？\n(3) 若 15% 的指令各产生 1 个时钟周期的停顿，执行时间与加速比变为多少？\n(4) 说明为什么实际加速比总小于段数 5。",
+      "answer": "(1) 100×5×2=1000 ns。\n(2) (5+100−1)×2=208 ns；加速比 1000/208≈4.81。\n(3) 停顿 15 个周期，(5+99+15)×2=238 ns；加速比 1000/238≈4.20。\n(4) 流水线有填充/排空开销、停顿和时钟偏斜，实际加速比小于段数。",
+      "final_value": "理想 208 ns；加速比 4.81；带停顿 238 ns",
+      "solution_steps": [
+        "非流水线：每条指令 5 个周期，100 条共 500 周期，500×2 ns=1000 ns。",
+        "理想流水线：第一条指令 5 个周期，之后每条 1 个周期，共 5+99=104 周期，104×2=208 ns。加速比 1000/208≈4.81。",
+        "15%×100=15 条指令各停顿 1 周期，总周期 104+15=119，119×2=238 ns；加速比 1000/238≈4.20。",
+        "实际加速比小于 5 的原因：流水线填充与排空、数据/控制/结构冒险导致的停顿、时钟偏斜与寄存器开销；段数越多，停顿和开销的相对影响越大。"
+      ],
+      "key_points": [
+        "流水线周期数 = 段数 + 指令数 − 1（理想）。",
+        "加速比 = 非流水线时间 / 流水线时间。",
+        "停顿直接加到总周期数上。",
+        "实际加速比受填充/排空和冒险限制。"
+      ],
+      "common_errors": [
+        "把理想周期数算成 100×1。",
+        "忘记第一条指令的 5 个周期。",
+        "把 15% 当成 15 个周期以外的比例重复计算。",
+        "认为段数 5 就一定能加速 5 倍。"
+      ],
+      "scope": "408 计算机组成原理·指令流水线；5 段、每段 1 周期、无结构冒险；停顿按整周期计。",
+      "verification": {
+        "method": "pipeline_calculator",
+        "result": "PASS",
+        "detail": "非流水线 1000 ns、理想 208 ns、加速比 4.81；带 15 个停顿 238 ns、加速比 4.20。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 15,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "1+0.25*0.6*2",
+          "value": "1.3"
+        },
+        {
+          "expression": "5/1.3",
+          "value": "50/13"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-7b4d-q2",
+      "kp_code": "cs408.co.topic.7b4d965d0d36",
+      "title": "分支指令对流水线 CPI 的影响",
+      "skill_tags": [
+        "流水线",
+        "分支 penalty",
+        "CPI"
+      ],
+      "objective": "在同一知识点内加入控制冒险：由分支比例、taken 比例和 penalty 计算 CPI 与加速比。",
+      "stem": "某 5 段流水线 CPU，理想 CPI=1。程序中 25% 的指令是分支指令，其中 60% 的分支 taken；每次 taken 分支造成 2 个时钟周期的 penalty。\n\n(1) 求实际 CPI；\n(2) 若时钟周期为 1 ns，执行 1000 条指令需要多少时间？\n(3) 与理想流水线相比，时间比是多少？相对非流水线的加速比是多少？\n(4) 若把分支 penalty 降到 1 个周期，CPI 和相对非流水线加速比如何变化？",
+      "answer": "(1) CPI=1+0.25×0.6×2=1.30。\n(2) 1000×1.30×1 ns=1300 ns。\n(3) 相对理想流水线时间比为 1.30；相对非流水线加速比 5/1.30≈3.85。\n(4) CPI=1.15；加速比 5/1.15≈4.35。",
+      "final_value": "CPI=1.30；相对非流水线加速比 3.85",
+      "solution_steps": [
+        "只有 taken 分支产生 penalty：分支比例 25%，taken 比例 60%，所以每条指令平均 penalty = 0.25×0.6×2=0.30 周期。",
+        "实际 CPI = 理想 CPI + 平均 penalty = 1+0.30=1.30。",
+        "1000 条指令 ×1.30 周期 ×1 ns=1300 ns。",
+        "理想流水线 1000 条 ×1 周期 ×1 ns=1000 ns，所以实际/理想时间比为 1.30；相对非流水线（5 段，理想 5000 ns）加速比为 5/1.30≈3.85。",
+        "penalty 降为 1：平均 penalty=0.25×0.6×1=0.15，CPI=1.15；相对非流水线加速比 5/1.15≈4.35。"
+      ],
+      "key_points": [
+        "平均 penalty = 分支比例 × taken 比例 × penalty。",
+        "实际 CPI = 理想 CPI + 平均 penalty。",
+        "相对非流水线加速比 = 段数 / 实际 CPI。",
+        "降低 penalty 或提高预测准确率都能提升性能。"
+      ],
+      "common_errors": [
+        "用 25%×2 计算，忽略 taken 比例。",
+        "把 CPI 算成 1.5（把 not taken 也算 penalty）。",
+        "把相对理想流水线的 1.30 当成加速比。",
+        "认为 penalty 只影响分支指令自身。"
+      ],
+      "scope": "408 计算机组成原理·指令流水线；5 段、理想 CPI=1、分支 penalty 按整周期计。",
+      "verification": {
+        "method": "cpi_calculator",
+        "result": "PASS",
+        "detail": "CPI=1.30；1000 条约 1300 ns；相对非流水线 5/1.3≈3.85；penalty=1 时 CPI=1.15。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "64/4",
+          "value": "16"
+        },
+        {
+          "expression": "32-12-4",
+          "value": "16"
+        },
+        {
+          "expression": "1+7",
+          "value": "8"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-279e-q1",
+      "kp_code": "cs408.co.topic.279ec6c06fe1",
+      "title": "TLB 的地址划分与 LRU 命中判定",
+      "skill_tags": [
+        "TLB",
+        "地址转换",
+        "LRU"
+      ],
+      "objective": "检验能否由 TLB 容量、相联度和页大小推出组数/索引/tag，并按 LRU 判断命中与替换。",
+      "stem": "某机虚拟地址 32 位，页大小 4 KB；TLB 共 64 项、4 路组相联、LRU 替换。\n\n(1) 求 TLB 的组数、组索引位数、tag 位数；\n(2) 对地址序列 00001000H、00011000H、00021000H、00031000H、00041000H、00001000H、00011000H、00001000H（TLB 初始为空），逐条给出组号、tag 与命中/缺失；\n(3) 求命中率；\n(4) 说明 TLB 缺失后硬件需要做什么。",
+      "answer": "(1) 64/4=16 组；索引 4 位；tag=32−12−4=16 位。\n(2) 全部映射到组 1，tag 依次 0、1、2、3、4、0、1、0；结果 M,M,M,M,M,M,M,H。\n(3) 命中率 1/8=12.5%。\n(4) 访问页表（可能多级），装入 TLB，再重新访问；页表项无效才触发缺页。",
+      "final_value": "16 组；命中率 12.5%",
+      "solution_steps": [
+        "组数 = 64/4=16；组索引位数 = log2 16=4；页内偏移 12 位；tag=32−12−4=16 位。",
+        "地址划分：偏移 = 低 12 位；组号 = (VA>>12)&0xF；tag = VA>>16。",
+        "逐条：00001000H → VPN 1、组 1、tag 0，缺失；00011000H → VPN 17、组 1、tag 1，缺失；00021000H → VPN 33、组 1、tag 2，缺失；00031000H → VPN 49、组 1、tag 3，缺失；00041000H → VPN 65、组 1、tag 4，缺失（4 路满，LRU 淘汰 tag 0）；00001000H → tag 0 已被淘汰，缺失（淘汰 tag 1）；00011000H → tag 1 已被淘汰，缺失（淘汰 tag 2）；00001000H → tag 0 在组内，命中。",
+        "8 次访问中命中 1 次，命中率 12.5%。",
+        "TLB 缺失时，硬件用 VPN 查页表（两级则两次访存），得到页框号后装入 TLB（可能触发替换），再完成地址转换；若页表项无效则触发缺页异常。"
+      ],
+      "key_points": [
+        "TLB 组数 = 项数/相联度。",
+        "索引位 = log2 组数；tag = VA 位数 − 页内偏移 − 索引。",
+        "4 路只能容纳 4 个不同 tag，第 5 个触发替换。",
+        "TLB 缺失不等于缺页。"
+      ],
+      "common_errors": [
+        "把 64 项当成 64 组。",
+        "tag 位数忘记减去页内偏移。",
+        "认为第 5 个地址会命中。",
+        "把 TLB 缺失直接当成缺页。"
+      ],
+      "scope": "408 计算机组成原理·虚拟存储器；单级页表、4 KB 页、TLB 4 路 LRU；地址为虚拟地址。",
+      "verification": {
+        "method": "tlb_simulator",
+        "result": "PASS",
+        "detail": "16 组、索引 4 位、tag 16 位；序列结果 M,M,M,M,M,M,M,H，命中率 1/8。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "64*4",
+          "value": "256"
+        },
+        {
+          "expression": "0.95*2+0.05*202",
+          "value": "12"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-279e-q2",
+      "kp_code": "cs408.co.topic.279ec6c06fe1",
+      "title": "TLB 覆盖范围与有效访问时间",
+      "skill_tags": [
+        "TLB reach",
+        "EAT",
+        "大页"
+      ],
+      "objective": "在同一知识点内加入 TLB 覆盖范围与 EAT：比较 4 KB/2 MB 页对 TLB 覆盖和缺页开销的影响。",
+      "stem": "某机 TLB 有 64 项，页大小 4 KB；TLB 访问 1 个时钟周期；页表位于内存，每次内存访问 100 周期；数据 Cache 命中，数据访问 1 周期；采用两级页表。TLB 命中率 95%。\n\n访问代价口径：命中 = TLB + 数据；缺失 = TLB + 两级页表 + 数据。\n\n(1) 求 TLB 覆盖范围；\n(2) 求命中/缺失代价与平均 EAT；\n(3) 若改用 2 MB 大页，TLB 覆盖范围变为多少？对页表级数和缺页有什么影响？\n(4) 说明大页的代价。",
+      "answer": "(1) 64×4 KB=256 KB。\n(2) 命中 1+1=2 周期；缺失 1+200+1=202 周期；EAT=0.95×2+0.05×202=12 周期。\n(3) 64×2 MB=128 MB；页内偏移 21 位，页表级数可减少一级，缺页次数下降。\n(4) 大页增加内部碎片、分配不灵活，并改变 Cache 索引位与别名关系。",
+      "final_value": "TLB 覆盖 256 KB；EAT 12 周期",
+      "solution_steps": [
+        "TLB 覆盖范围 = 项数×页大小 = 64×4 KB=256 KB。",
+        "命中：1 周期 TLB + 1 周期数据 = 2；缺失：1 周期 TLB + 两级页表 2×100 + 1 周期数据 = 202。",
+        "EAT=0.95×2+0.05×202=1.9+10.1=12 周期。",
+        "2 MB 大页：覆盖 64×2 MB=128 MB；页内偏移 21 位，VPN 位数减少，页表级数可减少一级；TLB 能覆盖更大工作集，缺页次数下降。",
+        "大页代价：内部碎片增大（最后一页可能浪费近 2 MB）、内存分配不灵活；大页的页内偏移位数变化会影响 Cache 索引位与别名分析。"
+      ],
+      "key_points": [
+        "TLB reach=项数×页大小。",
+        "EAT 必须写清命中/缺失路径各访问几次内存。",
+        "大页扩大 TLB 覆盖、减少页表级数。",
+        "大页增加内部碎片。"
+      ],
+      "common_errors": [
+        "把 TLB reach 算成 64×4 KB×4（重复乘相联度）。",
+        "缺失路径漏算一级页表。",
+        "认为大页没有代价。",
+        "EAT 路径口径不写清。"
+      ],
+      "scope": "408 计算机组成原理·虚拟存储器；两级页表、4 KB 页、TLB 64 项；EAT 口径已在题中写死。",
+      "verification": {
+        "method": "eat_calculator",
+        "result": "PASS",
+        "detail": "TLB reach 256 KB；命中 2、缺失 202，EAT=12 周期；2 MB 页 reach 128 MB。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 14,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1000+500+1024",
+          "value": "2524"
+        },
+        {
+          "expression": "4096-2524",
+          "value": "1572"
+        },
+        {
+          "expression": "1572/4096",
+          "value": "0.3837890625"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-720a-q1",
+      "kp_code": "cs408.co.topic.720a4a057b28",
+      "title": "DMA 与程序控制方式的 CPU 开销对比（4 KB）",
+      "skill_tags": [
+        "DMA",
+        "程序控制",
+        "CPU 开销"
+      ],
+      "objective": "检验能否按传输量、每次传输的 CPU 周期计算程序控制与 DMA 的 CPU 占用，并比较节省比例。",
+      "stem": "某系统从磁盘读取 4 KB 数据块，CPU 主频 1 GHz。\n\n- 程序控制方式：CPU 每传送 1 字节需要 1 个时钟周期；\n- DMA 方式：预处理 1000 周期、结束后中断处理 500 周期，数据传送每 4 字节偷取 1 个总线周期（1 周期）。\n\n(1) 分别求两种方式的 CPU 开销周期数与时间；\n(2) 求 DMA 相对程序控制节省的 CPU 时间比例；\n(3) 说明 DMA 是否完全不占用 CPU。",
+      "answer": "程序控制：4096 周期=4.096 µs；DMA：1000+500+1024=2524 周期=2.524 µs；节省 (4096−2524)/4096≈38.4%。DMA 仍占用 CPU 做预处理、中断处理和总线周期窃取。",
+      "final_value": "DMA 2524 周期；节省 38.4%",
+      "solution_steps": [
+        "程序控制：4 KB=4096 B，每字节 1 周期，共 4096 周期；1 GHz 下 4096 ns=4.096 µs。",
+        "DMA：预处理 1000 + 中断 500 + 数据传送 4096/4=1024 个总线周期 = 2524 周期 = 2.524 µs。",
+        "节省比例 =(4096−2524)/4096=1572/4096≈0.3838，即 38.4%。",
+        "DMA 并非完全不占 CPU：初始化、结束中断、总线仲裁与周期窃取都要 CPU 或总线参与；只是把逐字节搬运从 CPU 手中移走。"
+      ],
+      "key_points": [
+        "程序控制开销与字节数成正比。",
+        "DMA 开销 = 预处理 + 中断 + 周期窃取。",
+        "节省比例以 CPU 周期为口径。",
+        "DMA 仍需 CPU 参与初始化和中断。"
+      ],
+      "common_errors": [
+        "把 4 KB 当成 4000 B。",
+        "DMA 只算预处理和中断，漏掉周期窃取。",
+        "认为 DMA 完全不占 CPU。",
+        "把节省比例算成 (4096−2524)/2524。"
+      ],
+      "scope": "408 计算机组成原理·I/O 方式；4 KB 块、4 字节偷取 1 周期、忽略总线仲裁开销。",
+      "verification": {
+        "method": "dma_calculator",
+        "result": "PASS",
+        "detail": "程序控制 4096 周期；DMA 2524 周期；节省 1572/4096≈38.4%。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 15,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "2000+1000+262144",
+          "value": "265144"
+        },
+        {
+          "expression": "1048576-265144",
+          "value": "783432"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "co-720a-q2",
+      "kp_code": "cs408.co.topic.720a4a057b28",
+      "title": "大块传输下 DMA 的 CPU 时间节省",
+      "skill_tags": [
+        "DMA",
+        "大块传输",
+        "CPU 占用率"
+      ],
+      "objective": "在同一知识点内把传输量放大到 1 MB，检验周期窃取占比与节省比例随块大小变化的分析。",
+      "stem": "某系统从磁盘读取 1 MB 数据块，CPU 主频 2 GHz。\n\n- 程序控制：每字节 1 个时钟周期；\n- DMA：预处理 2000 周期、中断 1000 周期，每 4 字节偷取 1 个周期。\n\n(1) 求两种方式的 CPU 周期数与时间；\n(2) 求 DMA 节省的 CPU 时间比例；\n(3) 若传输块增大到 4 MB，节省比例如何变化？说明趋势；\n(4) 为什么 DMA 更适合大块传输，而中断方式不适合？",
+      "answer": "程序控制：1,048,576 周期=0.524 ms；DMA：2000+1000+262144=265,144 周期≈0.1326 ms；节省约 74.7%。块增大到 4 MB 时，固定开销占比更小，节省比例趋近 75%。DMA 把逐字节搬运交给控制器，CPU 只在开始/结束介入。",
+      "final_value": "DMA 节省约 74.7%",
+      "solution_steps": [
+        "1 MB=1024×1024=1,048,576 B；程序控制 1,048,576 周期；2 GHz 下 1,048,576/2×10^9 s=0.524 ms。",
+        "DMA 数据传送 1,048,576/4=262,144 周期；总周期 2000+1000+262,144=265,144；时间 265,144/2×10^9≈0.1326 ms。",
+        "节省比例 =1−265,144/1,048,576≈0.7471，即 74.7%。",
+        "块增大到 4 MB：数据传送与字节数成正比，固定开销 3000 周期占比更小，节省比例略高于 74.7%，趋近于 1−1/4=75%。",
+        "DMA 适合大块：CPU 只做初始化和中断；中断方式每个块/字节都要保存现场、进入中断，开销随传输次数增长。"
+      ],
+      "key_points": [
+        "DMA 周期窃取比例 1/4 → 理论上限节省 75%。",
+        "固定开销在大块传输中占比很小。",
+        "程序控制开销与字节数线性增长。",
+        "中断方式的开销与中断次数相关。"
+      ],
+      "common_errors": [
+        "1 MB 按 1,000,000 B 计算（应用 2^20）。",
+        "忘记把周期数换算成时间。",
+        "认为块越大节省比例越低。",
+        "把 DMA 的周期窃取算成每字节 1 周期。"
+      ],
+      "scope": "408 计算机组成原理·I/O 方式；1 MB=2^20 B、4 字节偷取 1 周期、忽略总线仲裁。",
+      "verification": {
+        "method": "dma_calculator",
+        "result": "PASS",
+        "detail": "1 MB：程序 1,048,576 周期、DMA 265,144 周期，节省 74.7%；4 MB 趋近 75%。"
+      }
+    }
+  ]
+}

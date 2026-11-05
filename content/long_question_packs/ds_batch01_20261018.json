@@ -1,0 +1,602 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-ds01",
+  "created_at": "2026-10-18T14:45:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "408 数据结构第一批（5 个知识点 × 2 题）。遍历/最短路/快排/树性质用参考实现复算；链表与算法设计题标记 REVIEW。"
+  },
+  "items": [
+    {
+      "question_type": "subjective",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "ds-d5b7-q1",
+      "kp_code": "cs408.ds.topic.d5b72e4fbe7b",
+      "title": "单链表就地逆置",
+      "skill_tags": [
+        "单链表",
+        "就地逆置",
+        "指针操作"
+      ],
+      "objective": "检验能否只用三个指针完成单链表逆置，并正确处理空表、单结点和多结点边界。",
+      "stem": "给定带头结点的单链表 L，设计算法将 L 就地逆置（不新建结点、不改变结点值），要求：\n(1) 说明设计思想；\n(2) 用 C/C++ 写出完整函数（结构体自定）；\n(3) 分析时间复杂度与额外空间；\n(4) 说明 n=0、n=1、n=2 时的执行情况。",
+      "answer": "三指针迭代：prev 指向已逆置部分头，cur 指向当前结点，next 暂存后继；每步把 cur->next 指向 prev，再整体后移。时间 O(n)，额外空间 O(1)。",
+      "final_value": "O(n) 时间，O(1) 空间",
+      "solution_steps": [
+        "维护三个指针：prev 初始为空（逆置后的表尾），cur 初始为第一个数据结点，next 用于暂存 cur 的后继，防止断链。",
+        "循环：next=cur->next；cur->next=prev；prev=cur；cur=next。循环结束时 prev 指向原表尾，即新表头。",
+        "参考实现：\n```cpp\nstruct ListNode { int val; ListNode* next; };\n\nListNode* reverseList(ListNode* head) {\n    ListNode* prev = nullptr;\n    while (head != nullptr) {\n        ListNode* next = head->next;  // 先保存后继\n        head->next = prev;            // 反转当前指针\n        prev = head;                  // prev 前移\n        head = next;                  // head 前移\n    }\n    return prev;                      // 新表头\n}\n```",
+        "复杂度：每个结点访问一次，时间 O(n)；只用了 prev/next 两个额外指针，空间 O(1)。",
+        "边界：n=0 时 head 为空，循环不执行，返回空；n=1 时 next 为空，head->next 置空，返回原结点；n=2 时第一次反转后 prev=第一个结点，第二次反转后第二个结点指向第一个，返回第二个结点。",
+        "带头结点时，可对 head->next 调用上述函数，再把 head->next 指向返回值；头结点本身不参与逆置。"
+      ],
+      "key_points": [
+        "必须先保存 next 再改 cur->next，否则断链。",
+        "prev 初始为空，作为新表尾。",
+        "循环结束返回 prev，不是原 head。",
+        "头结点不参与逆置。"
+      ],
+      "common_errors": [
+        "先改指针再保存后继，导致链表断裂。",
+        "返回原 head（此时它是新表尾）。",
+        "忘记处理空表。",
+        "把头结点也逆置，破坏“带头结点”的约定。"
+      ],
+      "scope": "408 数据结构·单链表；带头结点或不带头结点均可，函数按不带头结点的第一个数据结点处理。",
+      "verification": {
+        "method": "manual_pointer_review",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "逐轮核对三指针更新顺序与边界；可在纸面模拟 1→2→3 得到 3→2→1。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 20,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "2+3",
+          "value": "5"
+        },
+        {
+          "expression": "3+2",
+          "value": "5"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "ds-d5b7-q2",
+      "kp_code": "cs408.ds.topic.d5b72e4fbe7b",
+      "title": "每 k 个结点一组就地逆置",
+      "skill_tags": [
+        "单链表",
+        "分组逆置",
+        "指针操作"
+      ],
+      "objective": "在单链表逆置基础上增加分组、剩余结点与组间连接，检验复杂指针操作的边界处理。",
+      "stem": "给定单链表和整数 k，要求每 k 个结点为一组就地逆置；若最后不足 k 个结点，则保持原顺序。\n\n(1) 说明设计思想；\n(2) 用 C/C++ 写出完整函数；\n(3) 对 1→2→3→4→5，分别给出 k=2、k=3 的结果；\n(4) 分析时间/空间复杂度，并说明 k=1、k>n、k=n 时的行为。",
+      "answer": "用哑结点和 groupPrev；每组先走 k 步找到组尾 kth，若不足 k 个则结束；记录 groupNext=kth->next，把组内结点依次头插到 groupNext 前，再把 groupPrev->next 指向 kth，更新 groupPrev 为原组首。时间 O(n)，空间 O(1)。k=2 得 2→1→4→3→5；k=3 得 3→2→1→4→5。",
+      "final_value": "k=2：2,1,4,3,5；k=3：3,2,1,4,5",
+      "solution_steps": [
+        "加哑结点 dummy 指向 head，groupPrev 指向每组的前驱。",
+        "对每组：从 groupPrev 走 k 步得到 kth；若中途为空，说明剩余不足 k 个，直接结束。",
+        "记录 groupNext=kth->next。把 groupPrev->next 到 kth 之间的结点逐个头插到 groupNext 前（等价于反转这一段并接回 groupNext）。",
+        "反转后原组首变成组尾，令 groupPrev 指向它，继续下一组。",
+        "参考实现：\n```cpp\nListNode* reverseKGroup(ListNode* head, int k) {\n    if (k <= 1) return head;\n    ListNode dummy(0); dummy.next = head;\n    ListNode* groupPrev = &dummy;\n    while (true) {\n        ListNode* kth = groupPrev;\n        for (int i = 0; i < k && kth; ++i) kth = kth->next;\n        if (!kth) break;                       // 不足 k 个\n        ListNode* groupNext = kth->next;\n        ListNode* prev = groupNext;\n        ListNode* cur = groupPrev->next;\n        while (cur != groupNext) {             // 组内反转\n            ListNode* nxt = cur->next;\n            cur->next = prev;\n            prev = cur;\n            cur = nxt;\n        }\n        ListNode* oldStart = groupPrev->next;\n        groupPrev->next = kth;                 // 接上新的组头\n        groupPrev = oldStart;                  // 原组首变成组尾\n    }\n    return dummy.next;\n}\n```",
+        "示例：1→2→3→4→5，k=2：第一组 1,2 反转为 2→1，第二组 3,4 反转为 4→3，剩余 5 保持，得 2→1→4→3→5。k=3：第一组 1,2,3 反转为 3→2→1，剩余 4,5 不足 3 个保持，得 3→2→1→4→5。",
+        "复杂度：每个结点最多被访问两次（找组尾一次、反转一次），O(n)；只用了常数个指针，O(1)。",
+        "边界：k=1 直接返回原表；k>n 时第一组就不足 k 个，整表不变；k=n 时整表逆置一次。"
+      ],
+      "key_points": [
+        "先找组尾，找不到就结束，保证不足 k 个不反转。",
+        "groupNext 是反转后的组尾后继，必须接回。",
+        "groupPrev 更新为原组首（反转后的组尾）。",
+        "k=1 可直接返回，避免无意义循环。"
+      ],
+      "common_errors": [
+        "不足 k 个也反转，违反题意。",
+        "忘记把反转段接回 groupNext，导致断链。",
+        "groupPrev 更新成 kth（新组头），下一组会跳过结点。",
+        "k=1 时死循环。"
+      ],
+      "scope": "408 数据结构·单链表；带头结点/不带头结点均可，哑结点法不改变原表头语义。",
+      "verification": {
+        "method": "reference_simulation",
+        "result": "PASS",
+        "detail": "用 Python 等价实现验证 1..5：k=2 → 2,1,4,3,5；k=3 → 3,2,1,4,5；k=5 → 5,4,3,2,1。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "1000-500",
+          "value": "500"
+        },
+        {
+          "expression": "1000-500-499",
+          "value": "1"
+        },
+        {
+          "expression": "512*2",
+          "value": "1024"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "ds-1efa-q1",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "title": "二叉树叶子数与完全二叉树性质计算",
+      "skill_tags": [
+        "二叉树性质",
+        "完全二叉树",
+        "结点计数"
+      ],
+      "objective": "检验 n0=n2+1 的推导，以及在完全二叉树中由结点数反推高度、叶子数与单分支结点数。",
+      "stem": "(1) 证明：任何非空二叉树中，叶子结点数 n0 与度为 2 的结点数 n2 满足 n0=n2+1；\n(2) 一棵完全二叉树有 1000 个结点，求高度、叶子结点数、度为 1 的结点数、度为 2 的结点数；\n(3) 该树中编号为 500 的结点（从 1 开始按层编号）的父结点、左孩子、右孩子编号分别是什么？它是否是叶子？",
+      "answer": "(1) 边数 n−1=n1+2n2，且 n=n0+n1+n2，联立得 n0=n2+1。\n(2) 高度 10；叶子 500；度为 1 的结点 1 个；度为 2 的结点 499 个。\n(3) 父结点 250，左孩子 1000，右孩子 1001（不存在）；结点 500 只有一个左孩子，不是叶子。",
+      "final_value": "高度10；n0=500；n1=1；n2=499",
+      "solution_steps": [
+        "设结点总数 n=n0+n1+n2。除根外每个结点恰有一条入边，故边数 n−1；另一方面，边数等于各结点出度之和 n1+2n2。于是 n−1=n1+2n2，代入 n 得 n0+n1+n2−1=n1+2n2，即 n0=n2+1。",
+        "完全二叉树高度 h=⌊log2 n⌋+1。2^9=512≤1000<1024=2^10，故 h=10。",
+        "完全二叉树叶子数 n0=⌈n/2⌉=500；由 n0=n2+1 得 n2=499；n1=n−n0−n2=1000−500−499=1。",
+        "编号从 1 开始按层编号：结点 i 的父结点为 ⌊i/2⌋，左孩子 2i，右孩子 2i+1。i=500：父结点 250；左孩子 1000≤1000 存在；右孩子 1001>1000 不存在。",
+        "结点 500 有且只有一个孩子（左孩子 1000），所以度为 1，不是叶子。"
+      ],
+      "key_points": [
+        "n0=n2+1 的推导用“边数=出度之和”。",
+        "完全二叉树高度 ⌊log2 n⌋+1。",
+        "叶子数 ⌈n/2⌉。",
+        "顺序编号：父 ⌊i/2⌋，孩子 2i、2i+1。"
+      ],
+      "common_errors": [
+        "把高度算成 ⌈log2 n⌉。",
+        "叶子数用 n/2 向下取整（1000 时相同，奇数时会错）。",
+        "认为结点 500 的右孩子 1001 存在。",
+        "把“度为 1”与“叶子”混淆。"
+      ],
+      "scope": "408 数据结构·二叉树；完全二叉树按层从上到下、从左到右编号。",
+      "verification": {
+        "method": "tree_formula_check",
+        "result": "PASS",
+        "detail": "n=1000：h=10、n0=500、n2=499、n1=1；结点 500 的左孩子 1000 存在、右孩子 1001 不存在。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 15,
+      "role": "comprehensive",
+      "verification_steps": [
+        {
+          "expression": "501+500-1",
+          "value": "1000"
+        },
+        {
+          "expression": "1000/2",
+          "value": "500"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "ds-1efa-q2",
+      "kp_code": "cs408.ds.topic.1efaf3d00b50",
+      "title": "完全二叉树的顺序存储与单分支结点统计",
+      "skill_tags": [
+        "顺序存储",
+        "完全二叉树",
+        "结点计数算法"
+      ],
+      "objective": "检验顺序存储下标关系，并要求设计 O(n)、O(1) 的算法统计度为 1 的结点，而不是遍历建树。",
+      "stem": "一棵含 n 个结点的完全二叉树按层序存放在数组 A[1..n] 中（下标从 1 开始）。\n\n(1) 写出结点 i 的父结点、左孩子、右孩子的下标；\n(2) n=1000 时，哪些下标是叶子？\n(3) 设计一个时间 O(n)、额外空间 O(1) 的算法，统计度为 1 的结点个数，用 C/C++ 或伪代码描述；\n(4) 若数组改为 0 开始下标，上述公式如何变化？",
+      "answer": "(1) 父 ⌊i/2⌋，左孩子 2i，右孩子 2i+1。\n(2) i>500 为叶子（501..1000）。\n(3) 只需扫描 i=1..⌊n/2⌋，若 2i≤n 与 2i+1≤n 恰有一个成立，则计数加 1；时间 O(n)，空间 O(1)。\n(4) 0 开始：父 ⌊(i−1)/2⌋，左孩子 2i+1，右孩子 2i+2；叶子满足 i≥⌊n/2⌋。",
+      "final_value": "n=1000 时叶子为 501..1000；度为 1 的结点 1 个",
+      "solution_steps": [
+        "1 开始下标：i 的父结点是 ⌊i/2⌋，左孩子 2i，右孩子 2i+1（若下标不超过 n 则存在）。",
+        "叶子没有孩子，即 2i>n，所以 i>⌊n/2⌋。n=1000 时 i>500，叶子下标 501..1000，共 500 个。",
+        "度为 1 的结点只可能在 i≤⌊n/2⌋ 的“最后一行父结点”中出现。扫描这些结点，检查左右孩子是否存在：若 (2i≤n) 与 (2i+1≤n) 恰有一个为真，计数加 1。",
+        "参考实现：\n```cpp\nint countDegreeOne(int n) {\n    int count = 0;\n    for (int i = 1; i <= n / 2; ++i) {\n        bool hasLeft = (2 * i <= n);\n        bool hasRight = (2 * i + 1 <= n);\n        if (hasLeft != hasRight) ++count;\n    }\n    return count;\n}\n```",
+        "复杂度：循环 n/2 次，时间 O(n)；只用常数个变量，空间 O(1)。完全二叉树中度为 1 的结点数：n 为偶数时 1 个（最后一个父结点只有左孩子），n 为奇数时 0 个。",
+        "0 开始下标：父结点 ⌊(i−1)/2⌋，左孩子 2i+1，右孩子 2i+2；叶子满足 i≥⌊n/2⌋。"
+      ],
+      "key_points": [
+        "叶子条件 2i>n。",
+        "只需扫描前 ⌊n/2⌋ 个结点。",
+        "度为 1 = 左右孩子恰有一个。",
+        "0 基与 1 基公式整体平移一位。"
+      ],
+      "common_errors": [
+        "把叶子条件写成 i≥n/2（1 基下应为 i>n/2）。",
+        "遍历所有 n 个结点，虽然也对但多做一半无用检查。",
+        "用递归建树再统计，额外空间 O(n)，不符合要求。",
+        "0 基公式仍用 2i、2i+1。"
+      ],
+      "scope": "408 数据结构·二叉树顺序存储；完全二叉树，数组下标连续、无空槽。",
+      "verification": {
+        "method": "formula_and_simulation",
+        "result": "PASS",
+        "detail": "n=1000 时叶子 501..1000；扫描 i=1..500，仅 i=500 满足左孩子存在、右孩子不存在，度 1 计数为 1。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "medium",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "2+2+1+1+1",
+          "value": "7"
+        },
+        {
+          "expression": "1+1+3+1+1",
+          "value": "7"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "ds-f26d-q1",
+      "kp_code": "cs408.ds.topic.f26de897ea89",
+      "title": "有向图邻接矩阵的度、边数与二步路径",
+      "skill_tags": [
+        "邻接矩阵",
+        "出度入度",
+        "二步路径"
+      ],
+      "objective": "检验由邻接矩阵读出度与边数，并用矩阵乘法解释二步路径数量与强连通性。",
+      "stem": "有向图 G 的邻接矩阵（顶点顺序 A,B,C,D,E）为：\n\n```\n     A B C D E\nA    0 1 1 0 0\nB    0 0 1 1 0\nC    0 0 0 0 1\nD    0 0 1 0 0\nE    1 0 0 0 0\n```\n\n(1) 求各顶点的出度、入度与边数；\n(2) 计算 A²，并解释 A²[A][C] 与 A²[B][E] 的含义；\n(3) 判断该图是否强连通，说明理由。",
+      "answer": "出度：A2、B2、C1、D1、E1；入度：A1、B1、C3、D1、E1；边数 7。A² 中 A²[A][C]=1（A→B→C），A²[B][E]=1（B→C→E）。图强连通：从 A 可到所有点，所有点也都能回到 A。",
+      "final_value": "边数 7；强连通",
+      "solution_steps": [
+        "出度 = 行和：A 2、B 2、C 1、D 1、E 1；入度 = 列和：A 1、B 1、C 3、D 1、E 1；边数 = 所有 1 的个数 = 7。",
+        "A²[i][j] 等于“从 i 到 j 长度为 2 的路径条数”。计算得：\n```\nA² =\n0 0 1 1 1\n0 0 1 0 1\n1 0 0 0 0\n0 0 0 0 1\n0 1 1 0 0\n```",
+        "A²[A][C]=1：A→B→C 这一条二步路径；A²[B][E]=1：B→C→E 这一条二步路径。",
+        "强连通：从 A 出发，A→B、A→C、B→D、C→E 可达全部顶点；反过来 B→C→E→A、C→E→A、D→C→E→A、E→A 都能回到 A，因此任意两点互相可达。",
+        "注意 A² 非零不代表强连通，它只说明存在长度为 2 的路径；强连通需要所有点对都有有向路径。"
+      ],
+      "key_points": [
+        "出度看行、入度看列。",
+        "A²[i][j] 是长度为 2 的路径条数。",
+        "强连通要求任意两点双向可达。",
+        "矩阵乘法中的“乘法”是逻辑与/计数，不是普通算术意义上的加权。"
+      ],
+      "common_errors": [
+        "把出度与入度看反。",
+        "把 A² 的元素当成“是否有边”。",
+        "只验证 A 能到所有点，就断言强连通。",
+        "边数重复计数（无向图才除以 2，有向图不除）。"
+      ],
+      "scope": "408 数据结构·图；有向图、无自环；邻接矩阵元素为 0/1。",
+      "verification": {
+        "method": "matrix_simulator",
+        "result": "PASS",
+        "detail": "行和/列和/边数与 A² 均由参考矩阵计算得到；强连通用双向可达性检查。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 15,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "ds-f26d-q2",
+      "kp_code": "cs408.ds.topic.f26de897ea89",
+      "title": "邻接矩阵上的 BFS/DFS 与存储选择",
+      "skill_tags": [
+        "图的遍历",
+        "邻接矩阵",
+        "空间复杂度"
+      ],
+      "objective": "在同一知识点内加入遍历顺序、存储结构选择与公共邻居算法，检验对矩阵与邻接表取舍的理解。",
+      "stem": "仍使用上一题的 5 个顶点有向图。\n\n(1) 从 A 出发，按顶点字母序访问邻接点，写出 BFS 与 DFS 的访问序列；\n(2) 分别用邻接矩阵和邻接表存储，给出空间复杂度；对本图（n=5，e=7）哪种更省空间？对稠密图呢？\n(3) 设计算法求顶点 u 与 v 的公共邻居，要求利用邻接矩阵做到 O(n)，并说明用邻接表时如何做到 O(deg(u)+deg(v))；\n(4) 在邻接矩阵上做 BFS 的时间复杂度是多少？为什么？",
+      "answer": "BFS：A,B,C,D,E；DFS：A,B,C,E,D。矩阵 O(n²)，邻接表 O(n+e)；本图 n=5,e=7，邻接表 5+14=19 个存储单元，矩阵 25 个，邻接表略省；稠密图矩阵更省（无指针开销）。公共邻居：扫描 j=0..n−1，若 A[u][j] 与 A[v][j] 同为 1 则输出，O(n)；邻接表可把 u 的邻居放入哈希集合，再遍历 v 的邻居，O(deg(u)+deg(v))。矩阵 BFS 每出队一个顶点要扫描整行 n 个位置，O(n²)。",
+      "final_value": "BFS A,B,C,D,E；DFS A,B,C,E,D；矩阵 BFS O(n²)",
+      "solution_steps": [
+        "邻接矩阵行顺序 A,B,C,D,E。BFS：A 入队；出 A，邻接点 B、C 入队；出 B，邻接点 C（已访问）、D 入队；出 C，邻接点 E 入队；出 D，C 已访问；出 E，A 已访问。序列 A,B,C,D,E。",
+        "DFS：A→B→C→E→A（已访问）回溯；B→D→C（已访问）回溯；A→C（已访问）。序列 A,B,C,E,D。",
+        "空间：邻接矩阵固定 n² 个元素（0/1 可用位图，仍是 O(n²)）；邻接表存 n 个头结点 + 2e 个边结点（有向图每条边一个），O(n+e)。n=5,e=7 时矩阵 25，邻接表 5+14=19；稠密图 e≈n² 时邻接表的指针开销更大，矩阵更紧凑。",
+        "公共邻居（矩阵）：for j in 0..n−1: if A[u][j]==1 and A[v][j]==1: 输出 j。只扫描一行长度 n，O(n)。",
+        "公共邻居（邻接表）：把度数较小者的邻居放入哈希集合，遍历另一个的邻居并查集合，时间 O(min(deg(u),deg(v))+max(deg(u),deg(v)))=O(deg(u)+deg(v))，空间 O(min(deg(u),deg(v)))。",
+        "矩阵 BFS：每个顶点出队一次，出队时扫描整行 n 个元素找未访问邻居，共 n 个顶点，O(n²)；邻接表 BFS 为 O(n+e)。"
+      ],
+      "key_points": [
+        "BFS 用队列、DFS 用递归/栈；访问顺序依赖邻接点顺序。",
+        "矩阵空间 O(n²)，邻接表 O(n+e)。",
+        "公共邻居在矩阵上是两行按位与，O(n)。",
+        "矩阵 BFS 的瓶颈是“扫描整行”。"
+      ],
+      "common_errors": [
+        "DFS 写成 A,B,D,C,E（忽略字母序或回溯顺序）。",
+        "认为邻接表在任何图上都更省空间。",
+        "公共邻居用双重循环枚举所有点对，O(n²)。",
+        "矩阵 BFS 说成 O(n+e)。"
+      ],
+      "scope": "408 数据结构·图；有向图；BFS/DFS 按顶点字母序访问邻接点。",
+      "verification": {
+        "method": "graph_simulator",
+        "result": "PASS",
+        "detail": "参考 BFS/DFS 得到 A,B,C,D,E 与 A,B,C,E,D；空间与复杂度按矩阵/邻接表定义核对。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "4+5",
+          "value": "9"
+        },
+        {
+          "expression": "9+2",
+          "value": "11"
+        },
+        {
+          "expression": "11+3",
+          "value": "14"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "ds-a52e-q1",
+      "kp_code": "cs408.ds.topic.a52e1bedea58",
+      "title": "Dijkstra 单源最短路径的逐步求解",
+      "skill_tags": [
+        "Dijkstra",
+        "最短路径",
+        "贪心"
+      ],
+      "objective": "检验能否按 Dijkstra 的贪心顺序维护 dist/prev，并给出正确的最短路径树。",
+      "stem": "有向带权图（顶点 A–F）的边及权值：\nA→B 4，A→C 2；B→C 1，B→D 5；C→D 8，C→E 10；D→E 2，D→F 6；E→F 3。\n\n以 A 为源点运行 Dijkstra：\n(1) 给出每次选出顶点后的 dist 数组；\n(2) 给出 prev 数组与最短路径树；\n(3) 写出 A 到 F 的最短路径及长度；\n(4) 说明为什么 Dijkstra 不能处理负权边。",
+      "answer": "出队顺序 A,C,B,D,E,F；dist：A0、B4、C2、D9、E11、F14；prev：B←A、C←A、D←B、E←D、F←E。A→F 最短路 A→B→D→E→F，长度 14。Dijkstra 依赖“已选顶点的距离不会再被更短路径更新”，负权边会破坏这个前提。",
+      "final_value": "A→F 最短路长度 14",
+      "solution_steps": [
+        "初始化 dist[A]=0，其余 ∞；prev 为空；未访问集合 {A..F}。",
+        "选 A（0）：relax A→B=4、A→C=2，dist[B]=4、dist[C]=2。",
+        "选 C（2）：relax C→D=10（当前 dist[D]=∞，更新）、C→E=12（更新）。",
+        "选 B（4）：relax B→C=5（不优于 2）、B→D=9（优于 10，更新 dist[D]=9，prev[D]=B）。",
+        "选 D（9）：relax D→E=11（优于 12，更新）、D→F=15（更新）。",
+        "选 E（11）：relax E→F=14（优于 15，更新）。选 F（14），结束。",
+        "结果：dist=(0,4,2,9,11,14)，prev：B=A、C=A、D=B、E=D、F=E。最短路树边 A–B、A–C、B–D、D–E、E–F；A→F 路径 A→B→D→E→F，长度 4+5+2+3=14。",
+        "负权边的问题：Dijkstra 一旦把某顶点加入已确定集合，就认为它的距离不会再变小；负权边可能让“后发现的路径”更短，但该顶点已经出队，无法回退，因此结果错误。"
+      ],
+      "key_points": [
+        "每次选未确定顶点中 dist 最小者。",
+        "relax 条件：dist[u]+w<dist[v]。",
+        "prev 记录前驱，回溯得到路径。",
+        "Dijkstra 要求非负权。"
+      ],
+      "common_errors": [
+        "在 C 出队后就把 D 定为 10，之后不再接受 B→D=9 的更新。",
+        "选点顺序按字母而不是按 dist 最小。",
+        "prev 更新后忘记同步 dist。",
+        "认为 Dijkstra 可以处理负权，只要没有负环。"
+      ],
+      "scope": "408 数据结构·图；有向图、非负权；单源最短路。",
+      "verification": {
+        "method": "dijkstra_simulator",
+        "result": "PASS",
+        "detail": "参考实现出队顺序 A,C,B,D,E,F，dist 0/4/2/9/11/14，prev 与最短路树一致。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "ds-a52e-q2",
+      "kp_code": "cs408.ds.topic.a52e1bedea58",
+      "title": "负权边反例与 DAG 上的最短路",
+      "skill_tags": [
+        "负权边",
+        "Dijkstra 失效",
+        "DAG 最短路"
+      ],
+      "objective": "在同一知识点内加入算法适用条件：用反例说明 Dijkstra 失效，并给出 DAG 上允许负权的最短路算法。",
+      "stem": "(1) 构造一个含负权边的有向图，使 Dijkstra 从 A 出发得到错误的最短路径，写出图、运行过程与正确结果；\n(2) 为什么 Dijkstra 在这个图上会错？指出它依赖的关键前提；\n(3) 若图是有向无环图（DAG）且允许负权边，设计一个正确的最短路算法，说明步骤与复杂度；\n(4) 若是一般图（可有负权、无负环），应使用什么算法？复杂度是多少？",
+      "answer": "反例：A→B 1，A→C 2，C→B −2。Dijkstra 先确定 B=1，之后 C=2 松弛 C→B=0 时 B 已确定，得到 B=1，正确值 0。失败原因是 Dijkstra 假设“已选顶点距离最终确定”，负权边破坏该前提。DAG：按拓扑序依次 relax 每条出边，O(V+E)。一般图用 Bellman-Ford，O(VE)，可检测负环。",
+      "final_value": "DAG 用拓扑序 + 松弛，O(V+E)；一般图 Bellman-Ford O(VE)",
+      "solution_steps": [
+        "反例图：A→B 权 1，A→C 权 2，C→B 权 −2。",
+        "Dijkstra：初始 dist[A]=0；选 A，relax 得 dist[B]=1、dist[C]=2；选 B（1），加入已确定集合；选 C（2），relax C→B 得 0，但 B 已确定，不再更新；最终 dist[B]=1。正确最短路是 A→C→B，长度 2+(−2)=0。",
+        "失败原因：Dijkstra 的贪心前提是“所有边权非负时，当前 dist 最小的未确定顶点，其距离已经是最终最短距离”。负权边可能让以后经过更多边的路径更短，前提不成立。",
+        "DAG 算法：先对图做拓扑排序；按拓扑序处理每个顶点 u，对每条出边 (u,v,w) 执行 relax：若 dist[u]+w<dist[v]，更新 dist[v] 和 prev[v]。由于拓扑序保证处理 u 时所有能到达 u 的顶点都已处理完，一次扫描即可，时间 O(V+E)，允许负权（但不能有负环，DAG 天然无环）。",
+        "一般图：Bellman-Ford 对所有边重复 V−1 轮松弛，O(VE)；第 V 轮若还能松弛，说明存在负环。也可用 SPFA，平均较快但最坏 O(VE)。"
+      ],
+      "key_points": [
+        "Dijkstra 的正确性依赖非负权。",
+        "负权反例的关键是“后发现的路径更短”。",
+        "DAG 上按拓扑序松弛，天然避免重复更新。",
+        "一般图负权用 Bellman-Ford，并能检测负环。"
+      ],
+      "common_errors": [
+        "只给负权边，不说明为什么 Dijkstra 会先确定错误顶点。",
+        "认为只要没有负环 Dijkstra 就正确。",
+        "DAG 算法仍按 dist 最小选点（退化成 Dijkstra）。",
+        "忘记说明拓扑序为什么保证正确。"
+      ],
+      "scope": "408 数据结构·图；反例图为有向图；DAG 算法要求无环；一般图允许负权但无负环时用 Bellman-Ford。",
+      "verification": {
+        "method": "manual_counterexample_review",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "反例逐步核对：Dijkstra 在 B=1 时确定，C→B 的 −2 无法回退；正确路径 A→C→B=0。DAG 拓扑松弛与 Bellman-Ford 的适用条件已核对。"
+      }
+    },
+    {
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "basic",
+      "verification_steps": [
+        {
+          "expression": "3+4+1",
+          "value": "8"
+        }
+      ],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      },
+      "slug": "ds-3172-q1",
+      "kp_code": "cs408.ds.topic.3172ece4a3d6",
+      "title": "快速排序一趟划分与递归过程",
+      "skill_tags": [
+        "快速排序",
+        "划分",
+        "递归树"
+      ],
+      "objective": "检验能否按“首元素为枢轴、挖坑法”正确模拟一趟划分，并写出后续递归结果。",
+      "stem": "对序列 49, 38, 65, 97, 76, 13, 27, 49 进行快速排序，约定：以第一个元素为枢轴，采用挖坑法（右指针先向左找小于枢轴的元素，左指针再向右找大于枢轴的元素）。\n\n(1) 写出第一趟划分后的序列与枢轴最终位置；\n(2) 写出左右两个子序列继续划分的过程；\n(3) 画出递归树并给出最终有序序列；\n(4) 序列中有两个 49，划分后它们的相对次序是否改变？这影响快速排序的稳定性吗？",
+      "answer": "第一趟：[27,38,13,49,76,97,65,49]，枢轴 49 在下标 3（第 4 位）。左子序列 [27,38,13] → [13,27,38]；右子序列 [76,97,65,49] → [49,65,76,97]；再对 [49,65] 划分 → [49,65]。最终 [13,27,38,49,49,65,76,97]。相等元素的相对次序可能改变，快速排序不稳定。",
+      "final_value": "13,27,38,49,49,65,76,97",
+      "solution_steps": [
+        "第一趟：pivot=49，坑在 0 号位。右指针从右往左找 <49：27（下标 6），填入 0 号坑，坑移到 6；左指针从左往右找 >49：65（下标 2），填入 6 号坑，坑移到 2；右指针继续找 <49：13（下标 5），填入 2 号坑，坑移到 5；左指针找 >49：97（下标 3），填入 5 号坑，坑移到 3；左右相遇，把 49 填入 3 号坑。结果 [27,38,13,49,76,97,65,49]，枢轴下标 3。",
+        "左子序列 [27,38,13]：pivot=27，右指针找 <27 得 13，填入 0 号坑；左指针与右指针相遇于 1，27 填入 1 号坑，得 [13,27,38]，枢轴下标 1。",
+        "右子序列 [76,97,65,49]：pivot=76，右指针找 <76 得 49，填入 0 号坑；左指针找 >76 得 97，填入 3 号坑；相遇于 2，76 填入 2 号坑，得 [49,65,76,97]，枢轴下标 2。",
+        "对 [49,65]：pivot=49，右指针停在 65（不小于 49），左指针与右指针相遇于 0，49 填入 0 号坑，得 [49,65]。",
+        "递归树：根 [49,38,65,97,76,13,27,49] → 左 [27,38,13]（→ [13,27,38]）、右 [76,97,65,49]（→ 左 [49,65]、右 [97]）。合并得 [13,27,38,49,49,65,76,97]。",
+        "两个 49 的相对次序：原序列中第一个 49 是枢轴，第二个 49 在右端；划分后第二个 49 被移到右子序列末尾，第一个 49 固定在中间，相对次序可能改变。快速排序的划分会交换远距离元素，因此不稳定。"
+      ],
+      "key_points": [
+        "挖坑法：右指针先动，填坑后换左指针。",
+        "枢轴最终位置就是它在有序序列中的位置。",
+        "递归对左右子序列重复划分。",
+        "快速排序不稳定。"
+      ],
+      "common_errors": [
+        "左指针先动，导致划分结果不同。",
+        "把枢轴位置算成 4（下标从 1 数）。",
+        "递归时把枢轴也放进子序列。",
+        "认为两个 49 相等就不影响稳定性。"
+      ],
+      "scope": "408 数据结构·排序；首元素为枢轴、挖坑法；升序排列。",
+      "verification": {
+        "method": "quicksort_simulator",
+        "result": "PASS",
+        "detail": "按挖坑法模拟：第一趟 [27,38,13,49,76,97,65,49]，后续划分与最终序列与题解一致。"
+      }
+    },
+    {
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 20,
+      "role": "comprehensive",
+      "verification_steps": [],
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      },
+      "slug": "ds-3172-q2",
+      "kp_code": "cs408.ds.topic.3172ece4a3d6",
+      "title": "快速排序最坏情况与 Quickselect",
+      "skill_tags": [
+        "快速排序",
+        "最坏复杂度",
+        "Quickselect"
+      ],
+      "objective": "在同一知识点内加入复杂度退化分析与“只递归一侧”的 Quickselect，检验对分治复杂度的理解。",
+      "stem": "(1) 对已经升序排列的数组，若固定以第一个元素为枢轴，快速排序的时间复杂度是多少？写出递推式并解释；\n(2) 给出两种避免最坏情况的常用做法；\n(3) 设计算法在无序数组中找到第 k 小的元素，要求平均时间 O(n)，说明它为什么只需递归一侧；\n(4) 对数组 49,38,65,97,76,13,27,49，用上述算法求第 5 小元素，写出每趟划分后的区间与结果。",
+      "answer": "(1) 已升序时每次划分一边为空，T(n)=T(n−1)+O(n)=O(n²)。(2) 随机选枢轴；三数取中/median-of-three。(3) Quickselect：划分后若枢轴下标等于 k−1 返回，否则只递归包含目标的一侧；期望 O(n)，最坏 O(n²)。(4) 第 5 小为 49：第一趟枢轴下标 3，目标在右侧；第二趟在 [76,97,65,49] 中枢轴下标 6，目标在左侧；第三趟 [49,65] 枢轴下标 4，返回 49。",
+      "final_value": "第 5 小为 49",
+      "solution_steps": [
+        "已升序数组以首元素为枢轴：第一趟枢轴最小，左子序列为空，右子序列 n−1 个；第二趟同理。递推 T(n)=T(n−1)+O(n)，展开得 O(n²)。",
+        "避免最坏情况：① 随机选择枢轴，使期望划分接近均衡；② 三数取中（首、中、尾取中位数）或 median-of-three，减少极端划分；③ 小区间改用插入排序，减少递归开销。",
+        "Quickselect：对区间 [l,r] 做一次划分，枢轴最终下标 p。若 p==k−1（0 基），a[p] 就是第 k 小；若 p>k−1，目标在左半，只递归 [l,p−1]；否则只递归 [p+1,r]。每次只进入一侧，期望比较次数 T(n)=T(n/2)+O(n)=O(n)。",
+        "参考代码（0 基 k）：\n```cpp\nint partition(vector<int>& a, int l, int r);\nint quickSelect(vector<int>& a, int l, int r, int k) {\n    int p = partition(a, l, r);\n    if (p == k) return a[p];\n    return p > k ? quickSelect(a, l, p - 1, k)\n                 : quickSelect(a, p + 1, r, k);\n}\n```",
+        "示例求第 5 小（k=4，0 基）：第一趟划分后 [27,38,13,49,76,97,65,49]，p=3<4，递归右区间 [4,7]；第二趟在 [76,97,65,49] 上划分得 [49,65,76,97]，p=6>4，递归左区间 [4,5]；第三趟在 [49,65] 上划分，p=4==k，返回 a[4]=49。",
+        "最坏情况：每次划分极不均衡时 T(n)=T(n−1)+O(n)=O(n²)；随机化后期望 O(n)。"
+      ],
+      "key_points": [
+        "有序数组 + 首元素枢轴 = 最坏情况。",
+        "Quickselect 只递归目标所在的一侧。",
+        "期望 O(n)，最坏 O(n²)。",
+        "随机化/三数取中降低退化概率。"
+      ],
+      "common_errors": [
+        "认为快速排序任何情况下都是 O(n log n)。",
+        "Quickselect 两侧都递归，退化成快速排序。",
+        "k 的 0 基/1 基混淆。",
+        "忘记处理 p==k 的返回条件。"
+      ],
+      "scope": "408 数据结构·排序与选择；升序、0 基下标；Quickselect 的期望复杂度基于随机枢轴。",
+      "verification": {
+        "method": "quickselect_simulator",
+        "result": "PASS",
+        "detail": "按挖坑法划分逐步模拟，三趟后 p=4 返回 49；与排序后第 5 个元素一致。"
+      }
+    }
+  ]
+}

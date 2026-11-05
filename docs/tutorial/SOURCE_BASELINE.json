@@ -1,0 +1,528 @@
+{
+  "date": "2026-10-16",
+  "scope": "current working tree; source reading only; no database/model calls",
+  "git_head": "b252178fce4e7852caef5332e3e7b10bd294bbc1",
+  "files": [
+    {
+      "path": "backend/main.py",
+      "sha256": "4fc14c6d6da168d8d80bf32661310926c989d370ae90d10419dcd0a855c3bec8",
+      "nonempty_lines": 3
+    },
+    {
+      "path": "backend/app.py",
+      "sha256": "a2e065997ef16228fec750bf1a2035d12e38ed251b4f1cab6b702b7869fbdc16",
+      "nonempty_lines": 210
+    },
+    {
+      "path": "backend/config.py",
+      "sha256": "e57411471801f39bfdb0bd44d0a177929916040596779b753fbf1e02a45495e0",
+      "nonempty_lines": 111
+    },
+    {
+      "path": "backend/db.py",
+      "sha256": "f86fa71b52dfce9d86b25db7186a210125c2c746f919ea32582544fda4f435bd",
+      "nonempty_lines": 51
+    },
+    {
+      "path": "backend/api/deps.py",
+      "sha256": "3ea803928194bb702c25de280aaeff26c9c4b7f683d75e138ae305e449ac1fc9",
+      "nonempty_lines": 24
+    },
+    {
+      "path": "backend/api/routes/health.py",
+      "sha256": "1df05e505d05a4812a7c6ec18790c3b17e99481967cff2534e876982115f2318",
+      "nonempty_lines": 90
+    },
+    {
+      "path": "backend/api/routes/materials.py",
+      "sha256": "5f1fcf42376862a55eb88e32a213e4124d26fc229f8441b8d7c4eb995ff1692f",
+      "nonempty_lines": 279
+    },
+    {
+      "path": "backend/api/routes/chat.py",
+      "sha256": "d061e4f7b62916e5eb4f7fe0a536c3da8234345b1fcf90a3261ebc474b9ada7c",
+      "nonempty_lines": 326
+    },
+    {
+      "path": "backend/api/routes/study.py",
+      "sha256": "36ba2892bee8f9ffe553254498bf6eb187d5ac863181794cd0bba1f759b493f9",
+      "nonempty_lines": 991
+    },
+    {
+      "path": "backend/api/routes/learning_tasks.py",
+      "sha256": "400cfbffa8067a76f5021ae01d6146fecbfce660d677f5d4dd73477d033c5b14",
+      "nonempty_lines": 27
+    },
+    {
+      "path": "backend/models/learning.py",
+      "sha256": "cb3dae606434c246f8fb2bfbcf00456e71538d8e97d5fc98c6ab1a4a3906e42b",
+      "nonempty_lines": 614
+    },
+    {
+      "path": "backend/models/rag.py",
+      "sha256": "b1de66ba5d36e87c29631f59c11b8ed6e3a357ee333b8ac85d4a52db93182587",
+      "nonempty_lines": 92
+    },
+    {
+      "path": "backend/models/chat.py",
+      "sha256": "7cb97e45869ccfb5fc9f1ddd380e3ec33c1046c02fc074094e1cddec884cc94e",
+      "nonempty_lines": 63
+    },
+    {
+      "path": "backend/models/jobs.py",
+      "sha256": "be2c59f536fa1d9bde9455cc1497dcb97a75e7cc2cbdb03734811579c04c0cdd",
+      "nonempty_lines": 41
+    },
+    {
+      "path": "backend/models/learning_task.py",
+      "sha256": "85e0ec46176d3b34160154e2371e241d71eac4bf042106304cfe22ddfa02497f",
+      "nonempty_lines": 24
+    },
+    {
+      "path": "backend/ingestion/file_storage.py",
+      "sha256": "a035a3995d9e86a959dddcaa3393ef5c94830fa1b0e2d782ee5439ae95076a05",
+      "nonempty_lines": 80
+    },
+    {
+      "path": "backend/ingestion/document_parsers.py",
+      "sha256": "b0d68401506a770194c62ba5ed614f2bc5309b7a0d8a6489306561e9fd4c41a7",
+      "nonempty_lines": 210
+    },
+    {
+      "path": "backend/ingestion/text_normalize.py",
+      "sha256": "20ee8353efda8148cdc1bdc6c397c7396067f6c1e1420fa7193f6d5d72734e89",
+      "nonempty_lines": 39
+    },
+    {
+      "path": "backend/ingestion/title_tree.py",
+      "sha256": "8ff0b031879954cce44a37381d1f8b9f19e2a44aa1dfa554a17702baec0ff93a",
+      "nonempty_lines": 260
+    },
+    {
+      "path": "backend/ingestion/chunker.py",
+      "sha256": "2017426c1158eff9615fad043c7bd69940188280bcc37f3126733f12bf386861",
+      "nonempty_lines": 94
+    },
+    {
+      "path": "backend/retrieval/embedding.py",
+      "sha256": "bc4c25b726d980df41eae3443e17367aa96b72bf1afa674ffeef9cf5fbf4e755",
+      "nonempty_lines": 185
+    },
+    {
+      "path": "backend/retrieval/vector_store.py",
+      "sha256": "c125beb15bb166ff39e95750381a11abace4d44390faae681de37050c7ea6a1e",
+      "nonempty_lines": 350
+    },
+    {
+      "path": "backend/retrieval/keyword.py",
+      "sha256": "096baf2331fbc6ed180ae857289ec5fe31e2da0da440ba4bc2c2c17288ce774c",
+      "nonempty_lines": 233
+    },
+    {
+      "path": "backend/retrieval/fusion.py",
+      "sha256": "89124030d5c4bba74a1656bfa7eb2a25f4044fecb92c3118339aed8f54be01eb",
+      "nonempty_lines": 48
+    },
+    {
+      "path": "backend/retrieval/rerank.py",
+      "sha256": "d3adc93f353cb2a99a5f9eff18c80df33bd96b9e87aa9165f4b3d6af00baecc1",
+      "nonempty_lines": 135
+    },
+    {
+      "path": "backend/retrieval/stack.py",
+      "sha256": "58c0b71b28a7299465e5bb3143a00b19cb4d98ce28092b82e8ebf5d15711ff46",
+      "nonempty_lines": 114
+    },
+    {
+      "path": "backend/services/ingestion_service.py",
+      "sha256": "4f68524c9f798b209ce95be0fb9cdb89b3f285e7c7b907bfafb7861d07cd3173",
+      "nonempty_lines": 339
+    },
+    {
+      "path": "backend/services/retrieval_service.py",
+      "sha256": "77c7045e861572f4b4f88e5ffde9650172c026cef756b1507a2936e19d306ba1",
+      "nonempty_lines": 337
+    },
+    {
+      "path": "backend/services/material_service.py",
+      "sha256": "66ad624f4a962cc82acc74ac766764e831de9896056e94d53ac6bb41ced418ac",
+      "nonempty_lines": 350
+    },
+    {
+      "path": "backend/services/material_search_service.py",
+      "sha256": "95147ec7de8ee1c568c1f10f078ad102be9f22ecc4df3c301af45c0e3a1ae98e",
+      "nonempty_lines": 104
+    },
+    {
+      "path": "backend/chat/service.py",
+      "sha256": "e20782824bee9b0482b0482c24543d2c49bc21223d5104076dd5e8ba0f4a718f",
+      "nonempty_lines": 2176
+    },
+    {
+      "path": "backend/chat/call_trace.py",
+      "sha256": "cd31a7e0dd46c661308ed137f46eb4610d496dfe0cb87defcf72229eb21e5725",
+      "nonempty_lines": 77
+    },
+    {
+      "path": "backend/services/question_versions.py",
+      "sha256": "2d88e8a8838eeaa136c1252f50f3dcb2abc57962697f7b20adbda2ea9248d10c",
+      "nonempty_lines": 196
+    },
+    {
+      "path": "backend/services/question_eligibility.py",
+      "sha256": "a853b85f81f6122e2cd89d35523bdc8839bd0d21871e5e2c29dc706c2f40a047",
+      "nonempty_lines": 281
+    },
+    {
+      "path": "backend/services/question_availability.py",
+      "sha256": "01763b89cff3d037617ec2c8a6dcd1610026e55c917ae267fa850df7a560246a",
+      "nonempty_lines": 172
+    },
+    {
+      "path": "backend/services/answer_grading.py",
+      "sha256": "01007b79a60728f17e7651a5681df8682633f22df57cc4f21b29cfd18c8e17cd",
+      "nonempty_lines": 252
+    },
+    {
+      "path": "backend/services/answer_submission_service.py",
+      "sha256": "ae97f8a84e1fe2e3326e4ef7ae4fdf3a4f0994adaf7bca8bedc972d9ef09ecb8",
+      "nonempty_lines": 372
+    },
+    {
+      "path": "backend/services/attempt_service.py",
+      "sha256": "6b57512b01fd5c061cf82b87f1596ac881a1d3019e3a72797377e1f94fbb77f5",
+      "nonempty_lines": 166
+    },
+    {
+      "path": "backend/services/practice_service.py",
+      "sha256": "828ada62c9b1b28fa2c692b34bb4393fab274a8284e47b1e48db1eb752522900",
+      "nonempty_lines": 419
+    },
+    {
+      "path": "backend/services/planning_service.py",
+      "sha256": "14e5c68fd61d17ee7b034b12731c0ab369568725424f690746a77e7705e58294",
+      "nonempty_lines": 152
+    },
+    {
+      "path": "backend/mastery/rules.py",
+      "sha256": "0b4b7ebb28908a2fd07a32ff69abf0f29219135ecfd72fb92d76f68ddf1c2f8d",
+      "nonempty_lines": 317
+    },
+    {
+      "path": "backend/mastery/evidence.py",
+      "sha256": "4a669eb023ead9502f6f0225d0422ce7bc1d8f63b6427b19da7db8a6c996aa61",
+      "nonempty_lines": 68
+    },
+    {
+      "path": "backend/mastery/transition.py",
+      "sha256": "492a1167a3ad68b784ab91957c80bc4a9237de378865631cd9fa9ff1e6ede02b",
+      "nonempty_lines": 221
+    },
+    {
+      "path": "backend/mastery/storage.py",
+      "sha256": "9f1e9c4be375c5126b32011487c97e203fa8b56033c0d6d37d945ead29000833",
+      "nonempty_lines": 211
+    },
+    {
+      "path": "backend/services/graduation_question_set.py",
+      "sha256": "a03f3af8f0ec3ffc5d8c38a9b174354d53ca236132e87f99e1c97953244f9718",
+      "nonempty_lines": 217
+    },
+    {
+      "path": "backend/services/post_graduation_service.py",
+      "sha256": "bed182260c0d7dec4c15f49e1d1b66b037ef145ab29d73c5a1a1b4bf6451b3ac",
+      "nonempty_lines": 136
+    },
+    {
+      "path": "backend/services/assistant_router.py",
+      "sha256": "4e30e21a2cbf2f5769714e9e0be4a5e82233aaa2be14f6e5ec081e2ccc340666",
+      "nonempty_lines": 82
+    },
+    {
+      "path": "backend/services/learning_assistant_service.py",
+      "sha256": "0bc8b8b25bc71dd13c992ca91170aa7ef872a4e0704ea26c72810724a7e7fce2",
+      "nonempty_lines": 483
+    },
+    {
+      "path": "backend/services/learning_task_tools.py",
+      "sha256": "bf9cc523703831056003d5a3a6239feba7cbd0402f95b70f89919ab2c163f633",
+      "nonempty_lines": 482
+    },
+    {
+      "path": "backend/services/learning_task_service.py",
+      "sha256": "4a452ec901767c082bb22dfa816cb5d6d56528de4b4d749acaef0034a6200d2c",
+      "nonempty_lines": 706
+    },
+    {
+      "path": "backend/services/learning_task_context.py",
+      "sha256": "fde51d8fdfe286c1e13420007f9b48b310b7c98fa81afe6a58e0e04292169aae",
+      "nonempty_lines": 81
+    },
+    {
+      "path": "backend/services/planner_facts.py",
+      "sha256": "1be49846d75ad560b488a1b077c4263052da4279477e5996b7d5faba82171946",
+      "nonempty_lines": 252
+    },
+    {
+      "path": "frontend/src/router.ts",
+      "sha256": "7f77eba99692574bf4473e9fd2e95778eeaa3637cce77977299066b3d85c754f",
+      "nonempty_lines": 22
+    },
+    {
+      "path": "frontend/src/api/chat.ts",
+      "sha256": "0a08258145f4868bfd55e05d3e2d01936aa35027ab79044a81b7f44ba9bceecf",
+      "nonempty_lines": 176
+    },
+    {
+      "path": "frontend/src/api/study.ts",
+      "sha256": "36bc9f550f0a226e773c9df6323474a59bd89cbdf677964986e9e8221cd4ed96",
+      "nonempty_lines": 106
+    },
+    {
+      "path": "frontend/src/api/learningTasks.ts",
+      "sha256": "7d78d2838ecc8aa3bef7b6c0d3edca32283a983057f442ef9bb806de0e093568",
+      "nonempty_lines": 12
+    },
+    {
+      "path": "frontend/src/components/MaterialSearch.vue",
+      "sha256": "25c2042395c44711513180cbc6bbc11a8b77abc7c29a764e93e9bd1f1849f6ef",
+      "nonempty_lines": 218
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "f808aa9f6583e9060e05c4155bd95b8a1ea94fd8df0df14759377b2a3378c68a",
+      "nonempty_lines": 81
+    },
+    {
+      "path": "scripts/run-e2e.ps1",
+      "sha256": "60a30aa872763ae44981406bf69c4d00084fb8791ede136a58217fe96ef85e79",
+      "nonempty_lines": 193
+    },
+    {
+      "path": "docker-compose.yml",
+      "sha256": "2453c383207c64cfa82c1bb00e97e725f67ed9b7d27252ee5c7e5afd7622b18a",
+      "nonempty_lines": 84
+    }
+  ],
+  "basis": "源码核对基线；不表示 HEAD 已含这些工作区内容，也不表示本轮重新验收运行环境",
+  "measurement": {
+    "unit": "nonempty text lines including comments/docstrings",
+    "extensions": [
+      ".py",
+      ".ts",
+      ".vue",
+      ".ps1",
+      ".cmd"
+    ],
+    "excluded": "依赖、pycache、生成运行产物、数据库、用户资料、CSS、图片",
+    "groups": [
+      {
+        "path": "backend",
+        "files": 155,
+        "nonempty_lines": 27430
+      },
+      {
+        "path": "frontend/src",
+        "files": 82,
+        "nonempty_lines": 17923
+      },
+      {
+        "path": "tests",
+        "files": 243,
+        "nonempty_lines": 26613
+      },
+      {
+        "path": "frontend/e2e",
+        "files": 46,
+        "nonempty_lines": 5497
+      },
+      {
+        "path": "migrations",
+        "files": 29,
+        "nonempty_lines": 1827
+      },
+      {
+        "path": "scripts",
+        "files": 259,
+        "nonempty_lines": 45756
+      },
+      {
+        "path": "desktop",
+        "files": 6,
+        "nonempty_lines": 723
+      }
+    ],
+    "frontend_generated_types_lines": 9692,
+    "frontend_unit_test_files": 21,
+    "frontend_unit_test_lines": 538
+  },
+  "observed_semantics": {
+    "agent_prompt_version": "learning-task-v19-lossless-records",
+    "chat_trace_prompt_version": "chat-evidence-v11",
+    "agent_max_rounds": 6,
+    "agent_max_tool_calls": 10,
+    "agent_time_budget_seconds": 60,
+    "agent_model_request_bytes_guard": 60000,
+    "current_schema_head_from_source": "f55a7b9012c3",
+    "default_embedding_from_settings": "BAAI/bge-small-zh-v1.5",
+    "rerank": "optional",
+    "mmr": "conditional on diversify",
+    "graduation": "v3 required frozen set completion; v1/v2 historical compatibility"
+  },
+  "execution_boundary": {
+    "database_connections": 0,
+    "migrations": 0,
+    "model_http_requests": 0,
+    "product_code_edits": 0,
+    "tutorial_code_created": false,
+    "original_snapshot_created": false,
+    "test_runs": 0
+  },
+  "learning_budget": {
+    "days": 20,
+    "hours_per_day": 5,
+    "total_hours": 100,
+    "status": "5 hours per day assumption awaiting user review; category weights specified by user",
+    "allocation": [
+      {
+        "category": "RAG",
+        "percent": 25,
+        "days": [
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "hours": 25
+      },
+      {
+        "category": "Agent / Tool Calling",
+        "percent": 25,
+        "days": [
+          13,
+          14,
+          15,
+          16,
+          17
+        ],
+        "hours": 25
+      },
+      {
+        "category": "Backend / database / learning evidence",
+        "percent": 20,
+        "days": [
+          1,
+          10,
+          11,
+          12
+        ],
+        "hours": 20
+      },
+      {
+        "category": "LLM / Prompt / SSE / AI evaluation",
+        "percent": 15,
+        "days": [
+          7,
+          8,
+          9
+        ],
+        "hours": 15
+      },
+      {
+        "category": "Engineering / testing / deployment",
+        "percent": 10,
+        "days": [
+          19,
+          20
+        ],
+        "hours": 10
+      },
+      {
+        "category": "Frontend API understanding",
+        "percent": 5,
+        "days": [
+          18
+        ],
+        "hours": 5
+      }
+    ],
+    "ai_core_percent": 65,
+    "independent_rewrite_reference_lines": {
+      "minimum": 4080,
+      "maximum": 5850,
+      "meaning": "Selected core implementation and necessary behavior tests; not a product size limit"
+    }
+  },
+  "design_revision": 2,
+  "design_status": "PHASE6_0_DESIGN_READY_AWAITING_CONFIRMATION",
+  "additional_review_files": [
+    {
+      "path": "backend/eval/dataset.py",
+      "sha256": "e4796ab4f1f61b0e243250c0f2a20c5156ad0f1a0d737a68d5e125965a474b09"
+    },
+    {
+      "path": "backend/eval/metrics.py",
+      "sha256": "6e2ad8549c5228275123d1a6e7116f4881f1a0de276b46abe106a27d7c72a6de"
+    },
+    {
+      "path": "scripts/phase5_eval_meter.py",
+      "sha256": "ccb278ea5e40421c48e850ab33a1426b5befe420cb16811abea3b51412c0dd62"
+    },
+    {
+      "path": "scripts/phase5_run_frozen_ai_eval.py",
+      "sha256": "1f5a5fa5bb78f7455396a412abba512c22e7b59fd96c44ee8d672be10a6f113d"
+    },
+    {
+      "path": "scripts/phase5_real_retest.py",
+      "sha256": "4f932085f8e5487eeba47c9000b0aa49f6e2c4dc0053a765d76d9851b781f42c"
+    },
+    {
+      "path": "scripts/run_retrieval_eval.py",
+      "sha256": "95ec4e178fb52627be842aa74eaac858404f45e4af1a52bcad1043555176351a"
+    },
+    {
+      "path": "scripts/run_ragas_chat_eval.py",
+      "sha256": "09049a55f04fb96dd972e736873d370529d2679467b24ab2f02757c7bf299998"
+    },
+    {
+      "path": "backend/Dockerfile",
+      "sha256": "77fc3edb15199992b227d08dc1dfb7f91081e7ff7dd0a137539ca80e336a7fd8"
+    },
+    {
+      "path": "frontend/Dockerfile",
+      "sha256": "e821032f3ccb30ec5353fd13035a516fe2a2c8dc9aa2837f69fb6dda8d8da052"
+    },
+    {
+      "path": "eval/README.md",
+      "sha256": "5b065ee9c6e45ae651a1840b0c294cfad912d5004a656583e41231af31912836"
+    },
+    {
+      "path": "eval/golden/README.md",
+      "sha256": "821e2b64e2361be4bbae59fa3b4ce2747598f8030bfa371e0fb1816b2c9c113a"
+    }
+  ],
+  "frozen_evaluation_assets_readonly": [
+    {
+      "path": "eval/phase5-closeout-v1/cases.json",
+      "sha256": "ca05b1758f8f946c9cd679e15c6c1eb3f111d1349d67d1fafb80bad5b610df4e"
+    },
+    {
+      "path": "eval/phase5-closeout-v1/fixtures.json",
+      "sha256": "97fd401c2cfd94311a61757fdf81b449449c569d66516d945eca5b81c073b6db"
+    },
+    {
+      "path": "eval/phase5-closeout-v1/rubric.md",
+      "sha256": "906219799c5167541fe94cf8a91f8598bee265949dc2128ece98d3bea3b9c713"
+    },
+    {
+      "path": "eval/phase5-closeout-v1/budget.json",
+      "sha256": "70cb28cb0742d376b5c0fc9ebd44b524aef8b84c769ed2851d9fa2f89e63a170"
+    },
+    {
+      "path": "eval/phase5-closeout-v1/execution-plan.json",
+      "sha256": "8702a4e4bbff057028ed5b5bf10d41e7f82c1d9b0cf76a86b5761e1f7abf30bf"
+    }
+  ]
+}
+

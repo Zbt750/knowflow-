@@ -1,0 +1,120 @@
+{
+  "fixture_version": "phase45i-generation-targets-v1",
+  "source_inventory": "storage/quality-audits/phase45d-20261009/diagnosis/inventory-snapshot.json",
+  "source_inventory_sha256": "4570be69ca973536a66c690f698d7b05b35f071bd92e242f82dbe9244e1cb317",
+  "scope_note": "Snapshot-backed node targets for offline/mock evaluation only; IDs must be revalidated against an isolated current copy before any model run. This manifest is not proof of live database state.",
+  "target_count": 50,
+  "subject_counts": {
+    "数学二": 25,
+    "408": 25
+  },
+  "nodes": [
+    {
+      "subject": "数学二",
+      "id": "24efccd8-8637-47e5-91da-beb870acc261",
+      "code": "math.exam.de439863790e",
+      "name": "导数与微分的计算",
+      "expected_family": "power_derivative"
+    },
+    {
+      "subject": "数学二",
+      "id": "3b680398-9e3b-472e-a4d5-21600e249245",
+      "code": "math.exam.c431f98f817c",
+      "name": "定积分的计算",
+      "expected_family": "power_integral"
+    },
+    {
+      "subject": "数学二",
+      "id": "20bafaca-0ed8-4332-b462-0fd02525d245",
+      "code": "math.exam.fd2f9e3739d9",
+      "name": "反常积分的计算与敛散性",
+      "expected_family": "improper_integral_parameter"
+    },
+    {
+      "subject": "数学二",
+      "id": "9743543a-7cf9-48d9-a2bd-c1e22cad78b2",
+      "code": "math.exam.c5c672022b7f",
+      "name": "函数极限的计算",
+      "expected_family": "exp_limit"
+    },
+    {
+      "subject": "数学二",
+      "id": "0a897827-fd0a-40cd-81f9-0e3be36c6718",
+      "code": "math.exam.f4e5ed0360ea",
+      "name": "行列式",
+      "expected_family": "determinant_2x2"
+    },
+    {
+      "subject": "408",
+      "id": "f1277832-5ff5-4867-91a6-128a7da224ae",
+      "code": "cs408.ds.topic.1efaf3d00b50",
+      "name": "二叉树基础（性质+存储）",
+      "expected_family": "complete_tree"
+    },
+    {
+      "subject": "408",
+      "id": "5b685a48-e165-4a60-8fdb-aeb0c035a9c5",
+      "code": "cs408.co.topic.324b03e7b481",
+      "name": "定点数编码（原/反/补/移）",
+      "expected_family": "signed_range"
+    },
+    {
+      "subject": "408",
+      "id": "d87e60a4-77cf-4edf-9be6-950ba1b7c141",
+      "code": "cs408.co.topic.89cfd05c8418",
+      "name": "IEEE754 浮点表示",
+      "expected_family": "binary_float"
+    },
+    {
+      "subject": "408",
+      "id": "95e1070d-4cdf-4a63-ab40-141b56b368f5",
+      "code": "cs408.ds.topic.8b04b55a0408",
+      "name": "折半/二分查找",
+      "expected_family": "binary_search_steps"
+    },
+    {
+      "subject": "408",
+      "id": "739301e7-8bf0-4d4b-963d-ffa55e9440d9",
+      "code": "cs408.os.topic.006da51a6b0f",
+      "name": "页面置换算法",
+      "expected_family": "page_replacement_faults"
+    }
+  ],
+  "profiles_per_node": [
+    {
+      "profile": "basic_choice",
+      "question_type": "single_choice",
+      "difficulty": "basic",
+      "evaluation_focus": ["core_concept_or_calculation", "answer_key_alignment"]
+    },
+    {
+      "profile": "basic_fill",
+      "question_type": "fill_blank",
+      "difficulty": "basic",
+      "evaluation_focus": ["answer_format", "domain_or_unit_conditions"]
+    },
+    {
+      "profile": "improved_choice",
+      "question_type": "single_choice",
+      "difficulty": "improved",
+      "evaluation_focus": ["misconception_distractors", "near_neighbor_skill"]
+    },
+    {
+      "profile": "improved_fill",
+      "question_type": "fill_blank",
+      "difficulty": "improved",
+      "evaluation_focus": ["multi_condition_reasoning", "explanation_consistency"]
+    },
+    {
+      "profile": "comprehensive_choice",
+      "question_type": "single_choice",
+      "difficulty": "comprehensive",
+      "evaluation_focus": ["multi_condition_reasoning", "ambiguity_and_uniqueness"]
+    }
+  ],
+  "excluded_or_separately_tested_contexts": [
+    "Previously_practiced_vs_unseen is a Planner/context property; generation API has no mastery/evidence input, so it must not be simulated as a generator capability.",
+    "Insufficient learning evidence is a Planner/context property and is not injected into the question-generation prompt.",
+    "Current supported generation types are single_choice and fill_blank; proof, discussion, program, and code-execution items are out of scope."
+  ]
+}

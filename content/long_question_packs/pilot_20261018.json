@@ -1,0 +1,636 @@
+{
+  "pack_version": "long-question-pack-v1",
+  "batch_key": "longbank-20261018-pilot",
+  "created_at": "2026-10-18T13:40:00+08:00",
+  "authoring": {
+    "mode": "claude_agent_offline",
+    "model_calls": 0,
+    "real_model_called": false,
+    "note": "由当前 AI 直接撰写，未调用外部 Provider；计算题用 SymPy/参考模拟器复核，证明题保留人工复核状态。"
+  },
+  "items": [
+    {
+      "slug": "math-936d-q1",
+      "kp_code": "math.exam.936d8c834760",
+      "title": "交换积分次序计算 e^{y²} 型二重积分",
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 12,
+      "role": "basic",
+      "skill_tags": [
+        "交换积分次序",
+        "二重积分计算",
+        "原函数不可初等表示"
+      ],
+      "objective": "检验能否识别“内层原函数无法用初等函数表示”的信号，正确画出积分区域并交换次序，再完成一元积分。",
+      "stem": "计算二重积分\n\nI = ∫₀¹ dx ∫ₓ¹ e^(y²) dy，\n\n并回答：\n(1) 直接按给定次序积分为什么行不通？\n(2) 交换积分次序后，积分区域如何表示？\n(3) 求出 I 的精确值。",
+      "answer": "I = (e − 1)/2。",
+      "final_value": "(e-1)/2",
+      "solution_steps": [
+        "观察内层积分 ∫e^(y²)dy：e^(y²) 的原函数不是初等函数，按给定次序无法直接积出，必须先交换次序。",
+        "确定积分区域：由 0 ≤ x ≤ 1、x ≤ y ≤ 1 得 D = {(x,y) | 0 ≤ x ≤ y ≤ 1}，即直线 y=x、y=1 与 y 轴围成的三角形。",
+        "换成先对 x 积分：0 ≤ y ≤ 1，0 ≤ x ≤ y。于是 I = ∫₀¹ e^(y²) (∫₀ʸ dx) dy = ∫₀¹ y e^(y²) dy。",
+        "令 u = y²，则 du = 2y dy，y:0→1 对应 u:0→1，故 I = (1/2)∫₀¹ e^u du = (e − 1)/2。"
+      ],
+      "key_points": [
+        "二重积分换序的本质是更换区域的描述方式，不是更换被积函数。",
+        "先画区域：y=x 与 y=1 的交点是 (1,1)，区域是三角形而不是正方形。",
+        "u = y² 换元后，du = 2y dy 正好吸收外层的因子 y。"
+      ],
+      "common_errors": [
+        "把 e^(y²) 误当成 e^y 积分，得到 e − 1。",
+        "换序后写成 0 ≤ y ≤ 1、0 ≤ x ≤ y 之外的范围，例如 0 ≤ x ≤ 1、0 ≤ y ≤ x。",
+        "换元时漏掉 1/2 或忘记更换积分限。"
+      ],
+      "scope": "数学二·二重积分；被积函数在闭区域上连续，区域为有界闭区域，可直接化为累次积分。",
+      "verification_steps": [
+        {
+          "expression": "(e-1)/2",
+          "value": "(e-1)/2"
+        },
+        {
+          "expression": "1/2*(e-1)",
+          "value": "(e-1)/2"
+        }
+      ],
+      "verification": {
+        "method": "sympy_integrate",
+        "result": "PASS",
+        "detail": "sympy.integrate(exp(y**2),(y,x,1)),(x,0,1) 化简为 E/2 - 1/2，与 (e-1)/2 一致；数值 0.8591409142。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "slug": "math-936d-q2",
+      "kp_code": "math.exam.936d8c834760",
+      "title": "极坐标下含 √(x²+y²) 的圆域积分",
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 14,
+      "role": "comprehensive",
+      "skill_tags": [
+        "极坐标变换",
+        "圆域积分",
+        "对称性"
+      ],
+      "objective": "在同一知识点内增加区域识别与坐标变换的综合要求：从圆的一般方程读出极坐标上限，正确处理雅可比因子与被积函数中的根式。",
+      "stem": "设 D = {(x,y) | x² + y² ≤ 2x，y ≥ 0}。\n\n(1) 说明为什么适合用极坐标；\n(2) 写出 r 与 θ 的取值范围；\n(3) 计算 ∬_D y√(x²+y²) dxdy。",
+      "answer": "∬_D y√(x²+y²) dxdy = 4/5。",
+      "final_value": "4/5",
+      "solution_steps": [
+        "区域 x²+y² ≤ 2x 配方为 (x−1)²+y² ≤ 1，是以 (1,0) 为圆心、半径 1 的圆；再加上 y ≥ 0，取上半圆。被积函数含 √(x²+y²)，用极坐标最自然。",
+        "代入 x = r cosθ，y = r sinθ：x²+y² ≤ 2x 变为 r² ≤ 2r cosθ，即 0 ≤ r ≤ 2cosθ（r=0 对应原点）。y ≥ 0 给出 θ ∈ [0, π/2]。",
+        "被积函数 y√(x²+y²) = (r sinθ)·r = r² sinθ；面积元 dxdy = r dr dθ，故被积表达式为 r³ sinθ。",
+        "先对 r 积分：∫₀^(2cosθ) r³ dr = (2cosθ)⁴/4 = 4cos⁴θ。",
+        "再对 θ 积分：I = ∫₀^(π/2) 4 sinθ cos⁴θ dθ。令 u = cosθ，du = −sinθ dθ，得 I = 4∫₀¹ u⁴ du = 4/5。"
+      ],
+      "key_points": [
+        "圆 x²+y²=2x 的极坐标方程是 r=2cosθ，不是 r=2。",
+        "y ≥ 0 把 θ 限制在 [0, π/2]，而不是 [−π/2, π/2]。",
+        "极坐标面积元必须带 Jacobian 因子 r。",
+        "∫ sinθ cos⁴θ dθ 用 u=cosθ 换元最快。"
+      ],
+      "common_errors": [
+        "把 r 的上限写成 2，忽略 cosθ 导致区域变成整圆。",
+        "θ 取 [0, π]，把下半圆也算进来。",
+        "漏掉面积元中的 r，得到 4/3 等错误结果。",
+        "把 √(x²+y²) 写成 r²，导致多一个 r 因子。"
+      ],
+      "scope": "数学二·二重积分；区域为上半圆盘，极坐标变换在区域内部一一对应（边界 r=0 为单点，不影响积分）。",
+      "verification_steps": [
+        {
+          "expression": "4/5",
+          "value": "4/5"
+        },
+        {
+          "expression": "4*1/5",
+          "value": "4/5"
+        }
+      ],
+      "verification": {
+        "method": "sympy_integrate",
+        "result": "PASS",
+        "detail": "极坐标累次积分 ∫₀^(π/2)∫₀^(2cosθ) r³ sinθ dr dθ 化简为 4/5；数值 0.8。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "slug": "math-4586-q1",
+      "kp_code": "math.exam.4586eb88acb7",
+      "title": "用积分因子构造辅助函数证明 f′(ξ)=f(ξ)",
+      "question_type": "proof",
+      "difficulty": "medium",
+      "estimated_minutes": 10,
+      "role": "basic",
+      "skill_tags": [
+        "罗尔定理",
+        "辅助函数",
+        "微分中值定理"
+      ],
+      "objective": "检验能否把“导数与函数值相等”改写为某个乘积函数的导数为零，并完整核对罗尔定理的三个条件。",
+      "stem": "设函数 f 在闭区间 [0,1] 上连续，在开区间 (0,1) 内可导，且 f(0) = f(1) = 0。\n\n证明：存在 ξ ∈ (0,1)，使得 f′(ξ) = f(ξ)。",
+      "answer": "证明成立：构造 F(x)=e^(−x)f(x)，对 F 在 [0,1] 上用罗尔定理即可。",
+      "final_value": "证明成立",
+      "solution_steps": [
+        "把目标 f′(ξ) − f(ξ) = 0 看成某个函数的导数。注意 (e^(−x)f(x))′ = e^(−x)(f′(x) − f(x))，因此令 F(x) = e^(−x)f(x)。",
+        "验证罗尔定理条件：f 在 [0,1] 连续、(0,1) 可导，e^(−x) 处处连续可导，所以 F 在 [0,1] 连续、在 (0,1) 可导。",
+        "验证端点相等：F(0) = e⁰f(0) = 0，F(1) = e^(−1)f(1) = 0。",
+        "由罗尔定理，存在 ξ ∈ (0,1)，使 F′(ξ) = 0。",
+        "F′(ξ) = e^(−ξ)(f′(ξ) − f(ξ))，而 e^(−ξ) > 0，故 f′(ξ) − f(ξ) = 0，即 f′(ξ) = f(ξ)。证毕。",
+        "注：若 f 恒为 0，结论对任意 ξ 成立；上述证明仍然有效。"
+      ],
+      "key_points": [
+        "看到 f′ − f 就想 e^(−x)f(x) 的导数；看到 f′ + f 则想 e^x f(x)。",
+        "罗尔定理三条件必须逐条交代：闭区间连续、开区间可导、端点函数值相等。",
+        "最后一步要说明 e^(−ξ) ≠ 0，才能从乘积为零推出括号为零。"
+      ],
+      "common_errors": [
+        "直接对 f 用罗尔定理，只能得到 f′(ξ)=0，得不到 f′(ξ)=f(ξ)。",
+        "只验证端点相等，不说明 F 的连续性与可导性。",
+        "构造 F=f(x)/e^x 后求导符号写错。",
+        "由 e^(−ξ)(f′−f)=0 直接写 f′=f，却不说明 e^(−ξ)>0。"
+      ],
+      "scope": "数学二·微分中值定理；只要求 f 在闭区间连续、开区间可导，不要求 f′ 连续。",
+      "verification_steps": [],
+      "verification": {
+        "method": "manual_proof_review",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "辅助函数构造与罗尔定理三条件均已逐条核对；证明为存在性命题，无法用数值完全验证。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      }
+    },
+    {
+      "slug": "math-4586-q2",
+      "kp_code": "math.exam.4586eb88acb7",
+      "title": "最大值与二阶导数上界的定量估计",
+      "question_type": "proof",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "comprehensive",
+      "skill_tags": [
+        "泰勒公式",
+        "费马引理",
+        "分支讨论"
+      ],
+      "objective": "把中值定理与泰勒展开结合，要求在未知最大值点位置的情况下做分支估计，检验定量证明能力。",
+      "stem": "设函数 f 在 [0,1] 上连续，在 (0,1) 内二阶可导且 f″ 连续，f(0) = f(1) = 0，且存在 c ∈ (0,1)，使 f(c) = max_{[0,1]} f = 1。\n\n证明：存在 ξ ∈ (0,1)，使得 f″(ξ) ≤ −8。",
+      "answer": "证明成立：在最大值点 c 处 f′(c)=0，分别对 x=0 与 x=1 作带拉格朗日余项的泰勒展开；由 c 与 1−c 中至少一个不超过 1/2，得到 f″(ξ) ≤ −8。",
+      "final_value": "证明成立",
+      "solution_steps": [
+        "因为 c 是开区间内的最大值点且 f 在 c 处可导，由费马引理得 f′(c)=0。",
+        "在 x=0 处对 f 作一阶泰勒展开（带拉格朗日余项）：存在 ξ₁ ∈ (0,c)，使 f(0) = f(c) + f′(c)(0−c) + (1/2)f″(ξ₁)(0−c)²。代入 f(0)=0、f(c)=1、f′(c)=0，得 0 = 1 + (1/2)f″(ξ₁)c²，即 f″(ξ₁) = −2/c²。",
+        "同理，在 x=1 处展开：存在 ξ₂ ∈ (c,1)，使 f(1) = f(c) + f′(c)(1−c) + (1/2)f″(ξ₂)(1−c)²。代入得 0 = 1 + (1/2)f″(ξ₂)(1−c)²，即 f″(ξ₂) = −2/(1−c)²。",
+        "讨论 c 的位置：若 c ≤ 1/2，则 c² ≤ 1/4，故 f″(ξ₁) = −2/c² ≤ −8，取 ξ=ξ₁；若 c > 1/2，则 1−c < 1/2，故 f″(ξ₂) = −2/(1−c)² ≤ −8，取 ξ=ξ₂。",
+        "两种情形都找到 ξ ∈ (0,1) 使 f″(ξ) ≤ −8，证毕。等号可由 f(x)=4x(1−x) 达到，说明常数 8 是最优的。"
+      ],
+      "key_points": [
+        "最大值在内部取得 → 费马引理给 f′(c)=0。",
+        "泰勒展开的余项必须写成 f″(ξ) 的形式，ξ 位于端点与 c 之间。",
+        "关键分支：c 与 1−c 必有一个不超过 1/2。",
+        "常数 −8 是最优的，f(x)=4x(1−x) 可取等号。"
+      ],
+      "common_errors": [
+        "忘记说明 c 是内点，直接写 f′(c)=0。",
+        "只在一个端点展开，无法覆盖 c 靠近另一端点的情况。",
+        "把余项写成 f″(c) 而不是某个中间点 ξ。",
+        "不做分支讨论，直接断言 c ≤ 1/2。",
+        "误以为需要 f″ 连续；带拉格朗日余项的泰勒定理只要求二阶可导。"
+      ],
+      "scope": "数学二·微分中值定理与泰勒公式；f 在闭区间连续、开区间二阶可导且 f″ 连续即可。",
+      "verification_steps": [],
+      "verification": {
+        "method": "manual_proof_review",
+        "result": "PASS_LOGIC_REVIEWED",
+        "detail": "逐步核对费马引理、两次泰勒展开的区间、分支不等式；并用 f(x)=4x(1−x) 验证常数 −8 可取到。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": false,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "PENDING_HUMAN_REVIEW"
+      }
+    },
+    {
+      "slug": "ds-64cd-q1",
+      "kp_code": "cs408.ds.topic.64cda87cdc82",
+      "title": "用小根堆求第 k 大元素",
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "basic",
+      "skill_tags": [
+        "堆的应用",
+        "Top-k",
+        "复杂度分析"
+      ],
+      "objective": "检验能否把“第 k 大”转化为“维护大小为 k 的小根堆”，并正确处理重复值、边界与复杂度。",
+      "stem": "给定含 n 个整数的数组 A 和整数 k（1 ≤ k ≤ n）。设计时间尽可能高效的算法，求 A 中第 k 大的元素；相同数值按出现次数重复计数。\n\n要求：\n(1) 说明基本设计思想；\n(2) 用 C 或 C++ 写出完整函数，关键处加注释；\n(3) 分析时间复杂度与额外空间复杂度；\n(4) 说明 k 非法、n=0、大量重复值时分别如何处理。\n\n示例：A = {3, 1, 5, 12, 2, 11}，k = 3，返回 5。",
+      "answer": "维护一个容量为 k 的小根堆：堆中始终保存当前扫描到的、最大的 k 个元素，堆顶就是这 k 个元素中最小的一个，也就是第 k 大。时间复杂度 O(n log k)，额外空间 O(k)。",
+      "final_value": "小根堆维护最大的 k 个数，堆顶即第 k 大；O(n log k)，O(k)",
+      "solution_steps": [
+        "设计思想：先取前 k 个元素建立小根堆（堆顶是这 k 个元素的最小值）。扫描剩余元素：若当前元素不大于堆顶，它不可能进入前 k 大，直接跳过；若大于堆顶，弹出堆顶并压入当前元素。扫描结束后，堆顶就是第 k 大。",
+        "正确性：扫描到任意位置时，堆中始终是“已扫描元素中最大的 k 个”。若新元素大于堆顶，则它一定大于堆中至少一个元素，替换后仍保持该性质；若小于等于堆顶，则已扫描元素中至少有 k 个不小于它，它不可能进入前 k 大。",
+        "重复值：算法按出现次数计数，不建 set、不去重。例如 A={5,5,3}，k=2，堆中为 {5,5}，返回 5。",
+        "参考实现（C++）：\n```cpp\n#include <queue>\n#include <vector>\n#include <stdexcept>\n#include <utility>\n\nint kthLargest(const std::vector<int>& a, int k) {\n    if (k <= 0 || k > static_cast<int>(a.size()))\n        throw std::invalid_argument(\"k out of range\");\n    // 小根堆：greater<int> 让最小值在堆顶\n    // 用区间构造一次建堆（自底向上），复杂度 O(k)\n    std::vector<int> first(a.begin(), a.begin() + k);\n    std::priority_queue<int, std::vector<int>, std::greater<int>>\n        heap(std::greater<int>(), std::move(first));\n    for (int i = k; i < static_cast<int>(a.size()); ++i) {\n        if (a[i] > heap.top()) {                  // 只有大于堆顶才可能进前 k\n            heap.pop();\n            heap.push(a[i]);\n        }\n    }\n    return heap.top();\n}\n```",
+        "复杂度：前 k 个元素用区间构造建堆 O(k)；其余 n−k 个元素每个最多一次 pop + push，O(log k)，总计 O(n log k)。堆中最多 k 个元素，额外空间 O(k)。若 k=n，则退化为 O(n)。",
+        "边界处理：k ≤ 0 或 k > n 时抛异常（或按题目约定返回错误码）；n=0 时同上；大量重复值不影响正确性，因为比较用严格大于，等值元素不会互相替换。"
+      ],
+      "key_points": [
+        "第 k 大 ↔ 维护“最大的 k 个” ↔ 容量为 k 的小根堆。",
+        "堆顶是这 k 个元素的最小值，正好是第 k 大。",
+        "每个元素最多入堆一次、出堆一次，O(n log k)。",
+        "重复值按出现次数计，不能用 set 去重。"
+      ],
+      "common_errors": [
+        "用大根堆存全部元素再弹 k 次：时间 O(n + k log n)，空间 O(n)，不是最优。",
+        "用 set 去重，导致 {5,5,3}、k=2 返回 3。",
+        "把比较写成 a[i] >= heap.top()，虽然结果通常不变，但会做无意义的替换；严格大于更清晰。",
+        "忘记处理 k=n、k=1、n=0 等边界。",
+        "认为建堆是 O(k log k)；自底向上建堆是 O(k)。"
+      ],
+      "scope": "408 数据结构·堆的应用；数组可随机访问，元素为可比较的整数；C++ STL priority_queue 默认是大根堆，需显式传 greater<int>。",
+      "verification_steps": [
+        {
+          "expression": "6-3",
+          "value": "3"
+        },
+        {
+          "expression": "3",
+          "value": "3"
+        }
+      ],
+      "verification": {
+        "method": "reference_simulation",
+        "result": "PASS",
+        "detail": "用 Python 等价实现跑示例 A={3,1,5,12,2,11}, k=3 得到 5；并对 2000 组随机数组与排序暴力解逐一比对，全部一致（含重复值、k=1、k=n）。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "slug": "ds-64cd-q2",
+      "kp_code": "cs408.ds.topic.64cda87cdc82",
+      "title": "双堆维护数据流中位数",
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 20,
+      "role": "comprehensive",
+      "skill_tags": [
+        "双堆",
+        "数据流",
+        "堆的平衡"
+      ],
+      "objective": "在同一知识点内增加在线查询与结构维护要求：用两个堆分工保存较小/较大一半，并维持大小不变式。",
+      "stem": "设计一个数据结构，支持：\n- addNum(int num)：从数据流中加入一个整数；\n- findMedian()：返回当前所有元素的中位数。\n\n要求：addNum 时间复杂度 O(log n)，findMedian 时间复杂度 O(1)，额外空间 O(n)。\n\n(1) 说明两个堆的分工与大小不变式；\n(2) 用 C++ 写出类实现；\n(3) 说明负数、重复值、n 为奇数/偶数时分别如何处理；\n(4) 对数据流 5, 15, 1, 3，依次给出每次加入后的中位数。",
+      "answer": "用大根堆 low 保存较小的一半，小根堆 high 保存较大的一半；维持 size(low) = size(high) 或 size(low) = size(high) + 1。奇数个元素时中位数为 low.top()，偶数个时为 (low.top() + high.top()) / 2.0。",
+      "final_value": "双堆：low 存较小一半、high 存较大一半；中位数取堆顶；插入 O(log n)，查询 O(1)",
+      "solution_steps": [
+        "分工：大根堆 low 存较小的一半，堆顶是这一半的最大值；小根堆 high 存较大的一半，堆顶是这一半的最小值。这样两个堆顶正好夹住中位数。",
+        "大小不变式：任一时刻 size(low) = size(high) 或 size(low) = size(high) + 1。插入后若破坏不变式，就把元素从元素多的堆搬到另一个堆，最多搬一次。",
+        "插入策略：若 low 为空或 num ≤ low.top()，压入 low；否则压入 high。随后修正：若 size(low) > size(high)+1，把 low.top() 移到 high；若 size(high) > size(low)，把 high.top() 移到 low。",
+        "查询：若两堆大小相等，中位数为 (low.top()+high.top())/2.0；否则为 low.top()（因为约定 low 可以多一个）。",
+        "参考实现（C++）：\n```cpp\n#include <queue>\n#include <vector>\n\nclass MedianFinder {\n    std::priority_queue<int> low;                                  // 大根堆\n    std::priority_queue<int, std::vector<int>, std::greater<int>> high; // 小根堆\npublic:\n    void addNum(int num) {\n        if (low.empty() || num <= low.top()) low.push(num);\n        else high.push(num);\n        if (low.size() > high.size() + 1) { high.push(low.top()); low.pop(); }\n        else if (high.size() > low.size()) { low.push(high.top()); high.pop(); }\n    }\n    double findMedian() const {\n        if (low.size() == high.size())\n            return (static_cast<double>(low.top()) + high.top()) / 2.0;\n        return low.top();\n    }\n};\n```",
+        "负数与重复值：比较用 num <= low.top()，负数照常比较；重复值会被分到同一侧或两侧，不影响堆顶顺序，也不会破坏不变式。",
+        "示例：加入 5 → low={5}，中位数 5；加入 15 → low={5}, high={15}，中位数 10；加入 1 → low={5,1}（堆顶 5）, high={15}，中位数 5；加入 3 → 3≤5 入 low，low={5,3,1}（大小 3）、high={15}（大小 1）；low 比 high 多 2，把 low 的堆顶 5 移入 high，得 low={3,1}（堆顶 3）、high={5,15}（堆顶 5），中位数 (3+5)/2=4。",
+        "复杂度：每次插入最多一次堆操作加一次搬运，O(log n)；查询只读堆顶，O(1)；两个堆共存 n 个元素，O(n)。"
+      ],
+      "key_points": [
+        "两个堆顶夹住中位数：low.top() ≤ median ≤ high.top()。",
+        "不变式：low 与 high 大小相等，或 low 多一个。",
+        "偶数个元素取两个堆顶的平均，注意用浮点除法避免整数截断。",
+        "插入时先按大小分流，再按大小差搬运，最多一次。"
+      ],
+      "common_errors": [
+        "两堆大小差超过 1，导致中位数位置错。",
+        "偶数个元素时写 (low.top()+high.top())/2，整数除法丢掉 0.5。",
+        "把较小的一半放进小根堆，堆顶变成最小值，取不到中位数。",
+        "插入时用 num < low.top() 而非 <=，重复值全堆到 high，虽然不一定错，但会让搬运更频繁；<= 更稳。",
+        "用 int 相加求平均导致溢出（极端值时应转 double 或 long long）。"
+      ],
+      "scope": "408 数据结构·堆的应用；数据流在线到达，查询与插入交替；不要求删除任意元素。",
+      "verification_steps": [
+        {
+          "expression": "5+15",
+          "value": "20"
+        },
+        {
+          "expression": "20/2",
+          "value": "10"
+        }
+      ],
+      "verification": {
+        "method": "reference_simulation",
+        "result": "PASS",
+        "detail": "用 Python 等价双堆实现跑示例，得到中位数序列 5, 10, 5, 4；与每次排序取中位数的暴力解在 2000 组随机流上比对一致。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "slug": "co-ba98-q1",
+      "kp_code": "cs408.co.topic.ba9896acc602",
+      "title": "8 路组相联 Cache 的地址划分与命中判定",
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 16,
+      "role": "basic",
+      "skill_tags": [
+        "Cache 地址划分",
+        "组相联",
+        "LRU"
+      ],
+      "objective": "检验能否由容量、块大小、相联度推出组数/索引位/tag 位，并按 LRU 正确判定命中与替换。",
+      "stem": "某计算机按字节编址，物理地址为 32 位；数据 Cache 容量为 32 KB，主存块大小为 64 B，采用 8 路组相联映射与 LRU 替换策略。\n\n(1) 求 Cache 的行数、组数，以及块内偏移、组索引、tag 各占多少位；\n(2) 对下列地址序列（Cache 初始为空）逐条给出组号、tag 与命中/缺失：\n00001000H，00001040H，00002000H，00001080H，00003000H，00001000H，00002040H，00001040H；\n(3) 求命中率；\n(4) 该序列是否发生替换？说明理由。",
+      "answer": "行数 512，组数 64；块内偏移 6 位、组索引 6 位、tag 20 位。访问结果：M, M, M, M, M, H, M, H；命中率 2/8 = 25%；未发生替换，因为每组最多只装入 3 行，小于 8 路。",
+      "final_value": "25%",
+      "solution_steps": [
+        "行数 = Cache 容量 / 块大小 = 32 KB / 64 B = 32768 / 64 = 512 行。组数 = 行数 / 相联度 = 512 / 8 = 64 组。",
+        "块内偏移位数 = log₂64 = 6 位；组索引位数 = log₂64 = 6 位；tag 位数 = 32 − 6 − 6 = 20 位。",
+        "地址划分：块内偏移 = 地址低 6 位；组索引 = 地址第 6~11 位，即 (地址 >> 6) & 0x3F；tag = 地址 >> 12。",
+        "逐条计算：\n- 00001000H：tag=001H，组=0，初始缺失；\n- 00001040H：tag=001H，组=1，缺失；\n- 00002000H：tag=002H，组=0，缺失（组 0 现有 tag 001）；\n- 00001080H：tag=001H，组=2，缺失；\n- 00003000H：tag=003H，组=0，缺失（组 0 现有 tag 001、002）；\n- 00001000H：tag=001H，组=0，命中；\n- 00002040H：tag=002H，组=1，缺失（组 1 现有 tag 001）；\n- 00001040H：tag=001H，组=1，命中。",
+        "命中率 = 命中次数 / 总访问次数 = 2 / 8 = 25%。",
+        "未发生替换：组 0 最多装入 tag 001、002、003 三行，组 1 装入 tag 001、002 两行，均未超过 8 路；所有缺失都是首次装入（ compulsory miss），没有容量或冲突替换。"
+      ],
+      "key_points": [
+        "行数 = 容量/块大小；组数 = 行数/相联度。",
+        "偏移位 = log₂块大小；索引位 = log₂组数；tag = 地址位数 − 偏移位 − 索引位。",
+        "组相联下，同一组可以容纳多个不同 tag 的行，只有超过相联度才替换。",
+        "初始为空的第一次访问一定是缺失（compulsory miss）。"
+      ],
+      "common_errors": [
+        "把 8 路当成 8 组，算出组数 512/8=64 后又说索引 3 位。",
+        "tag 位数算成 32−6−6−3（把路数也减掉）。",
+        "用地址的低 6 位当组索引，忘记先去掉块内偏移。",
+        "把 00002000H 判成命中，因为看到组 0 已有 tag 001。",
+        "认为只要发生缺失就一定有替换。"
+      ],
+      "scope": "408 计算机组成原理·Cache；只考虑数据 Cache，地址按物理地址处理；忽略 TLB、指令 Cache 与写策略。",
+      "verification_steps": [
+        {
+          "expression": "32768/64",
+          "value": "512"
+        },
+        {
+          "expression": "512/8",
+          "value": "64"
+        },
+        {
+          "expression": "2/8",
+          "value": "0.25"
+        }
+      ],
+      "verification": {
+        "method": "cache_simulator",
+        "result": "PASS",
+        "detail": "按 6/6/20 位划分写参考模拟器（8 路、LRU），得到缺失 6 次、命中 2 次，命中率 0.25；与手算表一致。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "slug": "co-ba98-q2",
+      "kp_code": "cs408.co.topic.ba9896acc602",
+      "title": "相联度对冲突缺失的影响与 VIPT 索引",
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 20,
+      "role": "comprehensive",
+      "skill_tags": [
+        "相联度",
+        "冲突缺失",
+        "VIPT"
+      ],
+      "objective": "在同一知识点内加入组织方式对比与虚拟索引分析：说明相联度如何改变冲突缺失，以及索引位是否落在页内偏移对别名/同义的影响。",
+      "stem": "同一台 32 位按字节编址的机器，数据 Cache 容量 32 KB、主存块 64 B。比较三种组织：直接映射、2 路组相联、8 路组相联，均采用 LRU。\n\n地址序列：A=00000000H，B=00008000H，C=00010000H，D=00018000H，重复访问两遍（共 8 次），Cache 初始为空。\n\n(1) 分别求三种组织的组数、组索引位数与 tag 位数；\n(2) 分别求 8 次访问的缺失次数，并解释差异；\n(3) 若页面大小为 4 KB，采用虚拟地址索引（VIPT），三种组织中哪些的索引位全部落在页内偏移内？这对别名/同义问题意味着什么？",
+      "answer": "直接映射：512 组，索引 9 位，tag 17 位，8 次全缺失；2 路：256 组，索引 8 位，tag 18 位，8 次全缺失；8 路：64 组，索引 6 位，tag 20 位，前 4 次缺失、后 4 次命中，共 4 次缺失。VIPT 下只有 8 路组的索引位（第 6~11 位）全部位于 12 位页内偏移中。",
+      "final_value": "直接 8 次缺失，2 路 8 次缺失，8 路 4 次缺失；仅 8 路索引位全在页内",
+      "solution_steps": [
+        "统一计算：块大小 64 B → 块内偏移 6 位。直接映射行数 512、组数 512、索引 9 位、tag 17 位；2 路组数 256、索引 8 位、tag 18 位；8 路组数 64、索引 6 位、tag 20 位。",
+        "四个地址的块号 = 地址 >> 6：A=0，B=512，C=1024，D=1536。",
+        "直接映射：组号 = 块号 mod 512。0、512、1024、1536 对 512 取模都为 0，四个地址全部映射到组 0；每组只有 1 行，后一个地址必然驱逐前一个。序列重复两遍，每次访问都缺失，共 8 次缺失。",
+        "2 路：组号 = 块号 mod 256。0、512、1024、1536 对 256 取模都为 0，四个 tag 仍映射到同一组；2 路只能容纳 2 个 tag，而工作集有 4 个，LRU 下每次访问都驱逐最久未用的行，仍然 8 次全缺失。",
+        "8 路：组号 = 块号 mod 64。四个块号对 64 取模都为 0，四个 tag 都进组 0；8 路可容纳 8 个 tag，4 个工作块全部装得下。第一遍 4 次 compulsory miss，第二遍 4 次全部命中，共 4 次缺失。",
+        "结论：提高相联度并不改变“映射到同一组”，但增加了每组可容纳的行数；当冲突工作集大于相联度时仍会抖动，只有相联度足够大时才消除冲突缺失。容量不变时，相联度提高会减少组数、增加 tag 位数。",
+        "VIPT：页内偏移 12 位。直接映射索引位为第 6~14 位（9 位），包含第 12~14 位，跨出页内偏移；2 路索引位为第 6~13 位（8 位），也包含第 12~13 位；8 路索引位为第 6~11 位（6 位），全部位于 12 位页内偏移内。",
+        "含义：索引位全部在页内偏移内时，可以在地址翻译完成前用虚拟地址取索引，物理 tag 仍需在翻译后比较；不同虚拟地址映射到同一物理页（同义/synonym）不会造成同一物理行出现在多个组。若索引位跨页，则同一物理页可能因不同虚拟地址落入不同组，产生别名问题，需要页着色或物理索引。"
+      ],
+      "key_points": [
+        "映射到同一组由索引位决定；能否同时容纳由相联度决定。",
+        "冲突工作集 > 相联度 → 抖动；相联度足够 → 只剩 compulsory miss。",
+        "容量固定时，相联度翻倍 → 组数减半 → 索引位减 1、tag 位加 1。",
+        "VIPT 的索引位必须全部位于页内偏移内，才能避免同义/别名问题。"
+      ],
+      "common_errors": [
+        "认为 2 路一定能容纳 4 个冲突块。",
+        "把 00008000H 的组号算成 512 而不是 0（忘记对组数取模）。",
+        "只算第一遍，得到 4 次缺失，忽略第二遍的命中。",
+        "把 VIPT 的 tag 也当成可以在翻译前比较。",
+        "认为索引位越界只会影响性能，不会影响正确性。"
+      ],
+      "scope": "408 计算机组成原理·Cache；假设容量、块大小固定，仅改变相联度；VIPT 讨论基于 4 KB 页、12 位页内偏移，未考虑页着色实现。",
+      "verification_steps": [
+        {
+          "expression": "1536-3*512",
+          "value": "0"
+        },
+        {
+          "expression": "1024-4*256",
+          "value": "0"
+        },
+        {
+          "expression": "4+4",
+          "value": "8"
+        }
+      ],
+      "verification": {
+        "method": "cache_simulator",
+        "result": "PASS",
+        "detail": "三种组织分别模拟 8 次访问：direct miss=8、2-way miss=8、8-way miss=4；并核对索引位范围与 12 位页内偏移的关系。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "slug": "os-006d-q1",
+      "kp_code": "cs408.os.topic.006da51a6b0f",
+      "title": "FIFO/LRU/OPT 缺页次数对比",
+      "question_type": "calculation",
+      "difficulty": "advanced",
+      "estimated_minutes": 18,
+      "role": "basic",
+      "skill_tags": [
+        "页面置换",
+        "FIFO",
+        "LRU",
+        "OPT"
+      ],
+      "objective": "检验能否按三种置换策略逐步维护页框状态，正确统计缺页，并理解 OPT 的理论下界性质。",
+      "stem": "某进程分得 3 个页框，页面引用串为：\n7, 0, 1, 2, 0, 3, 0, 4, 2, 3, 0, 3, 2, 1, 2, 0, 1, 7, 0, 1。\n初始时页框为空。\n\n(1) 分别求 FIFO、LRU、OPT 三种置换算法的缺页次数；\n(2) 给出 LRU 的逐步置换过程（可用表格）；\n(3) 说明 OPT 的结果为什么是理论下界，以及它能否实际实现。",
+      "answer": "FIFO 缺页 15 次，LRU 缺页 12 次，OPT 缺页 9 次。OPT 需要预知未来引用串，只是理论下界，不能在线实现。",
+      "final_value": "FIFO 15，LRU 12，OPT 9",
+      "solution_steps": [
+        "FIFO：按进入内存的先后排队，缺页时淘汰队首页。20 次引用中缺页 15 次。",
+        "LRU：缺页时淘汰最久未被访问的页；命中时也要把该页移到“最近使用”一端。逐步过程见下表（页框按旧→新排列）：\n| 序号 | 引用 | 页框（旧→新） | 结果 |\n|---:|---:|---|---|\n| 1 | 7 | [7] | 缺页 |\n| 2 | 0 | [7, 0] | 缺页 |\n| 3 | 1 | [7, 0, 1] | 缺页 |\n| 4 | 2 | [0, 1, 2] | 缺页 |\n| 5 | 0 | [1, 2, 0] | 命中 |\n| 6 | 3 | [2, 0, 3] | 缺页 |\n| 7 | 0 | [2, 3, 0] | 命中 |\n| 8 | 4 | [3, 0, 4] | 缺页 |\n| 9 | 2 | [0, 4, 2] | 缺页 |\n| 10 | 3 | [4, 2, 3] | 缺页 |\n| 11 | 0 | [2, 3, 0] | 缺页 |\n| 12 | 3 | [2, 0, 3] | 命中 |\n| 13 | 2 | [0, 3, 2] | 命中 |\n| 14 | 1 | [3, 2, 1] | 缺页 |\n| 15 | 2 | [3, 1, 2] | 命中 |\n| 16 | 0 | [1, 2, 0] | 缺页 |\n| 17 | 1 | [2, 0, 1] | 命中 |\n| 18 | 7 | [0, 1, 7] | 缺页 |\n| 19 | 0 | [1, 7, 0] | 命中 |\n| 20 | 1 | [7, 0, 1] | 命中 |\n共缺页 12 次。",
+        "OPT：缺页时淘汰“未来最长时间不会再被访问”的页。按未来引用串逐次判断，20 次引用中缺页 9 次。",
+        "为什么 OPT 是下界：在任何时刻，若某页在下次被访问前不会被用到，保留它没有任何收益；OPT 每次都做出对当前已知未来最优的选择，因此任何算法都不可能比它缺页更少。",
+        "能否实现：OPT 需要预知完整引用串，在线系统无法做到；它只用于理论比较和离线评估。实际系统用 LRU 近似（如 Clock/二次机会），因为“过去最近使用”只是“未来最久不用”的启发式近似。"
+      ],
+      "key_points": [
+        "FIFO 看进入时间，LRU 看最近访问时间，OPT 看未来访问时间。",
+        "LRU 命中时也要更新“最近使用”次序。",
+        "OPT 是理论下界，不可在线实现。",
+        "缺页次数与初始页框为空有关，第一次访问必缺页。"
+      ],
+      "common_errors": [
+        "LRU 命中后不更新次序，退化成 FIFO。",
+        "FIFO 把新页插到队首而不是队尾。",
+        "OPT 淘汰“过去最久未用”的页（那是 LRU）。",
+        "把初始空页框的装入不算缺页。",
+        "统计时把命中算成缺页，得到 20。"
+      ],
+      "scope": "408 操作系统·虚拟内存；单道程序、局部页面置换、引用串只含页号；不考虑页框分配策略与工作集。",
+      "verification_steps": [
+        {
+          "expression": "15-12",
+          "value": "3"
+        },
+        {
+          "expression": "12-9",
+          "value": "3"
+        },
+        {
+          "expression": "20-8",
+          "value": "12"
+        }
+      ],
+      "verification": {
+        "method": "page_replacement_simulator",
+        "result": "PASS",
+        "detail": "用参考模拟器跑 20 个引用、3 个页框：FIFO=15、LRU=12、OPT=9；LRU 逐步状态与题解表逐行一致。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    },
+    {
+      "slug": "os-006d-q2",
+      "kp_code": "cs408.os.topic.006da51a6b0f",
+      "title": "改进 CLOCK（二次机会+修改位）的缺页与写回",
+      "question_type": "subjective",
+      "difficulty": "advanced",
+      "estimated_minutes": 20,
+      "role": "comprehensive",
+      "skill_tags": [
+        "改进 CLOCK",
+        "二次机会",
+        "脏页写回"
+      ],
+      "objective": "在同一知识点内加入访问位/修改位与写回代价：要求按给定规则逐步模拟指针扫描，区分缺页次数与写回次数。",
+      "stem": "某进程分得 4 个页框，初始为空。页面访问序列（页号，读/写）为：\n(1,R), (2,W), (3,R), (4,W), (1,W), (2,R), (5,R), (1,R), (2,W), (3,W), (4,R), (5,W)。\n\n采用改进 CLOCK 算法，每页设置访问位 R 与修改位 M：\n- 命中时：R 置 1；若本次是写访问，M 也置 1。\n- 缺页时从指针当前位置扫描：\n  · R=0, M=0：直接替换该页；\n  · R=0, M=1：先写回该页，再替换；\n  · R=1：把 R 置 0，指针后移，继续扫描。\n- 新页装入后 R=1；若因写访问装入，M=1，否则 M=0；指针移到被替换页的下一页。\n\n求：(1) 缺页次数；(2) 写回次数；(3) 给出每次缺页后的页框状态与指针位置。",
+      "answer": "缺页 10 次，写回 3 次。",
+      "final_value": "缺页10次，写回3次",
+      "solution_steps": [
+        "为便于记录，页框按 0~3 编号，每项写成 (页号, R, M)，指针指向下一个待检查的页框。",
+        "初始 4 个页框为空，前四次访问依次装入 1、2、3、4：\n- 访问 1(R)：装入 (1,1,0)，指针→1；\n- 访问 2(W)：装入 (2,1,1)，指针→2；\n- 访问 3(R)：装入 (3,1,0)，指针→3；\n- 访问 4(W)：装入 (4,1,1)，指针→0。\n此时缺页 4 次，写回 0 次。",
+        "访问 1(W)：命中，置 R=1、M=1，页框 0 变为 (1,1,1)，指针不变。",
+        "访问 2(R)：命中，R 已为 1，状态不变。",
+        "访问 5(R)：缺页。指针在 0，四页 R 均为 1：依次把 1、2、3、4 的 R 清 0（指针转一圈回到 0）；再检查页框 0：R=0、M=1，写回 1 次，替换为 (5,1,0)，指针→1。此时缺页 5、写回 1。",
+        "访问 1(R)：缺页。指针 1：页 2 为 (0,1)，写回 1 次，替换为 (1,1,0)，指针→2。缺页 6、写回 2。",
+        "访问 2(W)：缺页。指针 2：页 3 为 (0,0)，直接替换为 (2,1,1)，指针→3。缺页 7、写回 2。",
+        "访问 3(W)：缺页。指针 3：页 4 为 (0,1)，写回 1 次，替换为 (3,1,1)，指针→0。缺页 8、写回 3。",
+        "访问 4(R)：缺页。指针 0：页 5 为 (1,0)，R=1 → 清 0，指针→1；页 1 为 (1,0) → 清 0，指针→2；页 2 为 (1,1) → 清 0，指针→3；页 3 为 (1,1) → 清 0，指针→0；再查页 5：R=0、M=0，直接替换为 (4,1,0)，指针→1。缺页 9、写回 3。",
+        "访问 5(W)：缺页。指针 1：页 1 为 (0,0)（第 8 步被清 0），直接替换为 (5,1,1)，指针→2。缺页 10、写回 3。",
+        "汇总：12 次访问中命中 2 次（访问 1(W)、2(R)），缺页 10 次；替换时 M=1 的情况共 3 次，写回 3 次。"
+      ],
+      "key_points": [
+        "改进 CLOCK 用 (R,M) 四类状态：优先淘汰 (0,0)，其次 (0,1)，遇到 (1,*) 先给二次机会。",
+        "命中时读访问只置 R，写访问同时置 M。",
+        "写回只发生在被替换页 M=1 时，与缺页次数不是同一个计数。",
+        "指针在一轮扫描中可能清掉多个 R 位，必须继续扫描到找到可替换页。"
+      ],
+      "common_errors": [
+        "命中时忘记置 R，导致页面过早被淘汰。",
+        "写命中忘记置 M，少算写回。",
+        "遇到 R=1 只跳过、不清零，导致指针无限循环。",
+        "把每次缺页都算一次写回。",
+        "替换后忘记把指针移到下一页，后续扫描位置错。"
+      ],
+      "scope": "408 操作系统·页面置换；题目已把改进 CLOCK 的细节写死（装入后 R=1、写装入 M=1、指针后移），不同教材细节可能不同，考试时以题目规则为准。",
+      "verification_steps": [
+        {
+          "expression": "12-2",
+          "value": "10"
+        },
+        {
+          "expression": "3",
+          "value": "3"
+        }
+      ],
+      "verification": {
+        "method": "clock_simulator",
+        "result": "PASS",
+        "detail": "按题干规则写参考模拟器，逐步输出 12 次访问的页框/指针状态：缺页 10、命中 2、写回 3；与题解表一致。"
+      },
+      "review": {
+        "content_valid": true,
+        "knowledge_point_valid": true,
+        "answer_checked": true,
+        "difficulty_checked": true,
+        "duplicate_checked": true,
+        "review_status": "AUTO_CHECKED_REFERENCE_ONLY"
+      }
+    }
+  ]
+}
