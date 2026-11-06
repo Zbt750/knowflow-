@@ -142,11 +142,13 @@ def requested_generation_topic(message):
     qualified = re.search(r'(?:针对|根据|关于)\s*([^，,。！？\n]{2,35}?)(?:生成|出\s*(?:[一二两三四五六七八九十\d]+\s*道)?)', message)
     if qualified:
         return qualified[1].strip()
-    match = re.search(r'(?:出|生成|编写)(?:\s*[一二两三四五六七八九十\d]+\s*道)?\s*([^，,。！？\n]{2,35}?)(?:诊断题|练习题|选择题|单选题|计算题|题目|题)', message)
+    match = re.search(r'(?:出|生成|编写)(?:\s*[一二两三四五六七八九十\d]+\s*道)?\s*([^，,。！？\n]{2,35}?)(?:诊断题|练习题|选择题|单选题|计算题|证明题|填空题|讨论题|程序题|算法题|题目|题)', message)
     if not match:
         return None
     topic = re.sub(r'^(?:关于|有关|一道|两道)', '', match[1]).strip()
     topic = re.sub(r'(?:的|相关|方面|知识点)$', '', topic).strip()
+    if re.fullmatch(r'(?:比(?:这|那|原)(?:个|道)?(?:题)?(?:还)?更(?:难|简单|容易)|更难|难一点|容易一点|再难一点|一样难)', topic):
+        return None
     return None if re.fullmatch(r'新|类似|同类|变式|计算|证明|单选|选择|诊断|练习|[一二两三四五六七八九十\d]+道?|稍难.{0,5}|基础.{0,5}', topic) else topic or None
 
 
@@ -164,6 +166,12 @@ def _node_phrases(node):
     short = re.sub(r"(?:求导|法则|性质|应用|结构|定理|公式|方法)$", "", name).strip()
     if len(short) >= 2 and short != name:
         phrases.add(short)
+    integral_topic = re.sub(r'积分$', '', name).strip()
+    if len(integral_topic) >= 3 and integral_topic != name:
+        phrases.add(integral_topic)
+    topic = name.split('的', 1)[0].strip()
+    if '的' in name and len(topic) >= 4:
+        phrases.add(topic)
     from backend.services.question_generation import FAMILY_NODES
     code = getattr(node, "code", None)
     for aliases in FAMILY_NODES.values():
@@ -323,7 +331,10 @@ def generation_intent(db, message, ctx, request_key, *, generation_mode="ai_gene
                       confirmed_targets=None):
     difficulty, types = _preferences(message)
     nodes = list(db.scalars(select(KnowledgePoint).where(KnowledgePoint.is_active.is_(True), KnowledgePoint.is_assessable.is_(True))))
-    matches = [n for n in nodes if n.name in message or n.code in message]
+    mentions = _explicit_node_mentions(message, nodes)
+    matches = list({item[4].id: item[4] for item in mentions}.values())
+    matched_ids = {node.id for node in matches}
+    matches.extend(node for node in nodes if node.code in message and node.id not in matched_ids)
     if not matches:
         from backend.services.question_generation import FAMILY_NODES
         terms = {t for values in FAMILY_NODES.values() for t in values if t in message}

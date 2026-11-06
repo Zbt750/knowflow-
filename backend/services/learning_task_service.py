@@ -233,6 +233,9 @@ def _confirm_task_transaction(factory, task_id, body, *, now=None, record_chat_m
                 raise AppError('learning_task_conflict', status_code=409)
             if (row.context or {}).get("read_only_task"):
                 raise AppError("learning_task_conflict", status_code=409)
+            if ((row.context or {}).get('activity_schedule_only')
+                    and (row.draft or {}).get('kind') != 'activity_schedule'):
+                raise AppError('learning_task_conflict', status_code=409)
             if ((row.context or {}).get("daily_plan_operation") == "append"
                     and (not row.session_id or body.session_id != row.session_id)):
                 # Do not reveal a committed append receipt across study chats.
@@ -252,6 +255,12 @@ def _confirm_task_transaction(factory, task_id, body, *, now=None, record_chat_m
                 date_key = now.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat()
                 if (row.context or {}).get('current_plan',{}).get('study_date') != date_key:
                     raise AppError('learning_task_stale_draft',status_code=409)
+                if (row.context or {}).get('activity_schedule_only'):
+                    _, signature = _daily_plan_snapshot(db,now=now,
+                        requested_plan_id=UUID(str(row.context['current_plan_id']))
+                        if (row.context or {}).get('current_plan_id') else None)
+                    if signature != (row.context or {}).get('current_plan_signature'):
+                        raise AppError('learning_task_stale_draft',status_code=409)
                 from backend.services.study_activity_schedule import validate_schedule
                 validate_schedule(db,draft,row.budget_minutes)
                 row.metrics={**row.metrics,'commit':{'kind':'activity_schedule','added_count':0,'item_ids':[],
@@ -354,7 +363,7 @@ def _confirm_task_transaction(factory, task_id, body, *, now=None, record_chat_m
                 plan = DailyPlan(study_date=date_key, status="active")
                 db.add(plan)
                 db.flush()
-            added = append_questions_to_plan(db, plan_id=plan.id, question_ids=ids)
+            added = append_questions_to_plan(db, plan_id=plan.id, question_ids=ids,now=now)
             if added != len(ids):
                 raise AppError("learning_task_stale_draft", status_code=409)
             # Production sessions disable autoflush. The receipt must reference
@@ -388,7 +397,7 @@ def _confirm_task_transaction(factory, task_id, body, *, now=None, record_chat_m
         raise AppError("learning_task_conflict", status_code=409) from None
 
 
-def create_task(factory, body, *, now=None, allow_active_plan_append=False, read_only=False):
+def create_task(factory, body, *, now=None, allow_active_plan_append=False, read_only=False, activity_schedule_only=False):
     now = now or datetime.now(timezone.utc)
     with factory.begin() as db:
         if body.session_id:
@@ -399,8 +408,12 @@ def create_task(factory, body, *, now=None, allow_active_plan_append=False, read
                 raise AppError("forbidden", status_code=403)
         current_plan, signature = _daily_plan_snapshot(db, now=now, requested_plan_id=body.current_plan_id)
         # 今日正式卷已生成并冻结时，在方案生成前直接拒绝，避免“确认后才 409”。
-        if current_plan.get("plan_id") and int(current_plan.get("total_items") or 0) > 0 and not read_only:
-            if (not allow_active_plan_append or current_plan.get("status") != "active"
+        materialized = int(current_plan.get('total_items') or 0) > 0
+        if current_plan.get('plan_id') and not materialized and not read_only:
+            materialized = db.scalar(select(PracticeItem.id).where(
+                PracticeItem.plan_id==UUID(current_plan['plan_id'])).limit(1)) is not None
+        if current_plan.get("plan_id") and materialized and not read_only:
+            if ((not activity_schedule_only and (not allow_active_plan_append or current_plan.get("status") != "active"))
                     or body.current_plan_id is None
                     or str(body.current_plan_id) != current_plan.get("plan_id")):
                 raise AppError("plan_already_generated", status_code=409)
@@ -408,6 +421,8 @@ def create_task(factory, body, *, now=None, allow_active_plan_append=False, read
             "current_plan_id": current_plan.get("plan_id"), "session_id": str(body.session_id) if body.session_id else None}
         if read_only:
             context["read_only_task"] = True
+        if activity_schedule_only:
+            context['activity_schedule_only'] = True
         if allow_active_plan_append:
             context["daily_plan_operation"] = "append"
         task = LearningTask(goal=body.goal, budget_minutes=body.budget_minutes, session_id=body.session_id,
@@ -447,6 +462,8 @@ def modify_task(factory, task_id, body, *, now=None):
             "previous_planner_handoff": old_context.get("planner_handoff"),
             "current_plan": current_plan, "current_plan_signature": signature,
             "current_plan_id": current_plan.get("plan_id"), "session_id": str(row.session_id) if row.session_id else None}
+        if old_context.get('activity_schedule_only'):
+            row.context={**row.context,'activity_schedule_only':True}
         row.goal, row.budget_minutes = body.goal, body.budget_minutes
         row.status, row.run_token, row.draft = "created", None, None
         row.trace, row.metrics, row.message, row.error_code = [], {"attempt_history": history}, "", None
@@ -493,6 +510,10 @@ def run_task(factory, task_id, provider, *, now=None):
             raise AppError('home_planning_workflow_required',status_code=409)
         if row is not None and (row.context or {}).get('paper_adjustment'):
             raise AppError('learning_task_conflict',status_code=409)
+        if row is not None and (row.context or {}).get('activity_schedule_only'):
+            handoff=(row.context or {}).get('planner_handoff') or {}
+            if (handoff.get('constraints') or {}).get('activity_schedule_requested') is not True:
+                raise AppError('learning_task_conflict',status_code=409)
     if not _TASK_SLOT.acquire(blocking=False):
         raise AppError("learning_task_busy", status_code=409)
     try:

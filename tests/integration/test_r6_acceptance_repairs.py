@@ -5,10 +5,11 @@ from tests.integration.test_student_uiv2_repairs import session_factory,clean_da
 from backend.schemas.learning_assistant import AssistantRequest
 from backend.models.learning_task import LearningTask
 from tests.unit.test_r6_intent_contract import PLAN_INPUTS
+from tests.integration.test_learning_assistant import setup_pre_generation
 
 @pytest.mark.parametrize('text',PLAN_INPUTS)
 def test_r6_plan_preview_produces_valid_timeboxed_draft_without_formal_writes(session_factory,text):
-    sid,ctx,_=setup(session_factory);before=business_rows(session_factory)
+    sid,ctx,_=setup_pre_generation(session_factory);before=business_rows(session_factory)
     talk(session_factory,sid,AssistantRequest(question=text,study_context=ctx),NoModel())
     with session_factory() as db:
         task=db.scalar(select(LearningTask).where(LearningTask.session_id==sid))
@@ -29,12 +30,8 @@ def test_r6_60_minute_question_draft_can_be_trimmed_to_valid_22_minute_prefix(se
     from backend.schemas.learning_task import CreateTask
     from backend.services.learning_task_service import create_task,run_task,get_task
     from backend.services.question_versions import question_version_reference
-    sid,ctx,_=setup_assistant(session_factory)
-    # The scenario exercises an unconfirmed PRE_GENERATION draft. Retire the
-    # helper's untouched sample item so the fixture does not create a fake
-    # already-generated paper.
-    with session_factory.begin() as db:
-        db.get(PracticeItem,ctx.practice_item_id).removed_at=NOW
+    # Preserve yesterday's paper as history; today's paper is not generated.
+    sid,ctx,_=setup_pre_generation(session_factory)
     minutes=[3,4,15,5,15]
     refs=[]
     with session_factory.begin() as db:
@@ -291,11 +288,11 @@ def test_r6_unscoped_empty_paper_previews_real_versions_without_claiming_already
     from backend.models.learning import PracticeItem,QuestionVersion
     from backend.schemas.learning_assistant import StudyContext
     from backend.services.assistant_data_queries import execute_read_only_data_query
-    from sqlalchemy import delete
     from uuid import UUID
-    sid,ctx,_=setup(session_factory)
-    with session_factory.begin() as db:db.execute(delete(PracticeItem).where(PracticeItem.plan_id==ctx.daily_plan_id))
-    ctx=StudyContext(surface='study',daily_plan_id=ctx.daily_plan_id)
+    # Inspect the bank in QA while today's paper is uncreated. Homepage
+    # planning remains blindbox; yesterday's item stays in permanent history.
+    sid,ctx,_=setup_pre_generation(session_factory,purpose='qa')
+    ctx=StudyContext(surface='chat')
     before=business_rows(session_factory)
     result=execute_read_only_data_query(session_factory,session_id=sid,ctx=ctx,message='帮我找两道题预览，不要加入今日卷。',query_type='find',now=NOW)
     assert result['evidence']['inventory_state']=='eligible_questions_available'

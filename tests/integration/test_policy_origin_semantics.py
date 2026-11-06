@@ -195,3 +195,20 @@ def test_changed_policy_is_safely_skipped_by_apply(session_factory,clean_databas
         assert result["status_counts"]=={"POLICY_CHANGED_SINCE_AUDIT":1}
         assert db.scalar(select(KpMasteryPolicy.min_day_span).where(KpMasteryPolicy.kp_id==node_id))==4
         db.rollback()
+
+
+def test_policy_schema_guard_accepts_reviewed_head_but_rejects_unknown_head(session_factory,clean_database,monkeypatch):
+    from scripts import migrate_graduation_policy_semantics as migration
+    with session_factory() as db:
+        connection=db.connection()
+        before=migration.schema_preflight(connection)
+        assert before['passed'] and before['chain_passed'] and before['schema_deltas']==[]
+        real=migration.ScriptDirectory.from_config
+        class UnknownHead:
+            def __init__(self,script):self.script=script
+            def get_heads(self):return ['unknown_future_revision']
+            def get_revision(self,revision):return self.script.get_revision(revision)
+        monkeypatch.setattr(migration.ScriptDirectory,'from_config',lambda config:UnknownHead(real(config)))
+        after=migration.schema_preflight(connection)
+        assert not after['passed'] and not after['chain_passed']
+        db.rollback()

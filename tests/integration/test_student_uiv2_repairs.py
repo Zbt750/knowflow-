@@ -51,6 +51,29 @@ def test_unspecified_budget_requests_information_without_inventing_ninety_minute
     assert '90分钟学习计划' not in reply(session_factory,sid).content
     assert business_rows(session_factory)==before
 
+
+def test_readonly_another_question_is_session_bound_and_explicit_append_stays_a_proposal(session_factory):
+    from backend.models.chat import ChatSession
+    from backend.schemas.learning_assistant import StudyContext
+    from backend.services.assistant_data_queries import continues_read_only_selection
+    sid,ctx,_=setup(session_factory)
+    talk(session_factory,sid,AssistantRequest(question='帮我找一道洛必达法则的题',study_context=ctx),NoModel())
+    assert continues_read_only_selection(session_factory,session_id=sid,message='再来一道极限的题',now=NOW)
+    assert not continues_read_only_selection(session_factory,session_id=sid,message='再来一道洛必达法则题，加入今日卷。',now=NOW)
+    with session_factory.begin() as db:
+        other=ChatSession(mode='builtin',purpose='qa');db.add(other);db.flush();other_id=other.id
+    assert not continues_read_only_selection(session_factory,session_id=other_id,message='再来一道极限的题',now=NOW)
+    before=business_rows(session_factory)
+    frames=talk(session_factory,other_id,AssistantRequest(question='再来一道极限的题',study_context=StudyContext(surface='chat')),NoModel())
+    assert not any(event in {'planner','practice_request','personal_generation'} for event,data in frames)
+    assert business_rows(session_factory)==before
+    talk(session_factory,sid,AssistantRequest(question='再来一道洛必达法则题，加入今日卷。',study_context=ctx),NoModel())
+    proposal=reply(session_factory,sid).metadata_['paper_adjustment']['proposal']
+    assert proposal and len(proposal['draft']['replacements'])==1
+    assert proposal['draft']['remove_item_ids']==[]
+    after=business_rows(session_factory)
+    assert {k:v for k,v in after.items() if k!='learning_tasks'}=={k:v for k,v in before.items() if k!='learning_tasks'}
+
 def test_schedule_refinement_confirmation_and_replay_never_append_a_paper(session_factory):
     sid,ctx,_=setup(session_factory)
     talk(session_factory,sid,AssistantRequest(question='安排90分钟数学二整体复习',study_context=ctx),NoModel())
@@ -82,6 +105,31 @@ def test_activity_preview_cannot_be_confirmed_on_another_day(session_factory):
     with pytest.raises(AppError):confirm_task(session_factory,tid,ConfirmTask(draft_version=view.draft_version),now=NOW+timedelta(days=1))
     assert business_rows(session_factory)==before
 
+
+def test_activity_task_cannot_be_converted_into_a_formal_paper_draft(session_factory):
+    from backend.services.learning_task_service import modify_task, run_task
+    from backend.schemas.learning_task import TaskInput
+    sid,ctx,_=setup(session_factory)
+    talk(session_factory,sid,AssistantRequest(question='安排60分钟数学二复习',study_context=ctx),NoModel())
+    with session_factory() as db:
+        row=db.scalar(select(LearningTask).where(LearningTask.session_id==sid))
+        assert row.context['activity_schedule_only'] is True
+        tid=row.id
+    modify_task(session_factory,tid,TaskInput(goal='重新生成今日学习卷',budget_minutes=60),now=NOW)
+    before=business_rows(session_factory)
+    with pytest.raises(AppError):
+        run_task(session_factory,tid,NoModel(),now=NOW)
+    assert business_rows(session_factory)==before
+    with session_factory.begin() as db:
+        row=db.get(LearningTask,tid)
+        row.draft={'kind':'study_plan','questions':[]}
+        row.status='ready'
+    view=get_task(session_factory,tid)
+    before=business_rows(session_factory)
+    with pytest.raises(AppError):
+        confirm_task(session_factory,tid,ConfirmTask(draft_version=view.draft_version),now=NOW)
+    assert business_rows(session_factory)==before
+
 def test_schedule_withdrawal_and_invalid_source_do_not_commit(session_factory):
     from backend.services.learning_task_service import cancel_task
     sid,ctx,_=setup(session_factory)
@@ -100,11 +148,8 @@ def test_schedule_withdrawal_and_invalid_source_do_not_commit(session_factory):
 def test_no_budget_cannot_inherit_a_legacy_default(session_factory):
     from backend.services.learning_task_service import create_task
     from backend.schemas.learning_task import CreateTask
-    sid,ctx,_=setup(session_factory)
-    # PRE_GENERATION budget inheritance must not start from the shared
-    # fixture's already-generated paper.
-    with session_factory.begin() as db:
-        db.get(PracticeItem,ctx.practice_item_id).removed_at=NOW
+    from tests.integration.test_learning_assistant import setup_pre_generation
+    sid,ctx,_=setup_pre_generation(session_factory)
     old=create_task(session_factory,CreateTask(goal='旧任务',budget_minutes=90,session_id=sid,current_plan_id=ctx.daily_plan_id),now=NOW)
     before=business_rows(session_factory)
     talk(session_factory,sid,AssistantRequest(question='帮我安排今天的数学二复习',study_context=ctx.model_copy(update={'task_id':old.task_id})),NoModel())
@@ -250,6 +295,7 @@ def test_integral_question_plan_scope_overrides_current_lhopital_page(session_fa
 
 def test_same_session_find_another_excludes_previously_previewed_question(session_factory):
     sid,ctx,_=setup(session_factory)
+    before=business_rows(session_factory)
     first_frames=talk(session_factory,sid,AssistantRequest(
         question='帮我找一道洛必达法则的题',study_context=ctx),NoModel())
     first=reply(session_factory,sid)
@@ -265,3 +311,6 @@ def test_same_session_find_another_excludes_previously_previewed_question(sessio
     assert first_id not in {ref['question_id'] for ref in second_refs}
     assert any(event=='done' and data.get('status')=='completed' for event,data in second_frames)
     assert second.metadata_['read_only_data_query']['writes'] is False
+    assert second.metadata_['capability_route']['capability']=='data_query'
+    assert second.metadata_['capability_route']['intent']=='find'
+    assert business_rows(session_factory)==before

@@ -135,8 +135,12 @@ class TaskTools:
         with self.factory() as db:
             excluded = []
             for node in db.scalars(select(KnowledgePoint).where(KnowledgePoint.is_active.is_(True))):
-                patterns = [re.escape(alias) for alias in self._scope_aliases(node.name, node.code)]
-                if len(node.code) >= 3:
+                # These regexes contain only escaped literals. A missing
+                # literal cannot match, so avoid compiling every node alias
+                # on each request while retaining the exact boundary checks.
+                patterns = [re.escape(alias) for alias in self._scope_aliases(node.name, node.code)
+                            if alias in goal]
+                if len(node.code) >= 3 and node.code in goal:
                     patterns.append(r"(?<![a-z0-9._-])" + re.escape(node.code) + r"(?![a-z0-9._-])")
                 if any(self._is_excluded(goal, m) for pattern in patterns for m in re.finditer(pattern, goal)):
                     excluded.append(node.id)

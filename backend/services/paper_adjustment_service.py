@@ -59,7 +59,8 @@ def _state(db, item):
 
 
 def _session(db, session_id):
-    row = db.get(ChatSession, session_id)
+    from backend.services.chat_session_scope import require_session_purpose
+    row = require_session_purpose(db, session_id, 'study')
     if row is None or row.archived_at is not None or row.mode != 'builtin':
         raise AppError('chat_session_not_found', status_code=404)
 
@@ -156,7 +157,7 @@ def confirm_adjustment(factory, task_id, body, *, now):
             replacement_ids.append(q.id)
         if minutes>row.budget_minutes:raise AppError('learning_task_conflict',status_code=409)
         try:
-            added=append_questions_to_plan(db,plan_id=plan.id,question_ids=replacement_ids) if replacement_ids else 0
+            added=append_questions_to_plan(db,plan_id=plan.id,question_ids=replacement_ids,now=now) if replacement_ids else 0
         except ValueError:
             raise AppError('learning_task_stale_draft',status_code=409) from None
         if added!=len(replacement_ids):raise AppError('learning_task_stale_draft',status_code=409)

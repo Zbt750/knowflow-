@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -20,6 +21,7 @@ from backend.retrieval.protocols import (
 )
 from backend.retrieval.vector_store import (
     COLLECTION_SPACE,
+    ChromaVectorStore,
     InMemoryVectorStore,
     ensure_normalized,
 )
@@ -138,6 +140,17 @@ def test_in_memory_store_ranks_exact_match_first() -> None:
     assert hits[0].score == pytest.approx(1.0, abs=1e-6)
     # document 回带原文，用于与 PostgreSQL 正文核对。
     assert hits[0].document == records[0].content
+
+
+def test_chroma_query_rejects_dimension_mismatch_before_backend_call(monkeypatch) -> None:
+    store = ChromaVectorStore.__new__(ChromaVectorStore)
+    store._collection = SimpleNamespace(
+        query=lambda **kwargs: pytest.fail("dimension mismatch reached Chroma")
+    )
+    monkeypatch.setattr(store, "embedding_dimension", lambda: 384)
+
+    with pytest.raises(VectorStoreError, match="384.*2"):
+        store.query([1.0, 0.0], top_k=1)
 
 
 def test_in_memory_store_delete_by_material_and_version() -> None:

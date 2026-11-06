@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select
 
 from tests.integration.test_learning_assistant import (
-    session_factory, clean_database, conversations, NOW, talk,
+    session_factory, clean_database, conversations, NOW, talk, client, clock,
 )
 from tests.integration.test_learning_tasks import clean_tasks
 from tests.integration.test_learning_loop import mark_isolated_question_trusted
@@ -65,6 +65,15 @@ def request_view(frames):
     return next(data for event, data in frames if event == "practice_request")
 
 
+def private_details(factory, view):
+    # Daily-plan candidates stay private until materialization. Retain the
+    # original immutable-version and transactional assertions at the DB boundary.
+    assert 'preview_draft' not in view['details']
+    assert '"question_id"' not in json.dumps(view)
+    with factory() as db:
+        return db.get(PracticeRequest, UUID(view['id'])).request
+
+
 def protected_rows(factory, *, include_requests=True):
     models = [Question, QuestionVersion, DailyPlan, PracticeItem, QuestionAttempt,
         LearningEvent, LearningTask, PersonalGenerationBatch]
@@ -93,23 +102,38 @@ def extra_lhopital_questions(session_factory):
         return node.id
 
 
-def test_compound_explanation_and_real_question_preview_keep_no_plan_side_effects(session_factory, extra_lhopital_questions):
+def test_compound_explanation_and_real_question_preview_keep_no_plan_side_effects(session_factory, extra_lhopital_questions, client, clock):
+    clock.now = NOW
     sid = qa_session(session_factory)
     before = protected_rows(session_factory, include_requests=False)
     frames = ask(session_factory, sid,
         "洛必达法则是怎么样的，帮我从题库里面拿出一道放进今日卷。")
     view = request_view(frames)
-    draft = view["details"]["preview_draft"]
+    draft = private_details(session_factory, view)["preview_draft"]
     assert view["status"] == "draft" and len(draft["questions"]) == 1
     answer = next(data["answer"] for event, data in frames if event == "done")
-    assert "系统节点讲解" in answer and "去心邻域" in answer and "尚未加入今日卷" in answer
-    assert [step["tool"] for step in view["details"]["preview_trace"]] == [
+    assert "系统节点讲解" in answer and "去心邻域" in answer and "今日卷尚未生成" in answer
+    assert [step["tool"] for step in private_details(session_factory, view)["preview_trace"]] == [
         "read_lesson", "get_learning_state", "get_question_availability", "find_questions", "validate_plan"]
     selected = draft["questions"][0]
     with session_factory() as db:
         bound = db.get(QuestionVersion, UUID(selected["question_version"]))
         assert bound.question_id == UUID(selected["question_id"])
         assert bound.stem == selected["stem"] and bound.options == selected["options"]
+        saved = db.scalar(select(ChatMessage).where(ChatMessage.session_id == sid,
+            ChatMessage.role == 'assistant').order_by(ChatMessage.seq.desc()))
+        replay_key = UUID(saved.metadata_['request_key'])
+    replay = talk(session_factory, sid, AssistantRequest(
+        question='洛必达法则是怎么样的，帮我从题库里面拿出一道放进今日卷。',
+        study_context=StudyContext(surface='chat'), request_key=replay_key), NoModelProvider())
+    replay_answer = next(data['answer'] for event, data in replay if event == 'done')
+    assert '系统节点讲解' in replay_answer and '去心邻域' in replay_answer
+    assert selected['stem'] not in replay_answer
+    history = client.get(f'/api/chat/sessions/{sid}/messages')
+    assert history.status_code == 200, history.text
+    restored = history.json()[-1]['content']
+    assert '系统节点讲解' in restored and '去心邻域' in restored
+    assert selected['stem'] not in restored
     assert protected_rows(session_factory, include_requests=False) == before
 
 
@@ -123,7 +147,7 @@ def test_specific_preview_version_survives_formal_confirm_and_repeat(session_fac
     assert len(refs) == 1
     before = protected_rows(session_factory, include_requests=False)
     view = request_view(ask(session_factory, sid, "把刚才那道题加入今日卷"))
-    selected = view["details"]["preview_draft"]["questions"][0]
+    selected = private_details(session_factory, view)["preview_draft"]["questions"][0]
     assert (selected["question_id"], selected["question_version"]) == (
         refs[0]["question_id"], refs[0]["question_version"])
     assert protected_rows(session_factory, include_requests=False) == before
@@ -145,11 +169,11 @@ def test_specific_preview_version_survives_formal_confirm_and_repeat(session_fac
 
 def test_same_node_replacement_excludes_old_question_and_retires_preview(session_factory, extra_lhopital_questions):
     sid = qa_session(session_factory)
-    first = request_view(ask(session_factory, sid, "先选一道洛必达让我看看，不要加入。"))
+    first = request_view(ask(session_factory, sid, "先给我安排一道洛必达法则的待确认方案，不要生成今日卷。"))
     before = protected_rows(session_factory, include_requests=False)
     second = request_view(ask(session_factory, sid, "换一道同知识点的"))
-    old = first["details"]["preview_draft"]["questions"][0]
-    new = second["details"]["preview_draft"]["questions"][0]
+    old = private_details(session_factory, first)["preview_draft"]["questions"][0]
+    new = private_details(session_factory, second)["preview_draft"]["questions"][0]
     assert new["question_id"] != old["question_id"] and new["kp_id"] == old["kp_id"]
     assert new["question_type"] == old["question_type"]
     with session_factory() as db:
@@ -172,16 +196,16 @@ def test_cancel_and_replace_explicit_topic_uses_new_server_scope(session_factory
             grading_config={"verified": True, "method": "single_choice"})
         mark_isolated_question_trusted(question, db=db)
     sid = qa_session(session_factory)
-    first = request_view(ask(session_factory, sid, "先选一道隔离等比级数题，让我看看。"))
+    first = request_view(ask(session_factory, sid, "先给我安排一道隔离等比级数题的待确认方案，不要生成今日卷。"))
     before = protected_rows(session_factory, include_requests=False)
     second = request_view(ask(session_factory, sid, "取消刚才的题，换一道洛必达的"))
-    old = first["details"]["preview_draft"]["questions"][0]
-    new = second["details"]["preview_draft"]["questions"][0]
+    old = private_details(session_factory, first)["preview_draft"]["questions"][0]
+    new = private_details(session_factory, second)["preview_draft"]["questions"][0]
     assert UUID(old["kp_id"]) == old_node_id
     assert UUID(new["kp_id"]) == extra_lhopital_questions
     assert new["question_id"] != old["question_id"]
-    assert second["details"]["constraints"]["resolved_scope_node_ids"] == [str(extra_lhopital_questions)]
-    assert str(old_node_id) not in second["details"]["constraints"]["resolved_scope_node_ids"]
+    assert private_details(session_factory, second)["constraints"]["resolved_scope_node_ids"] == [str(extra_lhopital_questions)]
+    assert str(old_node_id) not in private_details(session_factory, second)["constraints"]["resolved_scope_node_ids"]
     with session_factory() as db:
         assert db.get(PracticeRequest, UUID(first["id"])).status == "declined"
     assert protected_rows(session_factory, include_requests=False) == before
@@ -189,7 +213,7 @@ def test_cancel_and_replace_explicit_topic_uses_new_server_scope(session_factory
 
 def test_read_only_bank_browse_after_preview_has_no_learning_side_effect(session_factory, extra_lhopital_questions):
     sid = qa_session(session_factory)
-    request_view(ask(session_factory, sid, "先选一道洛必达让我看看，不要加入。"))
+    request_view(ask(session_factory, sid, "先给我安排一道洛必达法则的待确认方案，不要生成今日卷。"))
     before = protected_rows(session_factory)
     frames = ask(session_factory, sid, "我只想看看题库里有哪些洛必达法则的题，不要创建计划。")
     assert not any(event in {"practice_request", "planner"} for event, _ in frames)

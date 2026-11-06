@@ -148,6 +148,16 @@ def route_message(message, context, *, action="auto", task=None, classifier=None
         return CapabilityRoute('planner','plan',1,'preview_schedule_without_insert_consent',write_risk=False)
     # Selecting a concrete preview and withholding insertion are compatible.
     # Keep only the positive selection clause; never grant write permission.
+    if (re.search(r'如果没有.{0,16}(?:资格|合格).{0,12}题',text)
+            and _explanation_request(text)):
+        return CapabilityRoute('data_query','inventory',1,'conditional_inventory_with_explanation',
+            write_risk=False,explanation_request=_explanation_request(text))
+    from backend.services.bank_selection_intent import read_only_selection_request, explicit_plan_preview
+    if explicit_plan_preview(text):
+        return CapabilityRoute('planner','plan',1,'explicit_bank_selection',write_risk=False)
+    if read_only_selection_request(text):
+        return CapabilityRoute('data_query','find',1,'explicit_read_only_bank_selection',write_risk=False,
+            explanation_request=_explanation_request(text))
     preview_clauses = [part for part in re.split(r'[，,。；;！？?\n]', text)
         if not re.search(r'(?:不要|别|先不|暂不).{0,8}(?:选|找|挑|安排|生成)', part)]
     if (re.search(r'(?:先)?(?:选|挑|拿).{0,12}[一二两三四五六七八九十\d]+道', '；'.join(preview_clauses))
@@ -190,7 +200,10 @@ def route_message(message, context, *, action="auto", task=None, classifier=None
     # Resolve an explicit source/action pair before the generic "similar
     # question" read-only query. A lookup that also asks to add its result is a
     # planner proposal and must use the version-pinned confirmation flow.
-    from backend.services.bank_selection_intent import bank_selection_request
+    from backend.services.bank_selection_intent import bank_selection_request, read_only_selection_request
+    if read_only_selection_request(text):
+        return CapabilityRoute('data_query','find',1,'explicit_read_only_bank_selection',write_risk=False,
+            explanation_request=_explanation_request(text))
     explicit_bank = bank_selection_request(text)
     if explicit_bank and explicit_bank.get('bank_source'):
         selection_only=bool(re.search(r'找|检索|查询|查找|拿|选',text)) and not re.search(r'加入|追加|加到|安排|放.{0,10}(?:卷|计划)|生成.{0,6}(?:卷|计划)',text)
@@ -378,7 +391,8 @@ def route_message(message, context, *, action="auto", task=None, classifier=None
     data_query = classify_read_only_data_query(text)
     if data_query:
         return CapabilityRoute("data_query", data_query, 1, "explicit_read_only_business_data_query")
-    if explanations and getattr(context, "question_id", None):
+    if (explanations and getattr(context, "question_id", None)
+            and not re.search(r'这个知识点|该知识点|当前知识点',text)):
         return CapabilityRoute('qa','qa',1,'current_question_explain',explanation_request='；'.join(explanations))
     if explanations and (withheld or not re.search(r'安排|计划|规划|复习建议',operation_text)):
         return CapabilityRoute('qa','qa',1,'explanation_without_selection',explanation_request='；'.join(explanations))

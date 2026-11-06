@@ -59,9 +59,10 @@ from backend.services.phase45hx_exam_verifiers import SOLVERS as HX_EXAM_SOLVERS
 ALLOWED_SOLVERS=ALLOWED_SOLVERS|HS_SOLVERS|HX_EXAM_SOLVERS
 
 
-def question_snapshot_payload(question: Question) -> dict[str, Any]:
-    """All fields that can change meaning, qualification, or grading."""
-    config = deepcopy(question.grading_config) if isinstance(question.grading_config, dict) else {}
+def _question_snapshot_payload(question: Question, *, copy_config: bool) -> dict[str, Any]:
+    # Hashing immediately serializes this payload and never mutates nested
+    # config. Public snapshot callers still receive an independent deep copy.
+    config = (deepcopy(question.grading_config) if copy_config else dict(question.grading_config)) if isinstance(question.grading_config, dict) else {}
     config.pop("public_practice_release", None)  # ordinary release is a separate use flag
     return {
         "id": str(question.id), "kp_id": str(question.kp_id),
@@ -81,8 +82,13 @@ def question_snapshot_payload(question: Question) -> dict[str, Any]:
     }
 
 
+def question_snapshot_payload(question: Question) -> dict[str, Any]:
+    """All fields that can change meaning, qualification, or grading."""
+    return _question_snapshot_payload(question, copy_config=True)
+
+
 def question_snapshot_sha256(question: Question) -> str:
-    return digest(question_snapshot_payload(question))
+    return digest(_question_snapshot_payload(question, copy_config=False))
 
 
 def _current_event_matches(question: Question, event: QuestionAutoReviewEvent,

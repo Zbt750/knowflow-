@@ -44,6 +44,29 @@ def parse_command(text):
         'easy':bool(re.search(r'简单|容易|难度',text)),'text':text}
 
 
+def _topic_count_batch(message, nodes):
+    """Reuse the proposal parser, with every named operation accounted for."""
+    operation_text=message
+    for node in sorted(nodes,key=lambda node:len(node.name),reverse=True):
+        operation_text=operation_text.replace(node.name,'')
+    if re.search(r'替换|换成|换掉|换一道',operation_text):return None,None
+    if len(re.findall(r'增加|添加|追加|加入|减少|删除|移除|减去|减掉|少安排|多安排',operation_text))<2:
+        return None,None
+    from backend.services.home_intent import _topic_count_intent,reference_map
+    normalized=message.replace('删除','减少').replace('移除','减少').replace('加入','增加')
+    paper={'selected_kp_ids':[str(node.id) for node in nodes],
+        'scope_nodes':[{'kp_id':str(node.id),'name':node.name} for node in nodes]}
+    intent=_topic_count_intent(normalized,paper)
+    if intent is None:
+        return None,'请分别说明每个知识点增减几道题；整项调整尚未提交。'
+    if intent.operation=='clarify':return None,intent.question
+    if len(intent.refs)==1:
+        # A same-topic count correction stays on the established multi-turn path.
+        return None,None
+    refs=reference_map(paper);by_id={str(node.id):node for node in nodes}
+    return [(by_id[refs[key]['value']],delta) for key,delta in zip(intent.refs,intent.deltas)],None
+
+
 def handle_paper_chat(factory, *, session_id, ctx, message, now):
     command=parse_command(message)
     if command is None or not ctx.daily_plan_id:return None
@@ -83,6 +106,14 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
             and not (saved_task.metrics or {}).get('commit') else None)
     result['context']=memory.get('context',{})
     result['proposal']=memory.get('proposal')
+    if pending_draft and command['action'] in {'add','remove','replace'}:
+        from datetime import datetime
+        try:
+            expired=now>=datetime.fromisoformat(pending_draft['expires_at'])
+        except (KeyError,TypeError,ValueError):
+            expired=True
+        if expired:
+            return reply('上一次待确认调整方案已过期，不能继续叠加；请取消旧方案并根据当前正式卷重新预览。原卷和历史记录未改变。')
     if command['action']=='clarify':
         return reply('请用阿拉伯数字明确题号和数量，例如“删除第11题”。原卷和已有待确认方案均未改变。')
     if command['action']=='cancel':
@@ -94,9 +125,8 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         result['proposal']=None
         return reply('本次调整方案已取消，正式卷保持原状态。')
     if command['action']=='query':
-        # Read-only, conditional and denied instructions belong to the normal
-        # assistant router. Returning a canned adjustment response here used
-        # to swallow inventory queries and explicit planner previews.
+        # Preserve actual inventory queries and explicitly requested draft
+        # previews, but a bare mutation question/denial grants no new Task.
         # An explicit withdrawal of the pending mutation is different from a
         # question: invalidate that draft so a later bare confirmation cannot
         # resurrect the action the user just declined.
@@ -107,7 +137,10 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
                 return reply('待确认方案已经执行或失效，不能取消；请刷新核对正式卷状态。')
             result['proposal']=None
             return reply('已取消刚才的待确认调整方案，正式卷保持原状态。')
-        return None
+        from backend.services.assistant_data_queries import classify_read_only_data_query
+        from backend.services.bank_selection_intent import explicit_plan_preview
+        if classify_read_only_data_query(message) or explicit_plan_preview(message):return None
+        return reply('这条是询问或暂不执行的调整，当前正式卷和待确认方案均未修改。请明确需要预览的知识点与题量；预览后再单独确认。')
     if command['action']=='confirm':
         proposal=memory.get('proposal')
         if not proposal:return reply('当前没有可确认的正式卷调整方案，请先指定要调整的题目。')
@@ -152,12 +185,20 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         # explicit "再/继续/另外减少" remains additive against the current
         # draft; otherwise phrases such as “两道…改成一道” must not silently
         # become a three-question reduction.
-        quantity_correction=bool(pending_draft and command['action']=='remove'
+        previous_operation=(memory.get('context') or {}).get('operation')
+        correcting_removal=(previous_operation=='remove' or
+            (previous_operation is None and pending_draft and not pending_draft.get('replacements')))
+        quantity_correction=bool(pending_draft and correcting_removal and command['action']=='remove'
             and re.fullmatch(r'(?:那\s*)?(?:(?:改成|改为)\s*)?(?:减少|删除|移除)\s*[一二两三四五六七八九十\d]+\s*(?:道|题)(?:吧|好了)?[。！!？?]*',message.strip())
             and not re.search(r'再|继续|另外|额外',message))
-        planned_removals=(set() if quantity_correction else
-            set(pending_draft.get('remove_item_ids',[])) if pending_draft else set())
+        planned_removals=set(pending_draft.get('remove_item_ids',[])) if pending_draft else set()
+        if quantity_correction:
+            # Revise only the most recent removal group, preserving unrelated
+            # earlier topic edits composed into the same pending proposal.
+            planned_removals.difference_update((memory.get('context') or {}).get('item_ids',[]))
         prior_refs=list(pending_draft.get('replacements',[])) if pending_draft else []
+        if quantity_correction:
+            prior_refs=list((memory.get('context') or {}).get('before_remove_references',prior_refs))
         reserved_pending_ids={str(ref.get('question_id')) for ref in prior_refs}
         effective_rows=[]
         questions={}
@@ -188,6 +229,9 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         nodes=list(db.scalars(select(KnowledgePoint).where(KnowledgePoint.is_active.is_(True))))
         matches=[n for n in nodes if n.name in message or (n.name=='隐函数求导' and '隐函数' in message)]
         matches.sort(key=lambda n:(message.find(n.name) if n.name in message else message.find('隐函数'),-len(n.name)))
+        batch_edits,batch_error=_topic_count_batch(message,nodes)
+        if batch_error:return reply(batch_error)
+        if batch_edits:command={**command,'action':'batch'}
         context=memory.get('context',{})
         if pending_draft and pending_draft.get('plan_id')!=str(plan.id):
             return reply('上一次待确认方案关联的正式卷已变化；请刷新并针对当前卷重新预览。')
@@ -196,7 +240,15 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         cross='408' in message and command['action']=='replace'
         all_math=cross and bool(re.search(r'全部|都换|今天数学|当前数学|当前数学题|数学题都|数学题全部',message))
         cross_all=cross and bool(re.search(r'当前的题目都换|整卷|整套|全部课程内容',message))
-        if all_math:
+        if batch_edits:
+            selected=[]
+            for node,delta in batch_edits:
+                if delta>=0:continue
+                scoped=[item for item in items if item.kp_id==node.id]
+                if len(scoped)<-delta:
+                    return reply(f'{node.name}当前只有{len(scoped)}道，不能减少{-delta}道；整项调整未提交，原卷保留。')
+                selected.extend(scoped[delta:])
+        elif all_math:
             math_ids={n.id for n in nodes if re.search('math|数学',n.subject,re.I)}
             selected=[i for i in items if i.kp_id in math_ids]
         elif cross_all:
@@ -224,9 +276,18 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
             if not selected and re.search(r'刚才|那道|这道',message) and ctx.practice_item_id:
                 selected=[i for i in items if i.id==ctx.practice_item_id]
         target_node=matches[-1] if matches else None
-        if not selected and command['action']!='add' and not (cross and command['topic_count']):return reply('请指定当前卷的实际题号或明确知识点名称。')
-        result['context']={'kp_id':str((selected[0].kp_id if selected else target_node.id)) if selected or target_node else None,
+        if batch_edits and target_node is None:target_node=batch_edits[-1][0]
+        if not selected and command['action'] not in {'add','batch'} and not (cross and command['topic_count']):return reply('请指定当前卷的实际题号或明确知识点名称。')
+        result['context']={'operation':command['action'],
+            'kp_id':str((selected[0].kp_id if selected else target_node.id)) if selected or target_node else None,
             'item_ids':[str(i.id) for i in selected], 'subject':'408' if cross else None}
+        if command['action']=='remove':
+            result['context']['before_remove_references']=[dict(ref) for ref in prior_refs]
+        if batch_edits:
+            result['context']['kp_id']=None
+            result['context']['topic_count_edits']=[{'kp_id':str(node.id),'name':node.name,'delta':delta,
+                'before_count':sum(i.kp_id==node.id for i in items),
+                'after_count':sum(i.kp_id==node.id for i in items)+delta} for node,delta in batch_edits]
         # Compose each turn against the last uncommitted proposal. Removing a
         # proposed addition edits only the draft; removing a persisted item
         # adds its immutable PracticeItem id to the combined soft-removal set.
@@ -240,7 +301,7 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
             positions=[str(items.index(i)+1) for i in selected]
             return reply(f"该范围有{len(selected)}道题（当前第{'、'.join(positions)}题），请明确要调整的题号。")
         replacements=[]
-        if command['action'] in {'replace','add'}:
+        if command['action'] in {'replace','add','batch'}:
             if implicit_reference is not None:
                 # Reuse the exact version the user saw. The proposal service
                 # revalidates public scope, eligibility and duplicates before
@@ -289,7 +350,9 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
             else:
                 from backend.services.question_eligibility import question_eligibility
                 existing=existing_question_ids|{UUID(value) for value in reserved_pending_ids}
-                if command['each_topic'] and command['action']=='replace' and len(matches)>1:
+                if batch_edits:
+                    targets=[(node.id,delta) for node,delta in batch_edits if delta>0]
+                elif command['each_topic'] and command['action']=='replace' and len(matches)>1:
                     # Each selected topic retains its own candidate scope. Build
                     # every pool before proposing one atomic adjustment.
                     targets=[(node.id,sum(i.kp_id==node.id for i in selected)) for node in matches]
@@ -306,6 +369,17 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
                     replacements.extend(ReplacementReference(question_id=q.id,question_version_id=UUID(question_version_reference(q))) for q in eligible[:wanted])
     try:
         replacement_refs.extend([r.model_dump(mode='json') for r in replacements])
+        if pending_draft and not remove_item_ids and not replacement_refs:
+            # Removing a proposed addition can restore the original paper.
+            # Cancel the old proposal so a later confirmation cannot append
+            # the question the learner has just removed from the draft.
+            from backend.services.learning_task_service import cancel_task
+            try:
+                cancel_task(factory,saved_task.id)
+            except AppError:
+                return reply('待确认方案状态已变化，未能取消；请刷新核对，正式卷未改变。')
+            result['proposal']=None
+            return reply('调整后与当前正式卷一致，已取消待确认方案；正式卷和历史记录未改变。')
         ordered_removals=[i.id for i in plan_rows if str(i.id) in remove_item_ids]
         result['proposal']=propose_adjustment(factory,PaperAdjustmentRequest(session_id=session_id,
             plan_id=ctx.daily_plan_id,remove_item_ids=ordered_removals,
@@ -334,8 +408,10 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
     positions='、'.join(str(items.index(i)+1) for i in selected)
     duration=result['context'].get('estimated_minutes')
     timing=f'预计{duration}分钟。' if duration is not None else ''
-    action_label={'remove':'移除','replace':'替换','add':'追加'}[command['action']]
+    action_label={'remove':'移除','replace':'替换','add':'追加','batch':'批量增减'}[command['action']]
     removal_summary=f"移除当前第{positions}题，共{len(selected)}道" if selected else '保留现有题目'
     selected_topics=result['context'].get('selected_408_topics',[])
+    batch_summary='；'.join(f"{row['name']}：{row['before_count']}→{row['after_count']}道"
+        for row in result['context'].get('topic_count_edits',[]))
     topic_summary=('知识点：'+'、'.join(n['name'] for n in selected_topics)+'。') if selected_topics else ''
-    return reply(f"待确认方案：{action_label}；{removal_summary}，新增{len(replacements)}道。{topic_summary}{timing}{warning}回复“确认调整”后执行；当前正式卷尚未改变。")
+    return reply(f"待确认方案：{action_label}；{removal_summary}，新增{len(replacements)}道。{topic_summary}{batch_summary}{timing}{warning}回复“确认调整”后执行；当前正式卷尚未改变。")

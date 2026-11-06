@@ -68,18 +68,15 @@ def build_retrieval_stack(
     )
     # 模型一致性必须在这里就校验：不然后面每次检索都在给错分数。
     vector_store.assert_model_matches()
-    # 维度一致性也必须在这里校验（真实缺陷，实测踩到）：
-    # 向量库集合是历史用一份 **384 维**的模型建的，而当前中文模型
-    # `bge-small-zh-v1.5` 输出 **512** 维（官方 README 规格表即 512；
-    # 384 那一列属于英文版 `bge-small-en-v1.5`）。结果是**每一次资料索引都失败**
-    # 在 chromadb 的 `InvalidArgumentError: expecting embedding with dimension of
-    # 384, got 512`，而对外只表现为任务 attempts 打满 + 向量库 0 条 ——
-    # 排查时先后误判为模型文件缺失、向量库损坏、外键冲突，代价极大。
-    # 在这里比一次，代价是首次加载模型（几百毫秒的 config 解析 + 权重），
-    # 换来的是启动日志里一句能直接定位的话。
-    embedding_dimension = embedder.dimension
+    # 冷启动不要为了读取输出维度就导入 PyTorch 或加载模型权重。
+    # 已加载模型仍会与持久索引即时核对；真实写入/查询入口负责核验惰性维度。
+    if isinstance(embedder, SentenceTransformerEmbedder):
+        embedding_dimension = embedder.loaded_dimension
+    else:
+        embedding_dimension = embedder.dimension
     stored_dimension = vector_store.embedding_dimension()
-    if stored_dimension is not None and stored_dimension != embedding_dimension:
+    if (stored_dimension is not None and embedding_dimension is not None
+            and stored_dimension != embedding_dimension):
         raise VectorStoreError(
             f"向量库集合维度 {stored_dimension} 与当前 embedding 模型 "
             f"{embedding_model} 的输出维度 {embedding_dimension} 不一致："

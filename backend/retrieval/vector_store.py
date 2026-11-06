@@ -320,6 +320,12 @@ class ChromaVectorStore:
         ensure_normalized(embedding)
         if top_k <= 0:
             return []
+        existing = self.embedding_dimension()
+        actual = len(embedding)
+        if existing is not None and existing != actual:
+            raise VectorStoreError(
+                f"向量库集合维度是 {existing}，本次查询向量是 {actual} 维，拒绝查询"
+            )
         # 过滤条件可能让真正可用的条数远少于 top_k，因此多取一些再在 Python 侧裁剪。
         fetch_k = max(top_k * 4, top_k)
         result = self._collection.query(

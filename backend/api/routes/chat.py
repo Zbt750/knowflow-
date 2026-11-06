@@ -311,9 +311,9 @@ def list_messages(request: Request, session_id: UUID,
                     safe_content[row.id]='这份历史练习方案目前无法重新核验；请重新规划后再确认。没有据此生成今日卷。'
                     continue
                 if details.get('pre_generation'):
-                    from backend.services.planning_public_view import summary_message
+                    from backend.services.planning_public_view import summary_message, request_lesson_prefix
                     redacted_ids.add(row.id)
-                    safe_content[row.id]=summary_message(details['plan_summary'],
+                    safe_content[row.id]=request_lesson_prefix(db,practice_row.request)+summary_message(details['plan_summary'],
                         ready=projected['status'] in {'proposed','accepted'})+"\n\n发送练习需求不会修改今日卷。"
                     safe_practice_request_ids[row.id]=str(request_id)
                     continue

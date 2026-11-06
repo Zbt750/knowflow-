@@ -29,6 +29,51 @@ class NoModel:
         raise AssertionError(f"model call is not allowed in this deterministic acceptance: {name}")
 
 
+@pytest.mark.parametrize('explicit_candidate_version', [False, True])
+def test_pending_workload_draft_remains_editable_without_losing_quantity_changes(
+        client, home, session_factory, explicit_candidate_version):
+    with session_factory.begin() as db:
+        node, _ = _add_synthetic_topic(db, code='synthetic.pending.quantity', name='待确认题量验收')
+        node_id = str(node.id)
+    def edit(goal, **kw):
+        response = client.post(ROOT, json={'session_id':home['session_id'], 'request_key':uuid4().hex,
+            'action':'adjust', 'goal':goal, **kw})
+        assert response.status_code == 200, response.text
+        result = response.json()
+        import json
+        assert result['status'] == 'ready', json.dumps(result, ensure_ascii=False)
+        return result
+    initial = client.post(ROOT, json={'session_id':home['session_id'], 'request_key':uuid4().hex,
+        'action':'default', 'goal':'', 'selected_kp_ids':[node_id], 'budget_minutes':10}).json()
+    assert initial['status'] == 'ready', initial
+    count = initial['draft']['question_count']
+    # The adaptive baseline may already allocate all five frozen fixture
+    # questions. Add two explicitly synthetic qualified spare questions after
+    # the baseline, so this tests pending-card composition rather than stock
+    # exhaustion or the random UUID order of recommended topics.
+    with session_factory.begin() as db:
+        for index in range(2):
+            question = Question(kp_id=UUID(node_id), question_type='single_choice',
+                stem=f'SYNTHETIC pending spare {index}: 1+1=?', options={'A':'2','B':'3'},
+                correct_answer='A', explanation='1+1=2', estimated_minutes=10,
+                grading_mode='auto', grading_config={'verified':True,'method':'single_choice'}, is_active=True)
+            mark_isolated_question_trusted(question, db=db)
+    first = edit('增加一道待确认题量验收的题目。', budget_minutes=5)
+    assert first['draft']['question_count'] == count + 1
+    with session_factory() as db:
+        assert db.get(LearningTask, UUID(first['task_id'])).context['workload_pending']
+    second = edit('再增加一道待确认题量验收的题目。', budget_minutes=5,
+        **({'expected_version':first['draft_version']} if explicit_candidate_version else {}))
+    assert second['draft']['question_count'] == count + 2
+    dismissed = client.post(ROOT, json={'session_id':home['session_id'], 'request_key':uuid4().hex,
+        'action':'dismiss_workload', 'goal':'', 'target_task_id':second['task_id'],
+        'expected_version':second['draft_version']})
+    assert dismissed.status_code == 200, dismissed.text
+    assert dismissed.json()['draft']['question_count'] == count
+    after = formal_rows(session_factory)
+    assert after['daily_plans'] == after['practice_items'] == 0
+
+
 @pytest.fixture(autouse=True)
 def _isolate_each_pregeneration_journey(clean_database, clean_tasks, conversations):
     """The standalone PRE_GENERATION group must not inherit POST_GENERATION state."""
@@ -115,6 +160,123 @@ def test_selected_topic_preview_shows_exact_count_and_time_without_question_iden
     assert after['daily_plans']==before['daily_plans']==0
     assert after['practice_items']==before['practice_items']==0
     assert after['learning_tasks']==before['learning_tasks']+1
+
+
+def test_default_preview_pins_the_same_adaptive_question_versions_as_home_recommendation(client,home,session_factory):
+    """Opening the editable homepage draft must preserve the visible FSRS/BKT recommendation."""
+    before=formal_rows(session_factory)
+    recommendation=client.get('/api/plans/today/home-recommendation')
+    assert recommendation.status_code==200,recommendation.text
+    shown=recommendation.json()
+    canonical=shown['initial_paper']
+    assert canonical and canonical['question_count']>0
+    selected=[row['kp_id'] for row in shown['recommendations']]
+    proposal=client.post(ROOT,json={'session_id':home['session_id'],'request_key':uuid4().hex,
+        'goal':'','action':'default','selected_kp_ids':selected,'budget_minutes':90})
+    assert proposal.status_code==200,proposal.text
+    draft=proposal.json()['draft']
+    assert proposal.json()['status']=='ready',proposal.json()
+    with session_factory() as db:
+        task=db.get(LearningTask,UUID(proposal.json()['task_id']))
+        stored=task.draft
+        from backend.services.home_public_view import public_paper
+        stored_baseline=public_paper((task.context or {}).get('baseline'))
+        diagnostic={'home_fingerprint':canonical['selection_fingerprint'],
+            'draft_fingerprint':draft['selection_fingerprint'],
+            'baseline_fingerprint':stored_baseline.get('selection_fingerprint') if stored_baseline else None,
+            'draft_pairs':[(row['question_id'],row['question_version_id']) for row in stored['questions']],
+            'baseline_pairs':[(row['question_id'],row['question_version_id']) for row in ((task.context or {}).get('baseline') or {}).get('questions',[])],
+            'scope_ids':selected}
+    assert draft['selection_fingerprint']==canonical['selection_fingerprint'],diagnostic
+    assert draft['question_count']==canonical['question_count']
+    assert draft['total_minutes']==canonical['total_minutes']
+    assert draft['questions']==[]
+    with session_factory() as db:
+        task=db.get(LearningTask,UUID(proposal.json()['task_id']))
+        stored=task.draft
+        assert len(stored['questions'])==canonical['question_count']
+        assert len({(row['question_id'],row['question_version_id']) for row in stored['questions']})==len(stored['questions'])
+    default_plan=client.post(ROOT,json={'session_id':home['session_id'],'request_key':uuid4().hex,
+        'goal':'','action':'default','budget_minutes':90})
+    assert default_plan.status_code==200,default_plan.text
+    assert default_plan.json()['status']=='ready',default_plan.json()
+    assert default_plan.json()['draft']['selection_fingerprint']==canonical['selection_fingerprint']
+    assert default_plan.json()['draft']['questions']==[]
+    after=formal_rows(session_factory)
+    assert after['daily_plans']==before['daily_plans']==0
+    assert after['practice_items']==before['practice_items']==0
+    assert after['learning_tasks']==before['learning_tasks']+2
+
+
+def test_real_home_preview_exposes_fsrs_due_question_after_wrong_answer(client,home,session_factory,clock):
+    """A wrong public API answer becomes a due FSRS candidate in the actual homepage draft."""
+    from backend.services.question_eligibility import question_eligibility
+    from backend.services.adaptive_schedule_projection import read_projection
+    from backend.models.learning import QuestionAttempt
+    now=clock()
+    with session_factory.begin() as db:
+        node=db.get(KnowledgePoint,UUID(home['linear']))
+        question=db.scalar(select(Question).where(Question.kp_id==node.id,
+            Question.question_type=='single_choice',Question.is_active.is_(True)).order_by(Question.id))
+        assert node and question and question_eligibility(question,node).practice_eligible
+        assert question.current_version_id and question.options
+        correct=str(question.correct_answer or '')
+        wrong=next((key for key,value in question.options.items()
+            if str(key)!=correct and str(value)!=correct),None)
+        assert wrong is not None
+        from backend.mastery.storage import policy_for_node
+        policy_for_node(db,node.id,bind_if_unset=True,now=now)
+        history_plan=DailyPlan(study_date=(now-timedelta(days=30)).date().isoformat(),status='active')
+        db.add(history_plan);db.flush()
+        history_item=PracticeItem(plan_id=history_plan.id,kp_id=node.id,question_id=question.id,ordinal=1)
+        db.add(history_item);db.flush()
+        history_item_id=history_item.id
+        question_id=question.id;kp_id=node.id;question_version_id=question.current_version_id
+    answer=client.post(f'/api/practice-items/{history_item_id}/answer-submissions',json={
+        'raw_answer':None,'selected_option':wrong,'idempotency_key':'r40-home-fsrs-due-wrong-01'})
+    assert answer.status_code==200,answer.text
+    assert answer.json()['result']=='wrong',answer.json()
+    attempt_id=UUID(answer.json()['attempt_id'])
+    with session_factory() as db:
+        receipt=db.get(QuestionAttempt,attempt_id)
+        assert receipt and receipt.grading_evidence['evidence_capability']=='verified_objective'
+        assert receipt.grading_evidence['adaptive_schedule']['algorithm']=='fsrs6.3.2-bkt-tempered-v2'
+    clock.now=now+timedelta(days=30)
+    sid=UUID(home['session_id'])
+    with session_factory.begin() as db:
+        db.get(__import__('backend.models.chat',fromlist=['ChatSession']).ChatSession,sid).study_date=clock().date().isoformat()
+    recommendation=client.get('/api/plans/today/home-recommendation')
+    assert recommendation.status_code==200,recommendation.text
+    shown=recommendation.json();initial=shown['initial_paper']
+    assert initial and initial['question_count']>0,shown
+    recommendation_ids=[row['kp_id'] for row in shown['recommendations']]
+    assert str(kp_id) in recommendation_ids
+    with session_factory() as db:
+        projection=read_projection(db,clock(),[kp_id])
+        card=projection.cards[(str(question_id),str(question_version_id))]
+        assert card.due<=clock(),card.to_dict()
+    before=formal_rows(session_factory)
+    preview=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'','action':'default','selected_kp_ids':recommendation_ids,'budget_minutes':90})
+    assert preview.status_code==200,preview.text
+    assert preview.json()['status']=='ready',preview.json()
+    assert preview.json()['draft']['selection_fingerprint']==initial['selection_fingerprint']
+    with session_factory() as db:
+        task=db.get(LearningTask,UUID(preview.json()['task_id']))
+        planned=[(row['question_id'],row['question_version_id']) for row in task.draft['questions']]
+        assert len(set(planned))==len(planned)
+        assert (str(question_id),str(question_version_id)) in planned
+    after=formal_rows(session_factory)
+    assert after['daily_plans']==before['daily_plans']
+    assert after['practice_items']==before['practice_items']
+    assert after['learning_tasks']==before['learning_tasks']+1
+    confirmation=client.post(f"{ROOT}/{preview.json()['task_id']}/confirm",json={
+        'session_id':str(sid),'draft_version':preview.json()['draft_version']})
+    assert confirmation.status_code==200,confirmation.text
+    active=client.get('/api/plans/today')
+    assert active.status_code==200,active.text
+    actual=[(row['question_id'],row['question_version_id']) for row in active.json()['items']]
+    assert actual==planned
 
 
 def _add_synthetic_topic(db, *, code, name, subject='考研数学'):
@@ -493,6 +655,8 @@ def test_cross_subject_replacement_uses_six_low_history_408_topics_and_keeps_mat
     assert len(proposal['draft']['selected_kp_ids'])==6
     assert set(proposal['draft']['selected_kp_ids']).isdisjoint(baseline_ids)
     assert all(node['assigned_count']>=1 for node in proposal['draft']['scope_nodes'])
+    assert 50<=proposal['draft']['total_minutes']<=60
+    assert proposal['draft']['question_count']>=6
     with session_factory() as db:
         selected=[db.get(KnowledgePoint,UUID(value)) for value in proposal['draft']['selected_kp_ids']]
         assert all(node and (node.subject in {'408','cs408','计算机学科专业基础'} or node.code.startswith('cs408')) for node in selected)

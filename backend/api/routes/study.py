@@ -255,8 +255,13 @@ def _recommendations(db: Session, now: datetime, *, subject: str | None = None,
                      limit: int = 6) -> list[RecommendationItem]:
     """准备页的候选：只推荐可考核叶子，理由来自真实的毕业缺口。"""
     eligible_kp_ids = set()
+    # Each pointer names at most one immutable receipt. Joining these scalar
+    # relationships avoids separate whole-bank receipt hydration queries.
+    from sqlalchemy.orm import joinedload
     eligible_rows = db.execute(select(Question, KnowledgePoint).options(
-        *question_read_options(), selectinload(KnowledgePoint.children)).join(
+        joinedload(Question.current_auto_review),
+        joinedload(Question.current_answer_verification),
+        selectinload(KnowledgePoint.children)).join(
         KnowledgePoint, KnowledgePoint.id == Question.kp_id).where(
             Question.is_active.is_(True), KnowledgePoint.is_active.is_(True),
             KnowledgePoint.is_assessable.is_(True))).all()
@@ -664,11 +669,12 @@ def append_plan_questions(
     time_provider: Callable[[], datetime] = Depends(get_time_provider),
 ) -> TodayActive:
     """追加只从已有题库取题，永远是卷尾；不重洗、不生成、不显示来源。"""
+    now=time_provider()
     try:
         target = db.get(DailyPlan, plan_id)
-        if target is not None and target.study_date != _today(time_provider()).isoformat():
+        if target is not None and target.study_date != _today(now).isoformat():
             raise AppError("plan_not_today", status_code=409)
-        append_questions_to_plan(db, plan_id=plan_id, question_ids=list(body.question_ids))
+        append_questions_to_plan(db, plan_id=plan_id, question_ids=list(body.question_ids),now=now)
         db.commit()
     except ValueError as exc:
         db.rollback()
@@ -686,11 +692,13 @@ def append_today_exam_references(
     time_provider: Callable[[], datetime] = Depends(get_time_provider),
 ) -> TodayActive:
     """把已对应完整在线题目的原卷引用加入今天；缺题面时拒绝追加。"""
+    now=time_provider()
     try:
         plan = append_exam_references_to_today(
             db,
-            study_date=_today(time_provider()),
+            study_date=_today(now),
             reference_ids=list(body.reference_ids),
+            now=now,
         )
         plan_id = plan.id
         db.commit()

@@ -16,9 +16,13 @@ def test_multitopic_whole_replacement_keeps_topic_pools_and_commits_atomically(s
         for index,name in enumerate(['批量甲节点','批量乙节点']):
             node,questions=_add_synthetic_topic(db,code=f'synthetic.r38.batch.{index}',name=name)
             topic_ids.append(node.id)
-            for offset,q in enumerate(questions[:2]):
-                item=PracticeItem(plan_id=ctx.daily_plan_id,question_id=q.id,kp_id=node.id,ordinal=2+index*2+offset)
-                db.add(item);db.flush();originals.append(item.id)
+            from backend.services.practice_service import append_questions_to_plan
+            from tests.integration.test_learning_assistant import NOW
+            assert append_questions_to_plan(db,plan_id=ctx.daily_plan_id,
+                question_ids=[q.id for q in questions[:2]],now=NOW)==2
+            db.flush()
+            originals.extend(db.scalars(select(PracticeItem.id).where(PracticeItem.plan_id==ctx.daily_plan_id,
+                PracticeItem.kp_id==node.id).order_by(PracticeItem.ordinal)))
             if shortage and index==1:
                 for q in questions[2:]:q.is_active=False
     talk(session_factory,sid,AssistantRequest(question='把批量甲节点和批量乙节点的全部题目分别替换。',study_context=ctx),NoModel())

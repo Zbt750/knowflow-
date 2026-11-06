@@ -3,7 +3,7 @@ import json
 from sqlalchemy import select, func
 from uuid import UUID
 from backend.models.chat import ChatSession
-from backend.models.learning import Question, DailyPlan
+from backend.models.learning import Question, DailyPlan, KpMasteryPolicy, KpState
 from tests.integration.test_home_recommendation import client, clock, session_factory, clean_database, home, post, counts, ROOT, read_home_domain
 from tests.integration.test_learning_loop import mark_isolated_question_trusted
 
@@ -394,6 +394,11 @@ def test_actual_study_stream_add_phrase_runs_bank_tools_without_generic_qa(clien
     sid=uuid4()
     with session_factory.begin() as db:
         item=db.scalar(select(PracticeItem).where(PracticeItem.plan_id==confirmed.json()['receipt']['plan_id']))
+        state=db.get(KpState,item.kp_id)
+        policy=db.get(KpMasteryPolicy,item.kp_id)
+        assert policy is not None and policy.policy_version==3 and policy.graduation_set_version>0
+        assert state is not None and state.graduation_set_binding_status=='bound'
+        assert state.graduation_set_version==policy.graduation_set_version
         plan_id=item.plan_id
         original=[(str(row.id),str(row.question_id),str(row.question_version_id),row.ordinal,row.completed_at)
             for row in db.scalars(select(PracticeItem).where(PracticeItem.plan_id==plan_id).order_by(PracticeItem.ordinal))]

@@ -1,7 +1,6 @@
-"""Actual retained isolated PG, each unit case inside an outer rollback.
+"""Actual owned PostgreSQL, fresh marked schema and synthetic seed per case.
 
-No parent conftest migration/delete fixtures. Existing rows are never edited.
-The browser flow is separate and remains persisted for user inspection.
+No public-schema fallback or retained browser inventory dependency.
 """
 import asyncio,json,socket,sys
 from datetime import datetime,timezone
@@ -11,6 +10,7 @@ from sqlalchemy import create_engine,select,func
 from sqlalchemy.orm import sessionmaker
 from backend.models.chat import ChatSession,ChatMessage
 from backend.models.learning import QuestionVersion,Question,PracticeItem,DailyPlan,QuestionAttempt,LearningEvent
+from backend.models.learning import KnowledgePoint
 from backend.models.practice_request import PracticeRequest
 from backend.models.learning_task import LearningTask
 from backend.schemas.learning_assistant import AssistantRequest,StudyContext
@@ -44,12 +44,30 @@ def factory():
     assert url, 'TEST_DATABASE_URL 必须由隔离测试运行器显式设置'
     u = make_url(url)
     assert (u.database or '').endswith('_test') and u.port != 5433, '测试库必须是非 5433 的 _test 库'
-    engine=create_engine(url,connect_args={'connect_timeout':5})
-    with engine.connect() as c:
-        tx=c.begin();f=sessionmaker(bind=c,expire_on_commit=False,join_transaction_mode='create_savepoint')
-        try:yield f
-        finally:tx.rollback()
-    engine.dispose()
+    from scripts.run_question_repair_pilot import isolated_factory
+    from scripts.seed import seed_all
+    from tests.integration.test_learning_loop import mark_isolated_question_trusted
+    with isolated_factory(url) as (f, _schema):
+        with f.begin() as db:
+            seed_all(db);db.flush()
+            for question in db.scalars(select(Question)):
+                mark_isolated_question_trusted(question,db=db)
+            node=db.scalar(select(KnowledgePoint).where(KnowledgePoint.code=='math.calculus.limit.lhopital'))
+            for index in range(2):
+                question=Question(kp_id=node.id,question_type='single_choice',
+                    stem=f'SYNTHETIC V31 alternate {index}: 求 lim(x->0) sin(x)/x。',
+                    options={'A':'1','B':'0','C':'2','D':'3'},correct_answer='A',
+                    explanation='合成测试解析：该极限为1。',estimated_minutes=3,
+                    grading_mode='auto',grading_config={'verified':True,'method':'single_choice'})
+                mark_isolated_question_trusted(question,db=db)
+        yield f
+
+
+def private_details(factory, view):
+    assert 'preview_draft' not in view['details']
+    assert '"question_id"' not in json.dumps(view)
+    with factory() as db:
+        return db.get(PracticeRequest,UUID(view['id'])).request
 
 def session(f,purpose='qa'):
     with f.begin() as db:
@@ -80,14 +98,38 @@ def talk(f,sid,text,context=None):
 ])
 def test_real_preview_has_version_no_plan_write(factory,text):
     sid=session(factory);before=counts(factory)
-    frames=talk(factory,sid,text);view=next(d for e,d in frames if e=='practice_request')
-    draft=view['details']['preview_draft'];assert len(draft['questions'])==1
+    frames=talk(factory,sid,text)
+    if text=='洛必达法则是什么？先给我讲清楚，题目可以先选好但不要加入。':
+        assert not any(e in {'practice_request','planner'} for e,d in frames)
+        assert '去心邻域' in next(d['answer'] for e,d in frames if e=='done')
+        assert counts(factory)==before
+        return
+    if text=='帮我找一道洛必达的题，先给我看看。':
+        assert not any(e in {'practice_request','planner'} for e,d in frames)
+        with factory() as db:
+            saved=db.scalar(select(ChatMessage).where(ChatMessage.session_id==sid,
+                ChatMessage.role=='assistant').order_by(ChatMessage.seq.desc()))
+            refs=saved.metadata_['read_only_data_query']['preview_questions']
+            assert len(refs)==1
+            version=db.get(QuestionVersion,UUID(refs[0]['question_version']))
+            assert str(version.question_id)==refs[0]['question_id'] and version.stem
+        assert counts(factory)==before
+        return
+    view=next(d for e,d in frames if e=='practice_request')
+    draft=private_details(factory,view)['preview_draft'];assert len(draft['questions'])==1
     q=draft['questions'][0];assert len(q['options'])==4 and q['stem'] and q['kp_name']=='洛必达法则'
     with factory() as db:
         version=db.get(QuestionVersion,UUID(q['question_version']));assert str(version.question_id)==q['question_id']
-    assert view['status']=='draft' and not view['details']['confirmation_a']
+    assert view['status']=='draft' and not view['details'].get('confirmation_a',False)
+    with factory() as db:
+        pending=db.get(PracticeRequest,UUID(view['id']))
+        assert pending.planner_task_id is None and pending.daily_plan_id is None
+        assert pending.handled_at is None and not pending.request.get('confirmation_a',False)
     assert counts(factory)==before
-    assert [s['tool'] for s in view['details']['preview_trace']]==['read_lesson','get_learning_state','get_question_availability','find_questions','validate_plan']
+    expected_tools=['get_learning_state','get_question_availability','find_questions','validate_plan']
+    if text!='给我安排一道洛必达题。':
+        expected_tools.insert(0,'read_lesson')
+    assert [s['tool'] for s in private_details(factory,view)['preview_trace']]==expected_tools
 
 def test_explain_only_and_elliptical_followup_never_select(factory):
     sid=session(factory);before=counts(factory)
@@ -116,9 +158,14 @@ def test_source_correction_keeps_latest_same_session_lesson(factory):
     sid=session(factory)
     talk(factory,sid,'先别加题，只解释洛必达法则。')
     frames=talk(factory,sid,'我说的是题库已有的题，不要生成新题。')
-    request=next(d for e,d in frames if e=='practice_request')
-    assert request['details']['preview_status']=='ready'
-    assert request['details']['preview_draft']['questions'][0]['kp_name']=='洛必达法则'
+    assert not any(e in {'practice_request','planner'} for e,d in frames)
+    with factory() as db:
+        saved=db.scalar(select(ChatMessage).where(ChatMessage.session_id==sid,
+            ChatMessage.role=='assistant').order_by(ChatMessage.seq.desc()))
+        node=db.scalar(select(KnowledgePoint).where(KnowledgePoint.code=='math.calculus.limit.lhopital'))
+        assert saved.metadata_['source_policy']=='existing_bank_only'
+        assert saved.metadata_['learning_trace']['resolved_knowledge_node_ids']==[str(node.id)]
+        assert saved.metadata_['writes'] is False
 
 
 def prepare(factory):
@@ -149,22 +196,39 @@ def test_append_database_failure_rolls_back_receipt_and_item(factory):
 
 
 def test_actual_inventory_exhaustion_keeps_lesson_no_extra_append(factory):
-    # Exhaust the real isolated eligible inventory using only the official
-    # proposal/confirmation flow, all within this fixture's outer rollback.
-    initial=talk(factory,session(factory),'讲讲洛必达法则，再从题库挑一道加入今日卷。')
-    view=next(d for e,d in initial if e=='practice_request')
-    found=next(v['result']['questions'] for v in view['details']['preview_trace'] if v['tool']=='find_questions')
-    eligible=[q for q in found if not q['in_today_plan'] and q.get('question_version')
-              and not q.get('source_category','').startswith('personal')]
+    # Materialize once, then use the formal-paper boundary for every append.
+    from backend.services.paper_adjustment_service import propose_adjustment,confirm_adjustment
+    from backend.schemas.paper_adjustment import PaperAdjustmentRequest,PaperAdjustmentConfirmation,ReplacementReference
+    from backend.services.question_eligibility import question_eligibility
+    from backend.services.question_versions import question_version_reference
+    rid,task=prepare(factory)
+    confirmed=confirm_task(factory,UUID(task['task_id']),ConfirmTask(draft_version=task['draft_version']),now=TEST_NOW)
+    plan_id=UUID(confirmed.metrics['commit']['plan_id'])
+    with factory() as db:
+        target=UUID(db.get(PracticeRequest,rid).request['target_study_session_id'])
+        node=db.scalar(select(KnowledgePoint).where(KnowledgePoint.code=='math.calculus.limit.lhopital'))
+        node_id=node.id
+        present=set(db.scalars(select(PracticeItem.question_id).where(PracticeItem.plan_id==plan_id)))
+        eligible=[ReplacementReference(question_id=q.id,question_version_id=UUID(question_version_reference(q)))
+            for q in db.scalars(select(Question).where(Question.kp_id==node_id,Question.bank_scope=='public'))
+            if q.id not in present and question_eligibility(q,node).practice_eligible]
     assert eligible
-    for _ in eligible:
-        rid,task=prepare(factory)
-        confirm_task(factory,UUID(task['task_id']),ConfirmTask(draft_version=task['draft_version']),now=TEST_NOW)
+    for ref in eligible:
+        proposal=propose_adjustment(factory,PaperAdjustmentRequest(session_id=target,plan_id=plan_id,
+            replacements=[ref],budget_minutes=90),now=TEST_NOW)
+        confirm_adjustment(factory,UUID(proposal['task_id']),PaperAdjustmentConfirmation(
+            session_id=target,draft_version=proposal['draft_version']),now=TEST_NOW)
     before=counts(factory)
+    ctx=StudyContext(surface='study',daily_plan_id=plan_id,knowledge_node_ids=[node_id])
+    frames=talk(factory,target,'增加一道洛必达法则题目。',ctx)
+    with factory() as db:
+        saved=db.scalar(select(ChatMessage).where(ChatMessage.session_id==target,
+            ChatMessage.role=='assistant').order_by(ChatMessage.seq.desc()))
+        assert not saved.metadata_['paper_adjustment'].get('proposal')
+        assert '不足' in saved.content or '没有' in saved.content
+    assert counts(factory)==before
     frames=talk(factory,session(factory),'讲讲洛必达法则，再从题库挑一道加入今日卷。')
-    view=next(d for e,d in frames if e=='practice_request')
-    assert view['details']['preview_draft'] is None and view['details']['preview_status']=='needs_info'
-    assert '可新增 0 道' in view['details']['preview_message']
+    assert not any(e in {'practice_request','planner'} for e,d in frames)
     assert '去心邻域' in next(d for e,d in frames if e=='done')['answer']
     assert counts(factory)==before
 
@@ -178,16 +242,22 @@ def test_tool_error_preserves_completed_lesson_without_plan(factory,monkeypatch)
     monkeypatch.setattr(TaskTools,'execute',fail_find)
     before=counts(factory)
     frames=talk(factory,session(factory),'讲讲洛必达法则，再从题库挑一道加入今日卷。')
-    view=next(d for e,d in frames if e=='practice_request')
-    assert view['details']['preview_status']=='failed' and view['details']['preview_draft'] is None
+    assert not any(e in {'practice_request','planner'} for e,d in frames)
     assert '去心邻域' in next(d for e,d in frames if e=='done')['answer']
-    assert view['details']['preview_trace'][-1]['status']=='error'
+    with factory() as db:
+        saved=db.scalar(select(ChatMessage).where(ChatMessage.role=='assistant')
+            .order_by(ChatMessage.seq.desc()))
+        assert saved.metadata_['selection_error_code']=='business_tool_failed'
+        assert any(step['status']=='error' for step in saved.metadata_['selection_trace'])
     assert counts(factory)==before
 
 
 def test_another_qa_session_cannot_inherit_lesson_scope(factory):
     talk(factory,session(factory),'先别加题，只解释洛必达法则。')
     frames=talk(factory,session(factory),'我说的是题库已有的题，不要生成新题。')
-    view=next(d for e,d in frames if e=='practice_request')
-    assert view['details']['preview_draft'] is None
-    assert view['details']['preview_status']=='needs_info'
+    assert not any(e in {'practice_request','planner'} for e,d in frames)
+    with factory() as db:
+        saved=db.scalar(select(ChatMessage).where(ChatMessage.role=='assistant')
+            .order_by(ChatMessage.seq.desc()))
+        assert saved.metadata_['learning_trace']['resolved_knowledge_node_ids']==[]
+        assert saved.metadata_['writes'] is False

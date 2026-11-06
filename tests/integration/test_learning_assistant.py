@@ -391,12 +391,9 @@ def test_next_day_planner_has_structured_plan_history_not_previous_qa_memory(ses
 
 
 def test_unconfirmed_draft_does_not_carry_budget_to_next_day(session_factory):
-    sid,ctx,_=setup(session_factory)
-    # This regression covers an unconfirmed pre-generation draft, not the
-    # fixture's already materialized sample paper.
-    with session_factory.begin() as db:
-        db.get(PracticeItem,ctx.practice_item_id).removed_at=NOW
-    ctx.conversation_id=sid
+    # Keep the original paper as yesterday's permanent history, instead of
+    # treating removal of all formal items as an ungenerated paper.
+    sid,ctx,_=setup_pre_generation(session_factory)
     route=route_message("安排一道洛必达题",ctx)
     handoff=planner_handoff(session_factory,ctx=ctx,user_id=uuid4(),message="安排一道洛必达题，30分钟",route=route,now=NOW)
     first=prepare_planner(session_factory,ctx=ctx,handoff=handoff,now=NOW)

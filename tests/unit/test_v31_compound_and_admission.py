@@ -7,13 +7,13 @@ from scripts.naiwa_v31_handoff_policy import admit_handoff
 @pytest.mark.parametrize('text,capability,intent,explanation',[
  ('洛必达法则是怎么样的，帮我从题库里面拿出一道放进今日卷。','planner','plan',True),
  ('讲讲洛必达法则，再从题库挑一道加入今日卷。','planner','plan',True),
- ('洛必达法则是什么？先给我讲清楚，题目可以先选好但不要加入。','planner','plan',True),
+ ('洛必达法则是什么？先给我讲清楚，题目可以先选好但不要加入。','qa','qa',True),
  ('帮我找一道洛必达的题，先给我看看。','data_query','find',False),
  ('给我安排一道洛必达题。','planner','plan',False),
  ('先别加题，只解释洛必达法则。','qa','qa',True),
  ('没有合格题也没关系，你先讲解。','qa','qa',True),
  ('先讲知识点，再问我是否要安排题目。','qa','qa',True),
- ('我说的是题库已有的题，不要生成新题。','planner','plan',False),
+ ('我说的是题库已有的题，不要生成新题。','qa','qa',False),
 ])
 def test_independent_goals(text,capability,intent,explanation):
     r=route_message(text,SimpleNamespace(question_id=None,knowledge_node_ids=[]))

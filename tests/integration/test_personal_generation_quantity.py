@@ -56,6 +56,14 @@ def test_gradient_confirmation_to_saved_personal_versions_does_not_touch_formal_
         message_id=next(d['message_id'] for n,d in frames if n=='meta')
         confirmed={**first,'request_key':str(uuid4()),'personal_generation_confirmed_kp_id':str(kp),
                    'personal_generation_confirmation_message_id':message_id}
+        rejected=events(client.post(f'/api/chat/sessions/{sid}/assistant:stream',json=confirmed))
+        assert any(n=='error' and d['code']=='personal_generation_confirmation_invalid' for n,d in rejected)
+        assert model.calls==0
+        confirmed.pop('personal_generation_confirmed_kp_id')
+        confirmed['request_key']=str(uuid4())
+        confirmed['personal_generation_confirmed_targets']=[
+            {key:target[key] for key in ('kp_id','question_type','count','difficulty')}
+            for target in card['proposed_targets']]
         generated=events(client.post(f'/api/chat/sessions/{sid}/assistant:stream',json=confirmed))
         result=next(d for n,d in generated if n=='personal_generation')
         assert result['outcome_summary']['saved_count']==3,result

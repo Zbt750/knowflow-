@@ -94,6 +94,15 @@ def _previous_query(db, session_id: UUID, now=None):
     row = db.scalar(select(ChatMessage).where(ChatMessage.session_id == session_id,
         ChatMessage.role == "assistant", ChatMessage.status == "completed")
         .order_by(ChatMessage.seq.desc()).limit(1))
+    if row and (row.metadata_ or {}).get('source_policy') in {'no_original_exam_inventory','existing_bank_only'}:
+        prior_rows=db.scalars(select(ChatMessage).where(ChatMessage.session_id==session_id,
+            ChatMessage.role=='assistant',ChatMessage.status=='completed',ChatMessage.seq<row.seq)
+            .order_by(ChatMessage.seq.desc()).limit(8))
+        for prior in prior_rows:
+            if (prior.metadata_ or {}).get('source_policy') in {'no_original_exam_inventory','existing_bank_only'}:
+                continue
+            row=prior
+            break
     evidence = (row.metadata_ or {}).get("read_only_data_query") if row else None
     if isinstance(evidence, dict) and evidence.get("query_status") != "needs_clarification":
         pass
@@ -132,6 +141,20 @@ def _previous_query(db, session_id: UUID, now=None):
     return row, state
 
 
+def continues_read_only_selection(factory, *, session_id: UUID, message: str, now=None) -> bool:
+    """An immediate 'another one' inherits inspection, never insertion consent."""
+    from backend.services.bank_selection_intent import QUESTION_COUNT_PATTERN
+    if (not re.search(r'^\s*再来\s*' + QUESTION_COUNT_PATTERN, message)
+            or not re.search(r'题|练习', message)
+            or re.search(r'加入|追加|加到|放进|安排|生成|新编|今日|今天|计划|方案', message)):
+        return False
+    with factory() as db:
+        previous, _ = _previous_query(db, session_id, now=now)
+        evidence=(previous.metadata_ or {}).get('read_only_data_query',{}) if previous else {}
+    return bool(evidence.get('query_type') == 'find'
+        and evidence.get('preview_questions') and evidence.get('writes') is False)
+
+
 def classify_session_data_query(factory, *, session_id: UUID, message: str, now=None) -> str | None:
     """Resolve bounded ellipsis before routing; never ask a model for counts."""
     classified = classify_read_only_data_query(message)
@@ -148,6 +171,9 @@ def classify_session_data_query(factory, *, session_id: UUID, message: str, now=
 def classify_read_only_data_query(message: str) -> str | None:
     """Classify explicit data requests, not explanations that merely mention questions."""
     text = (message or "").strip()
+    from backend.services.bank_selection_intent import explicit_plan_preview
+    if explicit_plan_preview(text):
+        return None
     if (re.search(r'(?:给我|帮我|请)?补(?:充)?\s*[一二两三四五六七八九十\d]+\s*道', text)
             and not re.search(r'为什么|为何|是否|能不能|要不要|不要|别|先不|暂不|吗|[？?]', text)):
         return None
@@ -255,6 +281,9 @@ def classify_read_only_data_query(message: str) -> str | None:
     if re.search(r"(?:哪个|哪些|什么).{0,12}(?:知识点|节点).{0,12}(?:薄弱|不熟|需要复习)|"
                  r"(?:薄弱|不熟|掌握状态|掌握程度).{0,18}(?:知识点|节点|我)", text):
         return "learning_state"
+    from backend.services.bank_selection_intent import read_only_selection_request
+    if read_only_selection_request(text):
+        return 'find'
     inventory_ask = bool(re.search(r"多少|几道|几题|数量|哪些|有没有|是否有|找|列出|看看|还有|剩下|剩余|可练|能做|还能练|能练|\d+\s*道", text))
     inventory_subject = bool(re.search(r"题库|库里|库里面|我的库|可练(?:习)?题|练习题|题目|真题|原创题|AI生成题|的题|这些题|那些题|题|知识点", text))
     inventory_subject = inventory_subject or bool(re.search(r"(?:多少|几|\d+)\s*(?:道|题)", text) and "题" in text)
@@ -483,6 +512,9 @@ def persist_generated_question_refs(factory, *, message_id: UUID, generation: di
 def _generic_inventory_scope_name(name):
     value=re.sub(r'^(?:查询|查看|看看)', '', name)
     value=re.sub(r'^系统(?=题库)', '', value)
+    from backend.services.bank_selection_intent import QUESTION_COUNT_PATTERN
+    if re.fullmatch(r'(?:帮我|给我|请)?(?:找|查|选|挑|看|展示)\s*' + QUESTION_COUNT_PATTERN, value):
+        return True
     if re.fullmatch(r'(?:那(?:么)?|你|我|的|题库(?:里(?:面)?)?|库里(?:面)?|有|多少|几|道|一共|总共|可练习|可练|可用|这(?:样|种)(?:类型)?)+', value):
         return True
     return bool(re.fullmatch(
@@ -524,7 +556,7 @@ def _resolve_query_scope(db, *, factory, session_id, ctx, message):
 def _query_conditions(db, *, factory, session_id, ctx, message, query_type, now=None):
     # A source-only refinement is still about the immediately preceding query,
     # even without "其中". With no antecedent it remains a global source query.
-    source_refinement=bool(re.fullmatch(r'(?:有没有|有多少|只看|只要).{0,6}(?:历年真题|真题|原创题)[。？?]?',message.strip()))
+    source_refinement=bool(re.fullmatch(r'(?:有没有|有多少|只看|只要).{0,6}(?:历年真题|真题改编题|改编题|真题|原创题)[。？?]?',message.strip()))
     # Switching from history to browsing is a query-mode change, not permission
     # to silently widen the previous same-session subject/node/source scope.
     browse_refinement = bool(query_type == 'find' and
@@ -619,7 +651,7 @@ def _query_conditions(db, *, factory, session_id, ctx, message, query_type, now=
     generic_topics = {"选择题", "填空题", "计算题", "证明题", "高数", "线代", "数学", "真题",
                       "原创题", "基础题", "中等题", "难题", "简单题", "类似题", "同类题",
                       "这些题", "那些题", "没做过", "没有做过", "未做", "做过", "题库",
-                      "个人题库", "公共题库", "非选择题", "非选择"}
+                      "个人题库", "公共题库", "非选择题", "非选择", "真题改编", "改编"}
     candidate = re.search(r"(?:有没有|还有|找|查|看看)?([\u4e00-\u9fff]{2,12})(?:的)?题", message)
     if candidate and not roots and not clarification:
         name = candidate.group(1)

@@ -1,5 +1,6 @@
 """Shanghai midnight regression; real APIs and owned PostgreSQL, no model fees."""
 from datetime import datetime, timezone
+import json
 from uuid import UUID
 import pytest
 from fastapi import FastAPI
@@ -47,8 +48,17 @@ def midnight_bank(test_database_url):
 
 def personal(factory, kp, now):
     from uuid import uuid4
+    class MidnightModel(GeneralModel):
+        def complete(self, messages, *, attempt=1):
+            raw,usage=super().complete(messages,attempt=attempt)
+            data=json.loads(raw)
+            first=2 if now==BEFORE else 3
+            data.update(stem=f'SYNTHETIC 午夜测试：等比级数首项为{first}、公比为1/2，求其和。',
+                correct_answer=str(first*2),final_value=str(first*2),
+                explanation=f'公比绝对值小于1，和为{first}/(1-1/2)={first*2}。')
+            return json.dumps(data,ensure_ascii=False),usage
     result = run_generation(factory, PersonalGenerationRequest(request_key=uuid4(), generation_mode="ai_generated",
-        targets=[GenerationTarget(kp_id=kp, question_type="calculation", count=1)]), GeneralModel(), now=now)
+        targets=[GenerationTarget(kp_id=kp, question_type="calculation", count=1)]), MidnightModel(), now=now)
     assert len(result["question_ids"]) == 1, result
     return result["question_ids"][0]
 
@@ -72,18 +82,26 @@ def test_generate_2359_keeps_yesterday_and_freezes_today_after_materialization(m
     recommendations = client.get('/api/plans/today/recommendations')
     assert recommendations.status_code == 200 and any(row["kp_id"] == str(kp) for row in recommendations.json()["recommendations"])
     second_question_id = personal(factory, kp, AFTER)
-    append_blocked = client.post('/api/personal-questions/append', json={
+    # An explicit append is supported after materialization; ordinary daily
+    # generation still cannot rebuild the frozen paper. Read the new receipt.
+    appended = client.post('/api/personal-questions/append', json={
         "question_ids":[second_question_id],"plan_id":current["plan_id"]})
-    assert append_blocked.status_code == 409
-    assert append_blocked.json()["error"]["code"] == "plan_already_generated"
+    assert appended.status_code == 200 and appended.json()['added']==1,appended.text
+    assert appended.json()['plan_id']==current['plan_id']
+    added_receipt=appended.json()['append_result']
+    assert added_receipt['added_count']==1
+    assert added_receipt['items'][0]['question_id']==second_question_id
+    assert added_receipt['items'][0]['question_version_id'] and added_receipt['items'][0]['stem']
     payload = {"selected_kp_ids":[str(kp)],"extend_existing":True}
     extended = client.post('/api/plans/today/generate', json=payload)
     assert extended.status_code == 409 and extended.json()["error"]["code"] == "plan_already_generated"
     repeated_append = client.post('/api/personal-questions/append', json={"question_ids":[question_id],"plan_id":current["plan_id"]})
     assert repeated_append.status_code == 200 and repeated_append.json()["added"] == 0
     frozen = client.get('/api/plans/today').json()
-    assert frozen["plan_id"] == current["plan_id"] and frozen["total_count"] == 1
-    assert frozen["items"][0]["id"] == original["id"]
+    assert frozen["plan_id"] == current["plan_id"] and frozen["total_count"] == 2
+    assert {item['question_id'] for item in frozen['items']}=={question_id,second_question_id}
+    kept=next(item for item in frozen['items'] if item['question_id']==question_id)
+    assert kept['id']==original['id'] and kept['question_version_id']==original['question_version_id']
     assert client.get('/api/plans/'+old["plan_id"]+'/items').json()["items"] == old["items"]
     with factory() as db:
         item = db.get(PracticeItem, UUID(original["id"]))

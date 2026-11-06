@@ -80,3 +80,37 @@ def ambiguous_question_source(text):
     if any(re.search(r'新编|编(?:写|造|一道)|生成|出新题|直接出题',p) for p in positive):
         return False
     return any(re.search(r'(?:出|来|再给我|换)\s*(?:一|两|二|三|[1-9]\d*)\s*(?:道|题)|(?:给我|帮我|请)\s*出题',p) for p in positive)
+
+
+def read_only_selection_request(text):
+    """Select stored exercises for inspection without granting plan writes."""
+    request = bank_selection_request(text)
+    if not request or not re.search(r'选\s*' + QUESTION_COUNT_PATTERN, text):
+        return None
+    if not re.search(r'看看|让我看|预览', text) or re.search(r'今日|今天|推荐范围|方案|计划', text):
+        return None
+    clauses = [part for part in re.split(r'[，,；;。！？?\n]', text)
+               if not re.search(r'不要|不用|暂不|先不|先别|不必', part)]
+    if any(re.search(r'加入|追加|加到|放进|放入|安排|生成|新编', part) for part in clauses):
+        return None
+    return request
+
+
+def explicit_plan_preview(text):
+    """A positive draft request survives a separate denial of materialization."""
+    if re.search(r'能不能|要不要|是否|如果|假如|吗|为什么|为何', text):
+        return False
+    clauses = [part.strip() for part in re.split(r'[，,；;。！？?\n]', text)
+               if not re.search(r'不要|不用|暂不|先不|先别|不必', part)]
+    return any(re.match(r'^(?:先)?(?:帮我|给我|请)?(?:先)?(?:安排|规划)', part)
+               and re.search(r'待确认|预览|草案|方案|计划', part) for part in clauses)
+
+
+def bank_source_preference_only(text):
+    if not re.search(r'题库.{0,8}(?:已有|现有|原题)|已有(?:的)?题目',text):
+        return False
+    if not re.search(r'(?:不要|别|不必|不用).{0,6}(?:生成|新编)',text):
+        return False
+    positive='；'.join(part for part in re.split(r'[，,；;。！？?\n]',text)
+        if not re.search(r'不要|不用|暂不|先不|先别|不必',part))
+    return not re.search(r'找|查|选|检索|加入|安排|加到|放进|生成|新编',positive)

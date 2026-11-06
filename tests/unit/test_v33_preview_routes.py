@@ -15,7 +15,7 @@ factory=support.factory
 @pytest.mark.parametrize('text,intent',[
  ('把刚才那道题加入今日卷','plan'),('换一道同知识点的','plan'),
  ('取消刚才的题，换一道洛必达的','plan'),
- ('讲清楚洛必达法则，如果没有符合资格的洛必达题，就只讲解，不要生成新题。','plan'),
+ ('讲清楚洛必达法则，如果没有符合资格的洛必达题，就只讲解，不要生成新题。','inventory'),
  ('我只想看看题库里有哪些洛必达法则的题，不要创建计划。','find'),
  ('这次只想看题库，不要创建计划。','find')])
 def test_original_routes(text,intent):
@@ -33,16 +33,16 @@ def test_last_preview_exact_version(factory):
     support.talk(factory,sid,'有没有洛必达法则的题目？')
     ref=last_evidence(factory,sid)['preview_questions'][0]
     result=request(support.talk(factory,sid,'把刚才那道题加入今日卷'))
-    chosen=result['details']['preview_draft']['questions'][0]
+    chosen=support.private_details(factory,result)['preview_draft']['questions'][0]
     assert (chosen['question_id'],chosen['question_version'])==(ref['question_id'],ref['question_version'])
     assert support.counts(factory)==before
 
 @pytest.mark.parametrize('text',['换一道同知识点的','取消刚才的题，换一道洛必达的'])
 def test_replacement_excludes_and_retires_old_draft(factory,text):
     sid=support.session(factory);before=support.counts(factory)
-    first=request(support.talk(factory,sid,'先选一道洛必达让我看看，不要加入。'))
+    first=request(support.talk(factory,sid,'先给我安排一道洛必达法则的待确认方案，不要生成今日卷。'))
     second=request(support.talk(factory,sid,text))
-    a=first['details']['preview_draft']['questions'][0];b=second['details']['preview_draft']['questions'][0]
+    a=support.private_details(factory,first)['preview_draft']['questions'][0];b=support.private_details(factory,second)['preview_draft']['questions'][0]
     assert a['question_id']!=b['question_id'] and a['kp_id']==b['kp_id']
     with factory() as db:assert db.get(PracticeRequest,UUID(first['id'])).status=='declined'
     assert support.counts(factory)==before
@@ -54,7 +54,7 @@ def test_read_only_list_and_numbered_reference(factory):
     refs=last_evidence(factory,sid)['preview_questions'];assert len(refs)>1
     ambiguous=support.talk(factory,sid,'把刚才那道题加入今日卷')
     assert not any(e=='practice_request' for e,d in ambiguous)
-    chosen=request(support.talk(factory,sid,'把第2道加入今日卷'))['details']['preview_draft']['questions'][0]
+    chosen=support.private_details(factory,request(support.talk(factory,sid,'把第2道加入今日卷')))['preview_draft']['questions'][0]
     assert chosen['question_id']==refs[1]['question_id'] and chosen['question_version']==refs[1]['question_version']
     assert support.counts(factory)==before
 
@@ -72,26 +72,39 @@ def test_other_session_cannot_borrow_preview(factory):
 
 def test_conditional_zero_inventory_has_lesson_but_no_draft(factory):
     from sqlalchemy import update,func
-    from backend.models.learning import Question
+    from backend.models.learning import Question, KnowledgePoint
     sid=support.session(factory)
     with factory.begin() as db:
-        db.execute(update(Question).where(Question.kp_id==UUID('32a29e1e-8ae3-41fc-9322-43f727596819')).values(is_active=False))
+        node_id=db.scalar(select(KnowledgePoint.id).where(KnowledgePoint.code=='math.calculus.limit.lhopital'))
+        assert node_id is not None
+        changed=db.execute(update(Question).where(Question.kp_id==node_id).values(is_active=False))
+        assert changed.rowcount>0
     before=support.counts(factory)
     frames=support.talk(factory,sid,'讲清楚洛必达法则，如果没有符合资格的洛必达题，就只讲解，不要生成新题。')
     assert not any(e in {'practice_request','planner'} for e,d in frames)
     answer=next(d['answer'] for e,d in frames if e=='done')
-    assert '系统节点讲解' in answer and '可新增 0 道' in answer
+    assert '系统节点讲解' in answer and '0 道' in answer
+    with factory() as db:
+        saved=db.scalar(select(ChatMessage).where(ChatMessage.session_id==sid,
+            ChatMessage.role=='assistant').order_by(ChatMessage.seq.desc()))
+        assert saved.metadata_['read_only_data_query']['question_count']==0
+        assert saved.metadata_['read_only_data_query']['writes'] is False
     with factory() as db:assert db.scalar(select(func.count()).select_from(PracticeRequest).where(PracticeRequest.source_conversation_id==sid))==0
     assert support.counts(factory)==before
 
 def test_query_failure_not_reported_as_zero(factory,monkeypatch):
-    from backend.services.learning_task_tools import TaskTools
-    original=TaskTools.find_questions
+    import backend.services.assistant_data_queries as queries
     def fail(*args,**kwargs):raise RuntimeError('injected read dependency failure')
-    monkeypatch.setattr(TaskTools,'find_questions',fail)
+    monkeypatch.setattr(queries,'question_availability',fail)
     sid=support.session(factory);before=support.counts(factory)
     frames=support.talk(factory,sid,'讲清楚洛必达法则，如果没有符合资格的洛必达题，就只讲解，不要生成新题。')
     assert not any(e=='practice_request' for e,d in frames)
     answer=next(d['answer'] for e,d in frames if e=='done')
-    assert '系统节点讲解' in answer and '查询或方案校验未完成' in answer and '可新增 0 道' not in answer
+    assert '系统节点讲解' in answer and '题库查询未完成' in answer and '0 道' not in answer
+    with factory() as db:
+        saved=db.scalar(select(ChatMessage).where(ChatMessage.session_id==sid,
+            ChatMessage.role=='assistant').order_by(ChatMessage.seq.desc()))
+        evidence=saved.metadata_['read_only_data_query']
+        assert evidence['query_status']=='failed' and evidence['error_code']=='business_tool_failed'
+        assert 'question_count' not in evidence
     assert support.counts(factory)==before

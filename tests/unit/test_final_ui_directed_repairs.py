@@ -150,6 +150,7 @@ def test_f03_committed_same_session_question_remains_resolvable(monkeypatch,kind
                request={'preview_draft':{'questions':[ref]},'constraints':{}})
     class DB:
         def scalar(self,query):return row
+        def scalars(self,query):return [row]
         def get(self,entity,ident):
             if entity is LearningTask:return task
             if entity is PracticeRequest:return request

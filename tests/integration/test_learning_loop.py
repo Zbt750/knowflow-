@@ -39,6 +39,10 @@ DAY2 = datetime(2026, 1, 2, 2, tzinfo=timezone.utc)
 DAY3 = datetime(2026, 1, 3, 2, tzinfo=timezone.utc)
 
 BUSINESS_TABLES = (
+    # Batch rows need not reference a Question and therefore are not removed
+    # by truncating the question table with CASCADE. They are isolated test
+    # workspace data too, including failed/empty generation requests.
+    "personal_generation_batches",
     "exam_question_references",
     "question_attempts",
     "learning_events",

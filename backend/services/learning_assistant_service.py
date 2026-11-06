@@ -104,6 +104,8 @@ def _safe_pre_generation_selection_trace(trace):
 
 
 def _safe_pre_generation_selection_notice(drafted, message):
+    if isinstance(drafted,dict) and drafted.get('frozen'):
+        return '正式今日卷已生成，当前问答没有与今日卷绑定的受控调整方案。请在今日学习奶蛙中预览追加；现有题目和历史记录保持不变。'
     code=drafted.get('error_code') if isinstance(drafted,dict) else None
     references={
         'similar_reference_required':'按“类似题”补题需要一题可核验的参照题。请先打开一道题，或告诉我参照哪一道；本次没有创建方案，也没有修改今日卷。',
@@ -229,13 +231,29 @@ def begin_turn(factory,*,session_id,body,now=None):
     with factory.begin() as db:
         session=db.scalar(select(ChatSession).where(ChatSession.id==session_id).with_for_update())
         ctx=validate_study_context(db,session_id=session_id,context=body.study_context,now=now)
+        # Preserve the validated client context for idempotency. The server may
+        # recover an omitted task_id from the current session below, but that
+        # implicit continuation must not change the fingerprint of an exact
+        # retry of the original request.
+        request_context=ctx.model_copy(deep=True)
+        if ctx.task_id is None:
+            # The browser may omit the task id on the next turn. Recover only
+            # a current, uncommitted draft owned by this exact chat session.
+            pending=list(db.scalars(select(LearningTask).where(
+                LearningTask.session_id==session_id,
+                LearningTask.status.in_({'created','ready','needs_info','failed'}),
+            ).order_by(LearningTask.updated_at.desc(),LearningTask.created_at.desc()).limit(20)))
+            current=next((task for task in pending
+                if not (task.metrics or {}).get('commit') and task_is_current(task,now)),None)
+            if current is not None:
+                ctx.task_id=current.id
         if session.purpose=="study" and session.study_date!=now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat():
             raise AppError("study_session_expired",status_code=409)
         if session.mode=="user" and not session.material_scope_ids:raise AppError("private_scope_required",status_code=422)
         confirmation = _generation_confirmation_turn(db, session_id, body, ctx)
         fingerprint_input={"question":body.question,"action":body.qa_action,"current_work":body.current_work,
             "personal_generation_mode":body.personal_generation_mode,
-            "context":ctx.model_dump(mode="json",exclude={"generated_at"})}
+            "context":request_context.model_dump(mode="json",exclude={"generated_at"})}
         if body.personal_generation_confirmed_kp_id:
             fingerprint_input["personal_generation_confirmed_kp_id"]=str(body.personal_generation_confirmed_kp_id)
         if body.personal_generation_confirmed_targets:
@@ -353,13 +371,24 @@ def task_is_current(task, now):
 
 
 def active_task(factory,ctx,now=None):
-    if not ctx.task_id: return None
     with factory() as db:
-        task=db.get(LearningTask,ctx.task_id)
-        if not task: return None
-        return {"status":task.status,"budget_minutes":task.budget_minutes,
+        current_time=now or datetime.now(timezone.utc)
+        if ctx.task_id:
+            task=db.get(LearningTask,ctx.task_id)
+            if task is None or task.session_id!=ctx.conversation_id:return None
+        elif ctx.conversation_id:
+            candidates=list(db.scalars(select(LearningTask).where(
+                LearningTask.session_id==ctx.conversation_id,
+                LearningTask.status.in_({'created','ready','needs_info','failed'}),
+            ).order_by(LearningTask.updated_at.desc(),LearningTask.created_at.desc()).limit(20)))
+            task=next((candidate for candidate in candidates
+                if not (candidate.metrics or {}).get('commit') and task_is_current(candidate,current_time)),None)
+            if task is None:return None
+        else:
+            return None
+        return {"task_id":str(task.id),"status":task.status,"budget_minutes":task.budget_minutes,
             "budget_explicit":any(((task.context or {}).get('planner_handoff') or {}).get('constraints',{}).get(k) for k in ('time_explicit','time_inherited')),
-            "committed":bool((task.metrics or {}).get("commit")) or not task_is_current(task,now or datetime.now(timezone.utc))}
+            "committed":bool((task.metrics or {}).get("commit")) or not task_is_current(task,current_time)}
 
 
 def requested_count(text):
@@ -498,6 +527,9 @@ def planner_handoff(factory,*,ctx,user_id,message,route,now):
             "similar_reference":similar_reference,
             "reference_scope_conflict":reference_scope_conflict,
             "activity_schedule_requested":(route.reason=='study_activity_schedule' or
+                (route.reason in {'explicit_scope_and_budget','preview_schedule_without_insert_consent'}
+                    and bank is None and bool(re.search(r'学习|复习',message))
+                    and not re.search(r'做题|练题|题量|组卷|选题|只练|只做|就练|就做',message)) or
                 (route.reason=='active_draft_refinement' and inherited_activity_schedule)),
             "draft_refinement":route.reason=='active_draft_refinement',
             "time_inherited":time_inherited,
@@ -544,7 +576,8 @@ def prepare_planner(factory,*,ctx,handoff,now):
             and today_id is not None
         )
         task=create_task(factory,CreateTask(goal=goal,budget_minutes=handoff.available_minutes,session_id=ctx.conversation_id,current_plan_id=today_id),
-            now=now,allow_active_plan_append=allow_active_plan_append,read_only=handoff.request_type in {"query","recommend"})
+            now=now,allow_active_plan_append=allow_active_plan_append,read_only=handoff.request_type in {"query","recommend"},
+            activity_schedule_only=handoff.constraints.get('activity_schedule_requested') is True)
     with factory.begin() as db:
         row=db.get(LearningTask,task.task_id)
         recent=list(db.scalars(select(DailyPlan).where(DailyPlan.study_date<now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()).order_by(DailyPlan.study_date.desc()).limit(2)))
@@ -624,11 +657,12 @@ def present_planner_message(text, task, ctx):
     return re.sub(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b","该题",text)
 
 
-def expire_invalid_confirmation(factory, session_id, body):
-    """Persist a rejected local card's terminal state; a page reload is not consent.
+def expire_invalid_confirmation(factory, session_id, body, *, now=None):
+    """Expire only a card whose saved server-side learning scope is stale.
 
     Never touch a card from another session, nor any question/learning evidence.
-    This runs after the rejected begin_turn transaction has rolled back.
+    A malformed allocation is rejected without invalidating an otherwise valid
+    card. This runs after the rejected begin_turn transaction has rolled back.
     """
     ident = body.personal_generation_confirmation_message_id
     if not ident:
@@ -639,6 +673,19 @@ def expire_invalid_confirmation(factory, session_id, body):
                 and (card.metadata_ or {}).get("personal_generation_confirmation")):
             status = (card.metadata_ or {}).get("personal_generation_confirmation_status")
             if status not in {"cancelled", "superseded", "expired"}:
+                at=now or datetime.now(timezone.utc)
+                try:
+                    original=StudyContext.model_validate((card.metadata_ or {}).get('study_context') or {})
+                    validate_study_context(db,session_id=session_id,context=original,now=at)
+                    session=db.get(ChatSession,session_id)
+                    stale=bool(session and session.purpose=='study' and
+                        session.study_date!=at.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat())
+                    current=validate_study_context(db,session_id=session_id,context=body.study_context,now=at)
+                    stale=stale or not _same_generation_context((card.metadata_ or {}).get('study_context') or {},current)
+                except (AppError,ValueError,TypeError):
+                    stale=True
+                if not stale:
+                    return
                 card.metadata_ = {**card.metadata_, "personal_generation_confirmation_status":"expired"}
 
 
@@ -813,7 +860,7 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         ctx,message_id,user_id,replay=begin_turn(factory,session_id=session_id,body=body,now=now)
     except AppError as exc:
         if exc.code in {"personal_generation_confirmation_invalid", "study_session_expired"}:
-            expire_invalid_confirmation(factory, session_id, body)
+            expire_invalid_confirmation(factory, session_id, body, now=now)
         yield encode_sse("error",{"code":exc.code,"message":exc.message,"retryable":exc.retryable is not False}); return
     except Exception as exc:
         logger.error("assistant_turn_failed session_id=%s request_key=%s diagnostic=%s",
@@ -841,6 +888,7 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
                 cards=[]
                 meta={key:meta[key] for key in ('planner_task_id',) if key in meta}
         replayed_request=None
+        replayed_explanation=''
         if meta.get('practice_request_id') is not None:
             from backend.models.practice_request import PracticeRequest
             from backend.services.practice_request_service import view as request_view
@@ -850,6 +898,8 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
                     request_row=db.get(PracticeRequest,UUID(str(meta['practice_request_id'])))
                     if request_row and request_row.source_conversation_id==session_id:
                         replayed_request=request_view(request_row,now,db=db)
+                        from backend.services.planning_public_view import request_lesson_prefix
+                        replayed_explanation=request_lesson_prefix(db,request_row.request)
                     else:
                         invalid_request_link=True
             except (ValueError,TypeError):
@@ -861,7 +911,7 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
                 meta={}
             if replayed_request and replayed_request.get('details',{}).get('pre_generation'):
                 from backend.services.planning_public_view import summary_message
-                text=summary_message(replayed_request['details']['plan_summary'],
+                text=replayed_explanation+summary_message(replayed_request['details']['plan_summary'],
                     ready=replayed_request['status'] in {'proposed','accepted'})
                 cards=[]
                 meta={'practice_request_id':replayed_request['id']}
@@ -902,7 +952,23 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         metadata = db.get(ChatMessage, message_id).metadata_ or {}
         generation_context = metadata.get("generation_context")
         confirmation_notice = metadata.get('generation_confirmation_notice')
-    if mode == 'builtin' and purpose == 'study' and body.qa_action == 'auto' and ctx.daily_plan_id:
+    skip_paper_chat_for_activity_refinement=False
+    if (mode=='builtin' and purpose=='study' and body.qa_action=='auto'
+            and ctx.daily_plan_id and ctx.task_id and explicit_minutes(body.question) is not None
+            and not re.search(r'删除|移除|替换|换成|题号|加入今日|追加|增加.{0,5}题',body.question)):
+        with factory() as db:
+            draft=db.get(LearningTask,ctx.task_id)
+            owns_pending_activity=bool(draft and draft.session_id==session_id
+                and draft.status in {'created','ready','needs_info','failed'}
+                and not (draft.metrics or {}).get('commit') and task_is_current(draft,now)
+                and (draft.context or {}).get('activity_schedule_only'))
+        if owns_pending_activity:
+            from backend.services.assistant_router import route_message as _route_message
+            summary=active_task(factory,ctx,now)
+            skip_paper_chat_for_activity_refinement=bool(summary and not summary['committed']
+                and _route_message(body.question,ctx,task=summary).reason=='active_draft_refinement')
+    if (mode == 'builtin' and purpose == 'study' and body.qa_action == 'auto' and ctx.daily_plan_id
+            and not skip_paper_chat_for_activity_refinement):
         from backend.services.paper_adjustment_chat import handle_paper_chat
         try:
             adjustment = handle_paper_chat(factory, session_id=session_id, ctx=ctx,
@@ -1025,6 +1091,35 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         yield encode_sse('delta',{'seq':1,'text':ORIGINAL_EXAM_NOTICE})
         yield encode_sse('done',{'message_id':str(message_id),'answer':ORIGINAL_EXAM_NOTICE,'status':'completed','citations':[]})
         return
+    from backend.services.bank_selection_intent import bank_source_preference_only
+    if mode=='builtin' and body.qa_action=='auto' and bank_source_preference_only(body.question):
+        with factory.begin() as db:
+            prior=list(db.scalars(select(ChatMessage).where(ChatMessage.session_id==session_id,
+                ChatMessage.role=='assistant',ChatMessage.status=='completed')
+                .order_by(ChatMessage.seq.desc()).limit(8)))
+            scope=[]
+            for previous in prior:
+                old=previous.metadata_ or {};query=old.get('read_only_data_query') or {}
+                trace=old.get('learning_trace') or {}
+                raw=query.get('scope_node_ids',trace.get('resolved_knowledge_node_ids',
+                    trace.get('knowledge_node_ids_used')))
+                if isinstance(raw,list):
+                    for value in raw[:8]:
+                        try:key=UUID(str(value))
+                        except (ValueError,TypeError):continue
+                        node=db.get(KnowledgePoint,key)
+                        if node is not None and node.is_active:scope.append(str(key))
+                    break
+            text='已按现有题库理解，不会因为这条来源说明生成新题或加入今日卷。'
+            text+=('继续沿用本会话刚才的知识点范围；请说明要查看或安排的题量。' if scope else
+                '请明确知识点及要查看或安排的题量。')
+            row=db.get(ChatMessage,message_id);row.content=text;row.status='completed'
+            row.metadata_={**row.metadata_,'answer_source':'notice','model_called':False,'writes':False,
+                'source_policy':'existing_bank_only','learning_trace':{'resolved_knowledge_node_ids':scope}}
+        yield encode_sse('meta',{'message_id':str(message_id),'capability':'source_clarification'})
+        yield encode_sse('delta',{'seq':1,'text':text})
+        yield encode_sse('done',{'message_id':str(message_id),'answer':text,'status':'completed','citations':[]})
+        return
     # 最高优先级：跨轮“加入今日学习”只消费最近一次真实生成记录，单一响应来源，后续分支不得再处理。
     if (_explicit_append_consent(body.question)
             and _has_generated_append_context(factory, session_id, body.question)
@@ -1106,6 +1201,16 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         and re.search(r'类似|相似|其中|前\s*[一二两三四五六七八九十\d]+\s*道|第\s*[一二两三四五六七八九十\d]+\s*道|几道|两道|三道|全部|所有|剩下', body.question)
         and not (_explicit_bank_selection and _explicit_bank_selection.get("bank_source"))
         and not re.search(r'专项|训练|变式|生成|换一(?:道|个)', body.question))
+    if similar_append:
+        with factory() as _db:
+            recent_refs=list(_db.scalars(select(ChatMessage).where(
+                ChatMessage.session_id==session_id,ChatMessage.role=='assistant',
+                ChatMessage.status=='completed').order_by(ChatMessage.seq.desc()).limit(6)))
+            # Ordinals also select normal bank previews. Without an actual
+            # same-session similar-result set, let the pinned preview resolver
+            # handle the request rather than stealing its operation object.
+            similar_append=any((row.metadata_ or {}).get('answer_source')=='similar_questions'
+                and (row.metadata_ or {}).get('similar_items') for row in recent_refs)
     if similar_append:
         with factory() as _db:
             recent = list(_db.scalars(select(ChatMessage).where(
@@ -1304,6 +1409,15 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         route = CapabilityRoute("generation", "generate", 1, "trusted_generation_continuation")
     else:
         route=route_message(body.question,ctx,action=body.qa_action,task=task_summary,classifier=_llm_classifier)
+    if (route.reason=='active_draft_refinement' and task_summary and not ctx.task_id
+            and task_summary.get('task_id')):
+        # The current chat session owns its pending draft even when the page
+        # did not echo a task id into the study context on this turn.
+        ctx=ctx.model_copy(update={'task_id':UUID(task_summary['task_id'])})
+    if mode == 'builtin' and body.qa_action == 'auto' and not generation_continuation:
+        from backend.services.assistant_data_queries import continues_read_only_selection
+        if continues_read_only_selection(factory, session_id=session_id, message=body.question, now=now):
+            route=CapabilityRoute('data_query','find',1,'same_session_read_only_selection',write_risk=False)
     # Resolve an explicit question about post-graduation practice before the
     # coordinator's generic low-confidence fallback asks an unrelated question.
     from backend.services.assistant_router import post_graduation_review_query
@@ -1360,6 +1474,7 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         owned_bank_preview = preview_ref is not None and preview_error is None
     if (body.qa_action == 'auto' and not body.personal_generation_confirmation_message_id
             and not metadata.get('generation_followup_authorized') and not owned_bank_preview
+            and route.reason != 'same_session_read_only_selection'
             and ambiguous_question_source(body.question)):
         route=CapabilityRoute('qa','qa',1,'question_source_clarification')
         persist_route(factory,message_id,route,{'model_called':False,'writes':False})
@@ -1625,8 +1740,19 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
     try:
         if data_query_type:
             phase = "read_only_data_query"
-            result = execute_read_only_data_query(factory, session_id=session_id, ctx=ctx,
-                message=body.question, query_type=data_query_type, now=now)
+            try:
+                result = execute_read_only_data_query(factory, session_id=session_id, ctx=ctx,
+                    message=body.question, query_type=data_query_type, now=now)
+            except Exception:
+                if not route.explanation_request:
+                    raise
+                logger.exception('explained_read_query_failed session_id=%s',session_id)
+                scope=planner_handoff(factory,ctx=ctx,user_id=user_id,message=route.explanation_request,
+                    route=CapabilityRoute('planner','query',1,'lesson_scope_resolution_only'),now=now)
+                result={'answer':'题库查询未完成，无法判断当前合格题量；没有创建方案或修改今日卷。',
+                    'evidence':{'query_type':data_query_type,'query_status':'failed',
+                        'error_code':'business_tool_failed','model_called':False,'writes':False,
+                        'scope_node_ids':[str(k) for k in scope.target_knowledge_node_ids]}}
             text = result["answer"]
             # 出口统一兜底：所有内联 evidence 分支都必须带预览键。
             _evidence = dict(result.get("evidence") or {})
@@ -1923,6 +2049,17 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             if drafted.get('notice'):
                 safe_trace=_safe_pre_generation_selection_trace(drafted.get('trace'))
                 text=_safe_pre_generation_selection_notice(drafted,body.question)
+                if practice_route.explanation_request:
+                    from backend.services.planning_public_view import request_lesson_prefix
+                    try:
+                        scope=planner_handoff(factory,ctx=ctx,user_id=user_id,message=body.question,
+                            route=practice_route,now=now)
+                        original=scope.model_dump(mode='json')
+                        original['constraints']={**original['constraints'],
+                            'explanation_request':practice_route.explanation_request}
+                        with factory() as db:text=request_lesson_prefix(db,original)+text
+                    except Exception:
+                        logger.exception('notice_lesson_unavailable session_id=%s',session_id)
                 with factory.begin() as db:
                     row=db.get(ChatMessage,message_id);row.content=text;row.status='completed'
                     row.metadata_={**row.metadata_,'answer_source':'notice','selection_trace':safe_trace,
@@ -1937,6 +2074,12 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             if details.get('pre_generation'):
                 from backend.services.planning_public_view import summary_message
                 text=summary_message(details['plan_summary'],ready=False)+"\n\n发送练习需求也不会修改今日卷。"
+                if practice_route.explanation_request:
+                    from backend.services.planning_public_view import request_lesson_prefix
+                    from backend.models.practice_request import PracticeRequest
+                    with factory() as db:
+                        row=db.get(PracticeRequest,UUID(drafted['id']))
+                        text=request_lesson_prefix(db,row.request)+text
             else:
                 text="可以把这个练习需求交给今日学习里的奶蛙，让它结合学习记录和真实题库提出方案。发送需求不会修改今日练习卷。"
             with factory.begin() as db:
@@ -2194,7 +2337,9 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
                     "daily_plan_id": str(_today_plan.id),
                 }})
             persist_route(factory,message_id,route,{"planner_handoff":handoff.model_dump(mode="json")})
-            if _plan_frozen and not _allow_frozen_append and handoff.request_type not in {"query", "recommend"}:
+            _allow_frozen_activity=bool(handoff.constraints.get('activity_schedule_requested') is True
+                and _today_plan is not None and ctx.daily_plan_id==_today_plan.id)
+            if _plan_frozen and not _allow_frozen_append and not _allow_frozen_activity and handoff.request_type not in {"query", "recommend"}:
                 text = ("今天的学习计划已经生成并冻结，暂时不能通过聊天重新生成或调整今日卷。"
                         "你仍然可以检索题库、查看相似题和讲解当前题目。")
                 with factory.begin() as db:

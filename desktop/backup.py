@@ -15,6 +15,7 @@ import re
 import shutil
 import stat
 import tempfile
+import time
 from uuid import uuid4
 import zipfile
 
@@ -219,9 +220,20 @@ def restore_backup(archive_path: Path, data: Path):
             owner = _owned(stage, final_path=data)
             if owner.get("cluster_id") != manifest.get("cluster_id"):
                 raise ValueError("desktop_backup_owned_data_invalid")
-            if data.exists():
-                raise ValueError("desktop_backup_restore_target_exists_or_missing_parent")
-            stage.rename(data)
+            # Windows security scanners can briefly deny a same-volume rename
+            # after a complete extraction. Retry only that transient OS error;
+            # re-check the destination before every attempt and never replace
+            # a path that appeared while the restore was staged.
+            for attempt in range(5):
+                if data.exists():
+                    raise ValueError("desktop_backup_restore_target_exists_or_missing_parent")
+                try:
+                    stage.rename(data)
+                    break
+                except PermissionError as exc:
+                    if os.name != "nt" or getattr(exc, "winerror", None) != 5 or attempt == 4:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
         finally:
             if stage.exists():
                 # Only the exact temporary child created by this function is removed.

@@ -156,7 +156,7 @@ def _topic_aliases(name):
 
 def _topic_quantity(text):
     match=re.search(r'([零〇一二两三四五六七八九十百千]+|[1-9]\d*|几|一些|若干)\s*道',text)
-    if not match:return None
+    if not match:return None,False
     if match[1] in {'几','一些','若干'}:
         # “几道” is an underspecified request. Keep the proposal editable and
         # use one item as a conservative first draft; explain this in the receipt.
@@ -198,7 +198,7 @@ def _topic_count_intent(text,paper):
             # Global question-limit and time-fill phrases belong to their
             # existing operations. Only reject an unresolved second clause
             # after a named topic edit has already been recognized.
-            if edits:unresolved_actions+=1
+            unresolved_actions+=1
             continue
         if len(aliases)!=1 or len(verbs)!=1:
             return clarify('请明确每个知识点分别增减几道题；本次没有修改方案。')
@@ -208,11 +208,10 @@ def _topic_count_intent(text,paper):
         direction=1 if re.match(add_words,verbs[0].group(0)) else -1
         edits.append((key,direction*quantity));underspecified=underspecified or loose
     if not edits:
-        if unresolved_actions:return clarify('请明确要调整的知识点；原方案已保留。')
         return None
     if len({key for key,_ in edits})!=len(edits):
         return clarify('同一个知识点出现了多次增减，请合并成一个明确的目标数量；本次没有修改方案。')
-    if len(edits)==1 and edits[0][1]>0:
+    if len(edits)==1 and edits[0][1]>0 and not unresolved_actions:
         # Existing-bank append already has a dedicated candidate/receipt path;
         # keep it for a single-topic addition. This branch is for per-topic
         # counts and compound edits that cannot be represented as a global append.

@@ -102,6 +102,11 @@ class SentenceTransformerEmbedder:
         assert self._dimension is not None
         return self._dimension
 
+    @property
+    def loaded_dimension(self) -> int | None:
+        """Return a known dimension without loading PyTorch or model weights."""
+        return self._dimension
+
     def _ensure_model(self) -> None:
         if self._model is not None:
             return

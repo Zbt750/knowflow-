@@ -12,6 +12,7 @@ import re
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select, text
+from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 from backend.errors import AppError
 from backend.models.chat import ChatMessage, ChatSession
@@ -436,7 +437,8 @@ def _paper(db, ids, minutes, now, question_limit=None, candidate_question_ids=No
             "reason": selection.reason, "eligibility": assessment.public_dict()})
     return {"questions": _json_value(questions), "selected_kp_ids": [str(k) for k in ids],
         "budget_minutes": minutes, "total_minutes": sum(q["minutes"] for q in questions),
-        "preset": preset, "question_limit": question_limit}
+        "preset": preset, "question_limit": question_limit,
+        "_adaptive_schedule": bool(adaptive_schedule and candidate_question_ids is None)}
 
 
 def _allocation_ids(paper):
@@ -544,6 +546,95 @@ def _manual_scope_paper(db, ids, minutes, now, previous, *, diagnostics=None):
     return paper
 
 
+def _subject_plan_paper(db, ids, minutes, now, *, diagnostics=None):
+    """Allocate an adaptive, budget-aware set over every selected subject topic."""
+    from backend.schemas.home_recommendation import HomePaperValidation
+
+    ids=list(dict.fromkeys(ids))
+    diagnostics=diagnostics if diagnostics is not None else {}
+    diagnostics.update(stage='topic_candidate_pools',requested_scope_ids=[str(k) for k in ids],nodes=[])
+    pools=[]
+    for key in ids:
+        node=db.get(KnowledgePoint,key)
+        if node is None or not node.is_active or not node.is_assessable:
+            raise ValueError('subject_plan_node_invalid')
+        node_paper=_paper(db,[key],minutes,now,question_limit=DEFAULT_PER_KP_LIMIT,
+            adaptive_schedule=True)
+        pool=list(node_paper['questions'])
+        diagnostics['nodes'].append({'kp_id':str(key),'name':node.name,
+            'candidate_count':len(pool),'candidate_minutes':[q['minutes'] for q in pool],
+            'candidate_ids':[q['question_id'] for q in pool]})
+        if not pool:
+            raise ValueError('subject_plan_topic_no_eligible_question:'+str(key))
+        pools.append(pool)
+
+    # First cover all six selected topics, then add FSRS/new candidates in
+    # per-topic priority order until the actual estimated-time budget is full.
+    chosen=[];seen=set();total=0;offsets=[0]*len(pools);blocked=[False]*len(pools)
+    for pool in pools:
+        question=pool[0]
+        minutes_for_question=question.get('minutes')
+        if type(minutes_for_question) is not int or minutes_for_question<=0:
+            raise ValueError('subject_plan_question_time_unavailable')
+        if total+minutes_for_question>minutes:
+            raise ValueError('subject_plan_minimum_coverage_exceeds_budget')
+        if question['question_id'] in seen:
+            raise ValueError('subject_plan_duplicate_candidate')
+        chosen.append(question);seen.add(question['question_id']);total+=minutes_for_question
+    offsets=[1]*len(pools)
+    progress=True
+    while progress and total<minutes:
+        progress=False
+        for index,pool in enumerate(pools):
+            if blocked[index]:continue
+            while offsets[index]<len(pool) and pool[offsets[index]]['question_id'] in seen:
+                offsets[index]+=1
+            if offsets[index]>=len(pool):
+                blocked[index]=True;continue
+            question=pool[offsets[index]];offsets[index]+=1
+            estimate=question.get('minutes')
+            if type(estimate) is not int or estimate<=0:
+                raise ValueError('subject_plan_question_time_unavailable')
+            if total+estimate>minutes:
+                blocked[index]=True
+                continue
+            if question['question_id'] in seen:
+                raise ValueError('subject_plan_duplicate_candidate')
+            chosen.append(question);seen.add(question['question_id']);total+=estimate;progress=True
+            if total>=minutes:break
+
+    wanted=[UUID(q['question_id']) for q in chosen]
+    tools=_tools(db,now);tools.nodes.update(ids);tools.questions.update(wanted)
+    for start in range(0,len(ids),8):
+        tools.get_learning_state(db,NodeIds(kp_ids=ids[start:start+8]))
+    tools.required_count=len(wanted);tools.budget_minutes=minutes
+    checked=tools.validate_plan(db,HomePaperValidation(question_ids=wanted,
+        rationale='按六个低历史知识点与每日时间预算分配FSRS复习题和新题；等待用户确认。'))
+    diagnostics.update(stage='whole_paper_validation',validation_errors=checked.get('errors',[]))
+    if not checked.get('valid'):
+        raise ValueError('subject_plan_invalid:'+','.join(checked.get('errors',[])))
+
+    paper=_paper(db,ids,minutes,now,candidate_question_ids=wanted,workload_preview=True)
+    actual={q['question_id']:(q['question_version_id'],q) for q in paper['questions']}
+    expected={q['question_id']:q['question_version_id'] for q in chosen}
+    if actual.keys()!=expected.keys() or any(actual[qid][0]!=version for qid,version in expected.items()):
+        raise ValueError('subject_plan_revalidation_mismatch')
+    paper['questions']=[actual[q['question_id']][1] for q in chosen]
+    paper['total_minutes']=sum(q['minutes'] for q in paper['questions'])
+    counts={str(key):sum(q['kp_id']==str(key) for q in paper['questions']) for key in ids}
+    paper.update(selected_kp_ids=[str(key) for key in ids],
+        allocation_kp_ids=[str(key) for key in ids],candidate_question_ids=[str(key) for key in wanted],
+        question_limit=len(wanted),scope_nodes=[{
+            'kp_id':str(key),'name':db.get(KnowledgePoint,key).name,
+            'parent_id':str(db.get(KnowledgePoint,key).parent_id) if db.get(KnowledgePoint,key).parent_id else None,
+            'assigned_count':counts[str(key)],'allocation_status':'allocated','allocation_reason':None,
+        } for key in ids])
+    diagnostics.update(stage='assembled',assigned_question_ids=paper['candidate_question_ids'],
+        total_count=len(paper['questions']),total_minutes=paper['total_minutes'],
+        budget_minutes=minutes,topic_count=len(ids))
+    return paper
+
+
 def _home_inventory(db, ids, now):
     """Return exact, per-selected-scope counts from formally eligible questions.
 
@@ -576,6 +667,10 @@ def _home_inventory(db, ids, now):
 
 def read_system(db, recommendations, now):
     """Read the canonical recommendation without creating a conversation or task."""
+    # Keep request-local strong references: SQLAlchemy's weak identity map
+    # otherwise reloads the same nodes during inventory and paper assembly.
+    scope_nodes = list(db.scalars(select(KnowledgePoint).options(
+        selectinload(KnowledgePoint.children))))
     ids = [r.kp_id for r in recommendations]
     inventory = _home_inventory(db,ids,now)
     paper, blockers = None, []
@@ -981,6 +1076,13 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
             and re.fullmatch(r'(?:我确定|我确认|我同意|确定|确认)[。！!]?',body.goal.strip())):
         raise AppError('home_workload_confirmation_required',status_code=422)
     old = _effective_row(db,latest)
+    # The workload card is still an editable draft. A subsequent unversioned
+    # chat edit (or an edit naming that card's version) must build on it,
+    # rather than silently discarding its quantity changes via the fallback.
+    # Explicit edits against the accepted fallback retain their own version.
+    if (body.action == 'adjust' and _workload_pending(latest)
+            and (not body.expected_version or body.expected_version == _draft_version(latest))):
+        old = latest
     if body.expected_version and (old is None or _draft_version(old) != body.expected_version):
         raise AppError("learning_task_conflict", status_code=409)
     cached_notice=(old.context or {}).get('intent_notices',{}).get(body.request_key) if old else None
@@ -1037,7 +1139,11 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
         # Capture canonical A before any first manual/chat revision can fail.
         try:
             with db.begin_nested():
-                baseline=_paper(db,system_ids,90,now)
+                # The first editable homepage draft must pin the exact adaptive
+                # candidates already shown by read_system(). Re-ranking without
+                # the FSRS projection here made the preview differ from the
+                # student's visible recommendation before confirmation.
+                baseline=_paper(db,system_ids,90,now,adaptive_schedule=True)
         except Exception as exc:
             logging.getLogger(__name__).warning('home baseline unavailable type=%s',type(exc).__name__)
             # Keep the failed attempt explicit. A later append branch must not
@@ -1152,7 +1258,7 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                 'subject':intent.terms,'selected_topics':selection_facts}
             try:
                 with db.begin_nested():
-                    exact_intent=_manual_scope_paper(db,selected,int(intent.minutes),now,current,
+                    exact_intent=_subject_plan_paper(db,selected,int(intent.minutes),now,
                         diagnostics=diagnostics)
             except Exception as exc:
                 logging.getLogger(__name__).exception('home subject replacement failed subject=%s type=%s',
@@ -1252,7 +1358,10 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
         ids = [UUID(k) for k in baseline["selected_kp_ids"]] if baseline else [r.kp_id for r in recommendations]
     elif default:
         question_limit = None
-        ids = body.selected_kp_ids if body.selected_kp_ids is not None else [r.kp_id for r in recommendations]
+        canonical_system_ids=[r.kp_id for r in recommendations]
+        ids = (canonical_system_ids if body.selected_kp_ids is not None
+            and set(body.selected_kp_ids)==set(canonical_system_ids)
+            else body.selected_kp_ids if body.selected_kp_ids is not None else canonical_system_ids)
     else:
         ids = resolve_scope(db, now, body.goal, old.draft if old and old.draft else
             {"selected_kp_ids": [str(r.kp_id) for r in recommendations]}, body.selected_kp_ids)
@@ -1268,7 +1377,7 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                     # initial paper. Capture that same baseline before applying
                     # the user's additional bank request.
                     with db.begin_nested():
-                        baseline = _paper(db, system_ids, 90, now)
+                        baseline = _paper(db, system_ids, 90, now, adaptive_schedule=True)
                 except ValueError as exc:
                     baseline = {"selected_kp_ids": [str(k) for k in system_ids],
                         "questions": [], "budget_minutes": 90, "error": str(exc)}
@@ -1419,7 +1528,8 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                     paper['allocation_kp_ids']=[str(k) for k in ids]
                     paper['selected_kp_ids']=exact_intent['selected_kp_ids']
                     paper['scope_nodes']=[{**n,'assigned_count':sum(q['kp_id']==n['kp_id'] for q in paper['questions'])} for n in exact_intent.get('scope_nodes',[]) if n['kp_id'] in paper['selected_kp_ids']]
-                elif scope_add_ids or (default and body.selected_kp_ids is not None):
+                elif scope_add_ids or (default and body.selected_kp_ids is not None
+                        and set(body.selected_kp_ids)!={r.kp_id for r in recommendations}):
                     diagnostics={'diagnostic_id':uuid4().hex,'base_task_id':str(old.id) if old else None,
                         'base_draft_version':_draft_version(old) if old else None}
                     context['manual_allocation']=diagnostics
@@ -1432,7 +1542,9 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                         context['workload']={'requested_budget_minutes':minutes,'effective_budget_minutes':paper['total_minutes'],
                             'extra_minutes':paper['total_minutes']-minutes,'requires_confirmation':True}
                 else:
-                    paper = _paper(db, ids, minutes, now, question_limit, candidate_ids, workload_preview=candidate_ids is not None)
+                    paper = _paper(db, ids, minutes, now, question_limit, candidate_ids,
+                        workload_preview=candidate_ids is not None,
+                        adaptive_schedule=default)
                     if bank_request and previous_paper and bank_scope_plan:
                         # Preserve the full requested scope, including leaves
                         # that currently have no allocation. Only allocated
@@ -1496,7 +1608,8 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                     else:
                         try:
                             with db.begin_nested():
-                                baseline = _paper(db, [r.kp_id for r in recommendations], minutes, now)
+                                baseline = _paper(db, [r.kp_id for r in recommendations], minutes, now,
+                                    adaptive_schedule=True)
                         except ValueError as exc:
                             baseline = {"selected_kp_ids": [str(r.kp_id) for r in recommendations],
                                 "questions": [], "budget_minutes": minutes, "error": str(exc)}
@@ -1568,7 +1681,9 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                     and not (previous.metrics or {}).get('commit')):
                 previous.status='cancelled'
     elif old is not None and old.status=='ready' and old.draft and not _legacy_incomplete_addition(old):
-        context['fallback_task_id']=str(old.id)
+        # Editing a pending card must not promote that unaccepted card into
+        # the fallback. Dismissing the new card restores the accepted plan.
+        context['fallback_task_id']=str(_effective_row(db,old).id)
     elif baseline and baseline.get('questions') and not baseline.get('error'):
         # First adjustment can fail before any writable preview existed. Persist
         # the real read-only system paper as a usable fallback, never a formal plan.
@@ -1665,7 +1780,9 @@ def confirm(db, task_id, body, now):
                     raise ValueError("difficulty_paper_stale")
         else:
             with db.begin_nested():
-                current = _paper(db, ids, row.budget_minutes, now, paper.get("question_limit"), candidate_ids, workload_preview=candidate_ids is not None)
+                current = _paper(db, ids, row.budget_minutes, now, paper.get("question_limit"), candidate_ids,
+                    workload_preview=candidate_ids is not None,
+                    adaptive_schedule=bool(paper.get("_adaptive_schedule", False)))
             if current["questions"] != paper["questions"]:
                 raise AppError("learning_task_stale_draft", status_code=409)
     except AppError:
@@ -1678,6 +1795,7 @@ def confirm(db, task_id, body, now):
     plan = create_initial_plan(db, study_date=now.astimezone(SHANGHAI).date(), selected_kp_ids=ids,
         now=now, budget=paper["preset"], minute_limit=None if candidate_ids is not None else row.budget_minutes, question_limit=None if candidate_ids is not None else paper.get("question_limit"),
         candidate_question_ids=candidate_ids, per_kp_limit=max(DEFAULT_PER_KP_LIMIT,len(candidate_ids)) if candidate_ids is not None else DEFAULT_PER_KP_LIMIT,
+        adaptive_schedule=bool(paper.get("_adaptive_schedule", False)),
         exact_questions=[(UUID(q["question_id"]), UUID(q["question_version_id"])) for q in paper["questions"]] if difficulty_paper else None,
         confirm_legacy_set_transition_ids=body.confirm_legacy_set_transition_ids)
     db.flush()

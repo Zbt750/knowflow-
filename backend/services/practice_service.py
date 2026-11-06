@@ -18,6 +18,7 @@ from backend.mastery.selection import (
 )
 from backend.mastery.storage import policy_for_node, snapshot_from_storage
 from backend.services.policy_evidence_service import current_policy_snapshot
+from backend.services.study_read_context import policies_for_nodes
 from backend.mastery.types import MasterySnapshot
 from backend.models.learning import (
     DailyPlan,
@@ -31,6 +32,7 @@ from backend.models.learning import (
     QuestionVersion,
 )
 from backend.services.question_eligibility import question_eligibility
+from backend.services.study_read_context import question_read_options
 
 # 单个知识点在一次组卷里最多放几道题：避免一个缺口很大的叶子独占整张卷。
 DEFAULT_PER_KP_LIMIT = 5
@@ -80,6 +82,7 @@ def create_initial_plan(
     question_limit: int | None = None,
     candidate_question_ids: list[UUID] | None = None,
     exact_questions: list[tuple[UUID, UUID]] | None = None,
+    adaptive_schedule: bool | None = None,
 ) -> DailyPlan:
     """把用户选定的叶子节点转成一份活动练习卷；同一天只允许生成一次。
 
@@ -143,17 +146,30 @@ def create_initial_plan(
     if exact_questions is not None:
         # 难度调整后的题集是显式候选题替换结果，不能再用排序重选；
         # 调用方已逐题校验版本与可练资格，这里只按给定顺序落卷。
+        # 但首次落入正式今日卷仍是该知识点的真实学习起点，须绑定
+        # 当时的公开题毕业集合；否则后续首次作答会被当作无绑定历史拒绝。
         picked_items = []
+        pinned_nodes = set()
         for question_id, _version_id in exact_questions:
             question = session.get(Question, question_id)
             if question is None:
                 raise ValueError("question_version_or_eligibility_invalid")
+            if question.bank_scope == "public" and question.kp_id not in pinned_nodes:
+                policy_for_node(
+                    session,
+                    question.kp_id,
+                    bind_if_unset=True,
+                    confirm_legacy_set_transition=question.kp_id in confirmed_transitions,
+                    now=now,
+                )
+                pinned_nodes.add(question.kp_id)
             picked_items.append((question.kp_id, None, None, question_id, None))
     else:
         picked_items = preview_initial_questions(session, selected_kp_ids=unique_kp_ids, now=now,
             budget=budget, per_kp_limit=per_kp_limit, minute_limit=minute_limit, question_limit=question_limit,
             bind_policy=True, confirmed_transitions=confirmed_transitions, candidate_question_ids=candidate_question_ids,
-            adaptive_schedule=candidate_question_ids is None)
+            adaptive_schedule=(candidate_question_ids is None if adaptive_schedule is None
+                else bool(adaptive_schedule and candidate_question_ids is None)))
     if minute_limit is not None and not picked_items:
         raise ValueError("question_pool_incomplete")
     existing_ids = set(session.scalars(select(PracticeItem.question_id).where(PracticeItem.plan_id == plan.id)))
@@ -176,29 +192,64 @@ def create_initial_plan(
     return plan
 
 
+def _candidate_side_data(session: Session, kp_ids: list[UUID]) -> dict:
+    """R41：一次 IN 查询预取每个知识点的“最近练习时间/最近自评”，
+    避免在选题循环里逐知识点各查两条。语义与 _candidates_for 内部逐条一致。"""
+    if not kp_ids:
+        return {}
+    history_rows = session.execute(
+        select(QuestionAttempt.kp_id, QuestionAttempt.question_id,
+               func.max(QuestionAttempt.submitted_at))
+        .where(QuestionAttempt.kp_id.in_(kp_ids))
+        .group_by(QuestionAttempt.kp_id, QuestionAttempt.question_id)
+    ).all()
+    latest_rows = session.scalars(
+        select(PracticeItem)
+        .where(PracticeItem.kp_id.in_(kp_ids), PracticeItem.latest_self_grade.is_not(None))
+        .order_by(PracticeItem.ordinal)
+    ).all()
+    # Empty history is already a complete batch-query result. Keep an entry
+    # for unseen nodes so callers do not repeat both queries per node.
+    by_kp: dict = {kp_id: ({}, {}) for kp_id in kp_ids}
+    for kp_id, question_id, submitted_at in history_rows:
+        last, _grades = by_kp.setdefault(kp_id, ({}, {}))
+        last[question_id] = submitted_at
+    for item in latest_rows:
+        _last, grades = by_kp.setdefault(item.kp_id, ({}, {}))
+        grades[item.question_id] = item.latest_self_grade
+    return by_kp
+
+
 def _candidates_for(
-    session: Session, kp_id: UUID, rows: list[Question]
+    session: Session, kp_id: UUID, rows: list[Question],
+    *, side: tuple | None = None,
 ) -> list[QuestionCandidate]:
     """把题库行转成选题所需的候选信息（最近自评、是否已确认）。"""
     # 每道题最近一次练习时间与自评结果，用于识别「上次未掌握」与「最久未复测」。
-    history = session.execute(
-        select(
-            QuestionAttempt.question_id,
-            func.max(QuestionAttempt.submitted_at),
-        )
-        .where(QuestionAttempt.kp_id == kp_id)
-        .group_by(QuestionAttempt.question_id)
-    ).all()
-    last_practiced = {row[0]: row[1] for row in history}
+    if side is not None:
+        last_practiced, _side_grades = side
+    else:
+        history = session.execute(
+            select(
+                QuestionAttempt.question_id,
+                func.max(QuestionAttempt.submitted_at),
+            )
+            .where(QuestionAttempt.kp_id == kp_id)
+            .group_by(QuestionAttempt.question_id)
+        ).all()
+        last_practiced = {row[0]: row[1] for row in history}
 
     # practice_items 里同一道题可能被练过多次，取最近一次的自评结果。
-    latest_grade: dict[UUID, str | None] = {}
-    for item in session.scalars(
-        select(PracticeItem)
-        .where(PracticeItem.kp_id == kp_id, PracticeItem.latest_self_grade.is_not(None))
-        .order_by(PracticeItem.ordinal)
-    ).all():
-        latest_grade[item.question_id] = item.latest_self_grade
+    if side is not None:
+        latest_grade: dict[UUID, str | None] = dict(_side_grades)
+    else:
+        latest_grade = {}
+        for item in session.scalars(
+            select(PracticeItem)
+            .where(PracticeItem.kp_id == kp_id, PracticeItem.latest_self_grade.is_not(None))
+            .order_by(PracticeItem.ordinal)
+        ).all():
+            latest_grade[item.question_id] = item.latest_self_grade
 
     state = session.get(KpState, kp_id)
     confirmed_ids: set[str] = set()
@@ -328,7 +379,7 @@ def _fallback_exam_picks(
 
 def append_questions_to_plan(
     session: Session, *, plan_id: UUID, question_ids: list[UUID],
-    allow_personal_practice: bool = False,
+    allow_personal_practice: bool = False, now: datetime | None = None,
 ) -> int:
     """向尚未生成内容的计划写入题目；已生成的正式卷保持冻结。"""
     session.flush()  # Don't discard caller changes when refreshing lock snapshots.
@@ -383,6 +434,14 @@ def append_questions_to_plan(
         if (not allow_personal_practice and question.bank_scope == "personal"
                 and verification not in {"verified", "auto_verified"}):
             raise ValueError("question_not_practice_eligible")
+    # Bind a newly introduced public topic before materializing its items.
+    # Otherwise its first answer is mistaken for legacy unbound history.
+    # Personal AI practice must not start or move a formal graduation binding.
+    public_nodes={questions[qid].kp_id for qid in unique_ids if questions[qid].bank_scope=='public'}
+    for kp_id in sorted(public_nodes,key=str):
+        policy=policy_for_node(session,kp_id)
+        if policy.policy_version==3 and policy.graduation_set_version>0:
+            policy_for_node(session,kp_id,bind_if_unset=True,now=now)
     added = 0
     for question_id in unique_ids:
         question = questions.get(question_id)
@@ -422,6 +481,7 @@ def append_exam_references_to_today(
     *,
     study_date: date,
     reference_ids: list[UUID],
+    now: datetime | None = None,
 ) -> DailyPlan:
     """Resolve source pointers to actual online questions before creating any plan."""
     if not reference_ids:
@@ -457,7 +517,7 @@ def append_exam_references_to_today(
     existing=set(session.scalars(select(PracticeItem.question_id).where(PracticeItem.plan_id==plan.id)))
     missing=[qid for qid in dict.fromkeys(question_ids) if qid not in existing]
     if missing:
-        append_questions_to_plan(session, plan_id=plan.id, question_ids=missing)
+        append_questions_to_plan(session, plan_id=plan.id, question_ids=missing,now=now)
     return plan
 
 
@@ -481,29 +541,43 @@ def preview_initial_questions(session: Session, *, selected_kp_ids: list[UUID], 
     """
     unique_kp_ids = list(dict.fromkeys(selected_kp_ids))
     confirmed_transitions = confirmed_transitions or set()
+    policy_read_context = None
+    if not bind_policy and not confirmed_transitions:
+        _, policy_read_context = policies_for_nodes(
+            session, unique_kp_ids, include_missing=True
+        )
     for kp_id in unique_kp_ids:
         _require_assessable_leaf(session, kp_id)
     picked_items: list[tuple[UUID, SelectionItem, str, UUID | None, UUID | None]] = []
     adaptive_rows = []
+    # R41：一次批量预取所有知识点的最近练习/自评，替代循环内逐知识点两条查询。
+    side_by_kp = _candidate_side_data(session, unique_kp_ids)
     for kp_id in unique_kp_ids:
         # 这个叶子自己的毕业策略与当前进度：缺口选题的两个输入。
         # First real plan pins the current immutable set for this learner.
         policy = policy_for_node(
             session, kp_id, bind_if_unset=bind_policy,
             confirm_legacy_set_transition=kp_id in confirmed_transitions, now=now,
+            _read_context=policy_read_context,
         )
-        state = session.get(KpState, kp_id)
+        state = (policy_read_context.states.get(kp_id) if policy_read_context is not None
+                 else session.get(KpState, kp_id))
         snapshot = (
-            current_policy_snapshot(session, state, policy) if state is not None else _empty_snapshot()
+            current_policy_snapshot(session, state, policy,
+                _read_context=policy_read_context)
+            if state is not None else _empty_snapshot()
         )
-        online_rows = list(session.scalars(select(Question).where(
+        online_rows = list(session.scalars(select(Question).options(
+            *question_read_options()).where(
             Question.kp_id == kp_id, Question.is_active.is_(True)
         ).order_by(Question.question_type, Question.id)).all())
         reference_node = session.get(KnowledgePoint, kp_id).is_reference_only
         rows = [row for row in online_rows if question_eligibility(row, session.get(KnowledgePoint, kp_id)).practice_eligible]
         if require_active_version:
-            rows=[row for row in rows if row.current_version_id and
-                  (version:=session.get(QuestionVersion,row.current_version_id)) is not None and version.is_active]
+            active_version_ids = set(session.scalars(select(QuestionVersion.id).where(
+                QuestionVersion.id.in_([row.current_version_id for row in rows
+                    if row.current_version_id]), QuestionVersion.is_active.is_(True))))
+            rows=[row for row in rows if row.current_version_id in active_version_ids]
         if selection_diagnostics is not None:
             selection_diagnostics.update(candidates_found=len(online_rows),eligible_count=len(rows))
         if candidate_question_ids is not None:
@@ -535,7 +609,7 @@ def preview_initial_questions(session: Session, *, selected_kp_ids: list[UUID], 
         selection = select_questions(
             policy,
             snapshot.evidence_window,
-            _candidates_for(session, kp_id, rows),
+            _candidates_for(session, kp_id, rows, side=side_by_kp.get(kp_id)),
             manual_credit_count=snapshot.manual_credit_count,
             manual_confirmed_at=snapshot.manual_confirmed_at,
             budget=budget,

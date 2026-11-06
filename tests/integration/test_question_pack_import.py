@@ -169,16 +169,25 @@ def test_sources_flow_to_node_and_today_without_answer_or_review_leaks(client, s
 def test_retired_question_keeps_today_answers_and_attempt_history(client, session_factory):
     import json
     from pathlib import Path
+    demo = json.loads((Path(__file__).resolve().parents[2] / "seed/questions.json").read_text(encoding="utf-8"))
+    demo_stems={row['stem'] for row in demo['questions']}
     kp_id = leaf_codes(session_factory)["math.calculus.limit.lhopital"]
     old_plan = generate_plan(client, [kp_id]).json()
-    old_item = old_plan["items"][0]
+    with session_factory() as db:
+        demo_ids={str(q.id) for q in db.scalars(select(Question).where(Question.stem.in_(demo_stems)))}
+        other_ids={str(q.id) for q in db.scalars(select(Question).where(Question.kp_id==kp_id))}-demo_ids
+    old_item = next(item for item in old_plan['items'] if item['question_id'] in demo_ids)
+    with session_factory() as db:
+        from backend.models.learning import QuestionVersion
+        from uuid import UUID
+        version=db.get(QuestionVersion,UUID(old_item['question_version_id']))
+        submission=({'selected_option':version.correct_answer} if version.options else {'raw_answer':version.correct_answer})
     submitted = client.post(f'/api/practice-items/{old_item["id"]}/answer-submissions',
-                            json={"idempotency_key": "source-retirement-history", "raw_answer": ""})
+                            json={"idempotency_key": "source-retirement-history", **submission})
     assert submitted.status_code == 200
     data = pack_data()
     data["questions"][0]["source"].update(kind="user_provided", source_type="exam", year=2024,
         question_number=8, subject="数学二", paper_title="合成隔离测试身份（非真实试卷）")
-    demo = json.loads((Path(__file__).resolve().parents[2] / "seed/questions.json").read_text(encoding="utf-8"))
     with session_factory() as db:
         replace_demo_questions(db, QuestionPack.model_validate(data), demo, apply=True)
         db.commit()
@@ -187,7 +196,8 @@ def test_retired_question_keeps_today_answers_and_attempt_history(client, sessio
     assert history["items"][0]["attempt_id"] == submitted.json()["attempt_id"]
     detail = client.get(f"/api/knowledge/{kp_id}").json()
     assert old_item["question_id"] not in {q["id"] for q in detail["questions"]}
-    assert len(detail["questions"]) == 1
+    assert len(detail["questions"]) == len(other_ids)+1
+    assert other_ids <= {q['id'] for q in detail['questions']}
 
 
 def test_explicit_all_demo_retirement_preserves_rows_and_seed_does_not_revive(session_factory, clean_database):
@@ -197,12 +207,17 @@ def test_explicit_all_demo_retirement_preserves_rows_and_seed_does_not_revive(se
     demo = json.loads((Path(__file__).resolve().parents[2] / "seed/questions.json").read_text(encoding="utf-8"))
     with session_factory() as db:
         before = db.scalar(select(func.count(Question.id)))
+        demo_stems={row['stem'] for row in demo['questions']}
+        demo_ids=set(db.scalars(select(Question.id).where(Question.stem.in_(demo_stems))))
+        other_active=set(db.scalars(select(Question.id).where(Question.is_active.is_(True),Question.id.not_in(demo_ids))))
+        assert len(demo_ids)==22
         assert retire_demo_questions(db, demo)["retired_demo_count"] == 22
         result = retire_demo_questions(db, demo, apply=True)
         assert result["retired_demo_count"] == 22
         assert db.scalar(select(func.count(Question.id))) == before
         upsert_questions(db, demo)
-        assert db.scalar(select(func.count(Question.id)).where(Question.is_active.is_(True))) == 0
+        assert not db.scalar(select(func.count(Question.id)).where(Question.id.in_(demo_ids),Question.is_active.is_(True)))
+        assert set(db.scalars(select(Question.id).where(Question.is_active.is_(True))))==other_active
         assert retire_demo_questions(db, demo, apply=True)["retired_demo_count"] == 0
         db.rollback()
 

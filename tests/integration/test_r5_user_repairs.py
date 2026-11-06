@@ -12,6 +12,7 @@ from backend.services.learning_assistant_service import planner_handoff
 from backend.services.assistant_router import route_message
 from backend.services.assistant_data_queries import execute_read_only_data_query
 from backend.errors import AppError
+from tests.integration.test_learning_assistant import setup_pre_generation
 
 def assert_only_expected_preview_revision(before,after,task_id,minutes):
     """A preview must change; validate that row and every other table explicitly."""
@@ -49,7 +50,7 @@ def assert_only_expected_preview_revision(before,after,task_id,minutes):
                 assert {(q['question_id'],q['question_version']) for q in updated['draft']['questions']} <= {(q['question_id'],q['question_version']) for q in row['draft']['questions']}
 
 def test_r5_mixed_known_unknown_topic_never_silently_becomes_whole_subject(session_factory):
-    sid,ctx,_=setup(session_factory);ctx=ctx.model_copy(update={'conversation_id':sid})
+    sid,ctx,_=setup_pre_generation(session_factory)
     text='我准备考数学二，最近积分和极限学得不太扎实。今天只有 60 分钟，希望你先帮我判断应该复习什么，再安排一些练习题。先给我看看安排，不要直接加入今日卷。'
     before=business_rows(session_factory)
     h=planner_handoff(session_factory,ctx=ctx,user_id=uuid4(),message=text,route=route_message(text,ctx),now=NOW)
@@ -72,7 +73,8 @@ def test_r5_refinement_recovers_same_session_task_and_invalidates_old_confirmati
     text=f'我临时只有 {minutes} 分钟了。保留最重要的复习内容，减少练习量，其他内容以后再学。先给我修改后的版本，不要马上创建新计划。'
     talk(session_factory,sid,AssistantRequest(question=text,study_context=ctx),NoModel())
     current=get_task(session_factory,tid)
-    assert current.budget_minutes==minutes and current.draft
+    latest=reply(session_factory,sid)
+    assert current.budget_minutes==minutes and current.draft, f'latest={latest.content!r}; metadata={latest.metadata_!r}'
     assert sum(a['minutes'] for a in current.draft['activities'])==minutes
     assert current.draft_version!=old.draft_version
     revision=business_rows(session_factory)
@@ -120,7 +122,7 @@ def test_r5_statistics_append_a_validated_readonly_schedule(session_factory):
 def test_r5_question_preview_is_reduced_and_revalidated_without_losing_versions(session_factory):
     from tests.integration.test_learning_loop import mark_isolated_question_trusted
     from backend.models.learning import Question
-    sid,ctx,_=setup(session_factory)
+    sid,ctx,_=setup_pre_generation(session_factory)
     # The small seed has only two appendable questions here. Prepare enough
     # explicitly synthetic inventory for the existing three-question assertion.
     with session_factory.begin() as db:
@@ -151,7 +153,9 @@ def test_r5_exact_preview_reference_is_used_in_study_not_generic_planner(session
     talk(session_factory,sid,AssistantRequest(question='把刚才那道题加入今天的学习。',study_context=ctx),NoModel())
     with session_factory() as db:task=db.scalar(select(LearningTask).where(LearningTask.session_id==sid))
     assert task and task.status=='ready' and task.draft,reply(session_factory,sid).content
-    assert [(q['question_id'],q['question_version']) for q in task.draft['questions']]==[(preview['question_id'],preview['question_version'])]
+    assert task.context['paper_adjustment'] is True and task.draft['kind']=='paper_adjustment'
+    assert task.draft['plan_id']==str(ctx.daily_plan_id) and task.draft['remove_item_ids']==[]
+    assert [(q['question_id'],q['question_version_id']) for q in task.draft['replacements']]==[(preview['question_id'],preview['question_version'])]
     after=business_rows(session_factory)
     assert {k:v for k,v in before.items() if k!='learning_tasks'}=={k:v for k,v in after.items() if k!='learning_tasks'}
 

@@ -18,8 +18,8 @@ factory=support.factory
  ('其中选择题有多少道？','data_query','inventory'),
  ('给我讲讲导数计算，不要安排题目。','qa','qa'),
  ('先不管之前的安排，讲讲幂级数。','qa','qa'),
- ('先选一道洛必达让我看看，不要加入。','planner','plan'),
- ('找一道洛必达题，但不要现在加入。','planner','plan'),
+ ('先选一道洛必达让我看看，不要加入。','data_query','find'),
+ ('找一道洛必达题，但不要现在加入。','data_query','find'),
  ('那里面哪些做错了？','data_query','history'),
  ('我改变主意了，取消刚才的安排。','qa','practice_request_cancel'),
  ('只加入一道洛必达题，不要多加。','planner','plan'),
@@ -31,6 +31,7 @@ def test_original_route_failure(text,capability,intent):
 def evidence(factory,sid):
     with factory() as db:
         row=db.scalar(select(ChatMessage).where(ChatMessage.session_id==sid,ChatMessage.role=='assistant').order_by(ChatMessage.seq.desc()).limit(1))
+        assert 'read_only_data_query' in row.metadata_, row.metadata_
         return row.metadata_['read_only_data_query']
 
 def test_choice_history_chain_really_filters_and_keeps_scope(factory):
@@ -61,15 +62,27 @@ def test_source_only_question_keeps_last_scope_but_new_session_is_global(factory
     sid=support.session(factory)
     support.talk(factory,sid,'洛必达法则的可练题有多少道？')
     original=evidence(factory,sid)['scope_node_ids']
-    support.talk(factory,sid,'有没有历年真题？')
+    before=support.counts(factory)
+    original_request=support.talk(factory,sid,'有没有历年真题？')
+    assert '没有原版' in next(d['answer'] for e,d in original_request if e=='done')
+    assert not any(e in {'practice_request','planner'} for e,d in original_request)
+    assert support.counts(factory)==before
+    support.talk(factory,sid,'有没有真题改编题？')
     state=evidence(factory,sid)
-    assert state['scope_node_ids']==original and state['query_state']['source_categories']==['exam_curated']
-    new=support.session(factory);support.talk(factory,new,'有没有历年真题？')
+    assert state['scope_node_ids']==original and state['query_state']['source_categories']==['exam_curated','exam_variant']
+    new=support.session(factory);support.talk(factory,new,'有没有真题改编题？')
     assert evidence(factory,new)['scope_node_ids']==[]
 
 def test_denied_arrangement_never_creates_request(factory):
     before=support.counts(factory);sid=support.session(factory)
     for text in ['给我讲讲导数计算，不要安排题目。','先不管之前的安排，讲讲幂级数。']:
+        # These QA turns use the real retrieval worker even though the product
+        # assertion is about intent and writes. Wait for any previous bounded
+        # worker to finish so this sequential regression does not inherit a
+        # legitimate retrieval_busy response from another test or prior turn.
+        from backend.chat import service as chat_service
+        assert chat_service._RETRIEVAL_SLOT.acquire(timeout=10), 'retrieval worker did not finish before denied-intent turn'
+        chat_service._RETRIEVAL_SLOT.release()
         frames=support.talk(factory,sid,text)
         assert not any(e in {'practice_request','planner'} for e,d in frames)
     assert support.counts(factory)==before

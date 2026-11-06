@@ -33,14 +33,15 @@ def test_no_consent_never_writes_learning_objects_through_real_sse(session_facto
 def test_failed_replacement_keeps_owned_draft_and_paper(session_factory, extra_lhopital_questions, monkeypatch):
     from backend.services import composite_bank_plan as composite
     sid = qa_session(session_factory)
-    first = request_view(ask(session_factory, sid, "先选一道洛必达让我看看，不要加入。"))
+    first = request_view(ask(session_factory, sid, "先给我安排一道洛必达法则的待确认方案，不要生成今日卷。"))
     before = protected_rows(session_factory)
     # Deliberate downstream failure, never a fake successful selection.
     monkeypatch.setattr(composite, "build_explained_plan", lambda *a, **kw: {
         "status": "failed", "draft": None, "message": "隔离测试故障：候选读取失败",
         "trace": [], "error_code": "business_tool_failed"})
     frames = ask(session_factory, sid, "换一道同知识点的")
-    assert "候选读取失败" in frames[-1][1]["answer"]
+    assert "题库准入检查未完成" in frames[-1][1]["answer"]
+    assert "今日卷没有改变" in frames[-1][1]["answer"]
     assert protected_rows(session_factory) == before
     with session_factory() as db:
         assert db.get(PracticeRequest, UUID(first["id"])).status == "draft"
@@ -52,7 +53,7 @@ def test_replacement_insert_failure_rolls_back_old_draft_status(session_factory,
     from backend.schemas.learning_assistant import StudyContext
     from sqlalchemy.orm import Session
     sid = qa_session(session_factory)
-    first = request_view(ask(session_factory, sid, "先选一道洛必达让我看看，不要加入。"))
+    first = request_view(ask(session_factory, sid, "先给我安排一道洛必达法则的待确认方案，不要生成今日卷。"))
     before = protected_rows(session_factory)
     def fail_flush(db, context, instances):
         if any(isinstance(row, PracticeRequest) and row.source_conversation_id == sid for row in db.new):

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import zipfile
@@ -47,6 +48,31 @@ def test_roundtrip_preserves_owned_private_data_and_excludes_caches(cold_data):
     assert (data / 'uploads/lecture.md').read_text() == 'synthetic-private-material'
     assert (data / 'postgres/cluster/pg_notify').is_dir()
     assert backup._owned(data)['cluster_id'] == 'a' * 32
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows-only transient directory rename behavior')
+def test_restore_retries_transient_access_denied_without_overwriting(cold_data, monkeypatch):
+    data, pg, destination = cold_data
+    backup.create_backup(data, destination, pg_bin=pg)
+    data.rename(data.with_name('retained-original'))
+    original_rename = Path.rename
+    attempts = 0
+
+    def transient_denial(source, target):
+        nonlocal attempts
+        if source.name.startswith('.kaoyan-restore-'):
+            attempts += 1
+            if attempts == 1:
+                error = PermissionError(5, 'Access is denied', str(source), str(target))
+                error.winerror = 5
+                raise error
+        return original_rename(source, target)
+
+    monkeypatch.setattr(Path, 'rename', transient_denial)
+    assert backup.restore_backup(destination, data)['models_need_reinstall']
+    assert attempts == 2
+    assert (data / 'uploads/lecture.md').read_text() == 'synthetic-private-material'
+    assert (data.with_name('retained-original') / 'uploads/lecture.md').read_text() == 'synthetic-private-material'
 
 
 def test_no_overwrite_existing_archive_or_user_data(cold_data):

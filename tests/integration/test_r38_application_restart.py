@@ -10,12 +10,29 @@ from tests.integration.test_policy_origin_semantics import make_origin_slice,att
 
 
 def create_restart_app():
+    import faulthandler
+    from contextlib import asynccontextmanager
     from backend.app import create_app
     from backend.api.deps import get_time_provider
     if os.environ.get('APP_ENV')!='test' or os.environ.get('NAIWA_FRESH_TEST_DATABASE')!='1':
         raise RuntimeError('owned restart fixture only')
     app=create_app()
     app.dependency_overrides[get_time_provider]=lambda:lambda:DAY+timedelta(days=2)
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def diagnostic_lifespan(application):
+        # If a fresh OS process stalls inside startup, capture its Python stack
+        # in the child log before the parent reports the bounded timeout.
+        faulthandler.dump_traceback_later(30, repeat=False)
+        try:
+            async with original_lifespan(application):
+                faulthandler.cancel_dump_traceback_later()
+                yield
+        finally:
+            faulthandler.cancel_dump_traceback_later()
+
+    app.router.lifespan_context = diagnostic_lifespan
     return app
 
 

@@ -1,5 +1,6 @@
 """New isolated PG only. No Provider/network; persisted time and scope contracts."""
 import asyncio,json
+import pytest
 from datetime import datetime,timezone
 from sqlalchemy import create_engine,select
 from sqlalchemy.orm import sessionmaker
@@ -10,9 +11,18 @@ from backend.schemas.learning_assistant import AssistantRequest,StudyContext
 from backend.services.learning_assistant_service import assistant_stream,planner_handoff
 from backend.services.assistant_router import CapabilityRoute
 from uuid import uuid4
+from scripts.run_question_repair_pilot import isolated_factory
 
-def test_injected_clock_scope_handoff_and_readonly_mode_switch():
-    engine=create_engine(TEST_DATABASE_URL);factory=sessionmaker(bind=engine,expire_on_commit=False)
+@pytest.fixture
+def scoped_factory(test_database_url):
+    # This fixture intentionally creates its own same-named topic tree. Use
+    # an owned marked schema so earlier seed topics cannot duplicate its scope.
+    with isolated_factory(test_database_url) as (factory,_schema):
+        yield factory
+
+
+def test_injected_clock_scope_handoff_and_readonly_mode_switch(scoped_factory):
+    factory=scoped_factory
     facts=prepare_fixture(factory);now=datetime(2040,4,3,1,tzinfo=timezone.utc)
     with factory.begin() as db:
         row=ChatSession(mode='builtin',purpose='qa',title='独立逻辑时钟回归');db.add(row);db.flush();sid=row.id
@@ -41,4 +51,3 @@ def test_injected_clock_scope_handoff_and_readonly_mode_switch():
         assert evidence['scope_node_ids']==[facts['lhopital_id']]
         assert evidence['query_state']['subject']=='考研数学'
         assert '408原创' not in answer.content
-    engine.dispose()

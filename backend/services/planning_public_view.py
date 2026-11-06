@@ -17,6 +17,25 @@ def _ids(values):
     return list(dict.fromkeys(result))
 
 
+def request_lesson_prefix(db, original):
+    """Rebuild requested explanations from published lessons, never old prose."""
+    if not isinstance(original, dict):
+        return ''
+    constraints = original.get('constraints') or {}
+    if not (constraints.get('explanation_request') or original.get('explanation')):
+        return ''
+    from backend.services.lesson_service import read_lesson
+    sections = []
+    for key in _ids(original.get('target_knowledge_node_ids'))[:8]:
+        node = db.get(KnowledgePoint, key)
+        if node is None or not node.is_active:
+            continue
+        markdown = read_lesson(node.code)
+        if markdown:
+            sections.append('系统节点讲解 · '+node.name+'\n\n'+markdown[:4000])
+    return '\n\n'.join(sections)+'\n\n' if sections else ''
+
+
 def before_generation(db,row,now):
     """Only release a pinned preview after this task's own commit reads back."""
     if db is None:
@@ -134,6 +153,10 @@ def paper_summary(db,paper,*,scope_ids=(),budget=None,now=None,ready=False,
 
 
 def summary_message(summary,*,ready=False,confirmed_activity=False):
+    unresolved=summary.get('unresolved_topics')
+    if isinstance(unresolved,list) and unresolved:
+        labels=[str(value).replace('\n',' ')[:80] for value in unresolved[:8] if isinstance(value,str)]
+        return '没有匹配到你指定的知识点：'+'、'.join(labels)+'。请明确现有知识点范围；尚未查询到可靠题量，没有创建或覆盖正式今日卷。'
     labels=[]
     for node in summary.get('scope_nodes',[]):
         label=f"{node['name']} · {node['practice_eligible_count']}道可用题"
@@ -146,6 +169,8 @@ def summary_message(summary,*,ready=False,confirmed_activity=False):
         text+=f" 本次计划安排 {summary['question_count']} 道题。"
     if type(summary.get('available_question_count')) is int:
         text+=f" 当前范围共 {summary['available_question_count']} 道符合正式准入条件的可用题。"
+        if summary['available_question_count'] == 0:
+            text+='题量不足，未准入题不能用于补足方案。'
     if type(summary.get('total_minutes')) is int:text+=f"。计划预计 {summary['total_minutes']} 分钟。"
     if summary.get('requires_revalidation'):text+=' 部分候选题版本或准入状态已变化，当前方案需重新规划后才能生成。'
     return text+'今日卷尚未生成，确认生成后才能查看具体题目。'
@@ -161,6 +186,10 @@ def public_task(factory,result,*,now=None):
         paper=row.draft if isinstance(row.draft,dict) else context.get('baseline')
         safe=paper_summary(db,paper,scope_ids=handoff.get('target_knowledge_node_ids',[]),
             budget=row.budget_minutes,now=now,ready=row.status=='ready')
+        unresolved=(handoff.get('constraints') or {}).get('unresolved_topics')
+        if isinstance(unresolved,list) and unresolved:
+            safe.update(unresolved_topics=[value[:80] for value in unresolved[:8] if isinstance(value,str)],
+                available_question_count=None,can_commit=False)
         safe['planning_origin']='homepage' if context.get('home_recommendation') else 'assistant'
         task_metrics=row.metrics if isinstance(row.metrics,dict) else {}
         commit=task_metrics.get('commit') if isinstance(task_metrics.get('commit'),dict) else {}

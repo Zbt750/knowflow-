@@ -168,7 +168,7 @@ def _append_personal_transaction(factory, *, question_ids, plan_id=None, now=Non
         existing = set(db.scalars(select(PracticeItem.question_id).where(PracticeItem.plan_id == plan.id)))
         add = [q for q in dict.fromkeys(question_ids) if q not in existing]
         if add: append_questions_to_plan(db, plan_id=plan.id, question_ids=add,
-                                         allow_personal_practice=True)
+                                         allow_personal_practice=True,now=now)
         db.flush()
         items = list(db.scalars(select(PracticeItem).where(PracticeItem.plan_id == plan.id).order_by(PracticeItem.ordinal)))
         bound_questions = {i.id: question_for_practice_item(db, i) for i in items}
@@ -232,12 +232,12 @@ def result_message(result):
     elif result.get("append_error"):
         text += "加入今日学习未完成；题目仍已保存，可以重试加入，不会重新生成。"
     else:
-        text += "题目已保存在对应知识节点的题目列表中。"
+        text += "题目已保存在对应知识节点的题目列表中，尚未加入今日学习。"
         if result.get("reference_only_question_ids"):
             text += ("这批题尚未完成完整独立正确性验证（needs_review），可用于个人练习与学习记录，"
                      "但不计入正式毕业证据；如需正式卷请使用正式题库题目。")
         else:
-            text += "尚未加入今日学习。你可以先查看题目，再选择加入或暂不加入。"
+            text += "你可以先查看题目，再选择加入或暂不加入。"
     return text
 
 

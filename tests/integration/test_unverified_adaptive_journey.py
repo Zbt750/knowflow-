@@ -7,6 +7,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy import select
 from backend.models.learning import Question, KpState, QuestionAttempt
+from backend.models.learning_task import LearningTask
 from tests.integration.test_p5_adaptive_journey import adaptive, arrange, confirm
 from tests.integration.test_learning_loop import session_factory, clean_database, client, clock
 from tests.integration.test_learning_tasks import clean_tasks
@@ -39,11 +40,14 @@ def test_unreviewed_public_inventory_is_not_offered_by_learning_agent(
     assert draft["status"] == "needs_info"
     assert "题量不足" in draft["message"]
     assert "PRIVATE_REVIEW_SENTINEL" not in str(draft)
-    pool = next(t["result"] for t in draft["trace"] if t["tool"] == "find_questions")
+    assert draft['trace'] == []
+    with session_factory() as db:
+        private_trace = db.get(LearningTask, UUID(tid)).trace
+    pool = next(t["result"] for t in private_trace if t["tool"] == "find_questions")
     assert pool["practice_eligible_count"] == 0
     assert pool["blocking_reasons"] == {"public_formal_review_required": len(kept)}
     assert pool["questions"] == []
-    state = next(t["result"]["states"][0] for t in draft["trace"] if t["tool"] == "get_learning_state")
+    state = next(t["result"]["states"][0] for t in private_trace if t["tool"] == "get_learning_state")
     assert state["effective_confirmation_count"] == 0
     assert all(d["independent_question_count"] == 0 for d in state["capability_profile"]["dimensions"])
     assert not draft.get("draft")
