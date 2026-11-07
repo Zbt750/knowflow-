@@ -84,7 +84,10 @@ def test_replacement_pool_excludes_soft_removed_question_history(session_factory
     assert addition['draft']['replacements'][0]['question_id']!=str(old_question_id)
     talk(session_factory,sid,AssistantRequest(question='确认调整',study_context=ctx),NoModel())
     receipt=reply(session_factory,sid).metadata_['paper_adjustment']['receipt']
+    assert receipt,reply(session_factory,sid).content
     assert receipt['added_count']==1 and receipt['total_count']==1
+    assert receipt['before_count']==0
+    assert receipt['remaining_minutes']==addition['workload']['remaining_minutes']
     assert receipt['added_items'][0]['question_id']!=str(old_question_id)
     with session_factory() as db:
         old=db.get(PracticeItem,ctx.practice_item_id)

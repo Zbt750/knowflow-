@@ -25,6 +25,10 @@ def test_target_is_ownership_checked_and_must_be_the_current_pending_proposal(mo
 
 def test_button_action_enters_exact_acceptance_without_scope_parsing_bank_query_chat_or_formal_write(monkeypatch):
     now=datetime.now(timezone.utc);sid=uuid4();node=uuid4();qid=uuid4();vid=uuid4()
+    def policies(db, ids, *, include_missing):
+        assert ids==[node] and include_missing
+        return {node:NS(graduation_binding_pending=False)},None
+    monkeypatch.setattr('backend.services.study_read_context.policies_for_nodes',policies)
     row=NS(id=uuid4(),session_id=sid,status='ready',goal='增加一题',metrics={},error_code=None,message='预算提醒',budget_minutes=90,
         draft={'selected_kp_ids':[str(node)],'questions':[{'question_id':str(qid),'question_version_id':str(vid)}],'total_minutes':95},
         context={'home_recommendation':True,'workload_pending':True,'study_date':now.astimezone(home.SHANGHAI).date().isoformat(),

@@ -169,9 +169,25 @@ def _retained_baseline(row):
     return paper
 
 
+def _preview_view(db, row):
+    result = view(row)
+    if result is not None:
+        required = []
+        if result.get('draft') and not result.get('receipt'):
+            from backend.services.study_read_context import policies_for_nodes
+            policies, _ = policies_for_nodes(db, _allocation_ids(result['draft']), include_missing=True)
+            required = sorted(str(key) for key, policy in policies.items()
+                              if policy.graduation_binding_pending)
+        # Read current policy state for the actual allocated leaves, including
+        # topics introduced after the system recommendation. Recovery must not
+        # rely on stale flags saved with the original recommendation.
+        result['context']['required_graduation_set_transition_ids'] = required
+    return result
+
+
 def _result_view(db, row):
     active=_effective_row(db,row)
-    result=view(active)
+    result=_preview_view(db,active)
     if result is not None:
         notice=(row.message if active is not row and row.status in {'failed','needs_info'}
                 else (row.context or {}).get('adjustment_notice'))
@@ -180,7 +196,7 @@ def _result_view(db, row):
             if (row.context or {}).get('request_origin') in {'system','chat'}:
                 result['adjustment_origin']=row.context['request_origin']
         if _workload_pending(row) and not result.get('receipt'):
-            result['workload_candidate']=view(row)
+            result['workload_candidate']=_preview_view(db,row)
         if active is row:
             retained=_retained_baseline(row)
             if retained:
@@ -192,7 +208,7 @@ def _result_view(db, row):
 
 
 def _adjustment_view(db, row):
-    result=view(row)
+    result=_preview_view(db,row)
     active=_effective_row(db,row)
     if active is not row:
         result['fallback_preview']=_result_view(db,row)
@@ -416,10 +432,15 @@ def _paper(db, ids, minutes, now, question_limit=None, candidate_question_ids=No
     from backend.services.study_read_context import question_read_options
     question_ids = list(dict.fromkeys(item[3] for item in picked))
     question_rows = {q.id: q for q in db.scalars(select(Question).options(
-        *question_read_options()).where(Question.id.in_(question_ids)))} if question_ids else {}
+        *question_read_options(defer_auto_review_snapshot=True)).where(Question.id.in_(question_ids)))} if question_ids else {}
     node_ids = list(dict.fromkeys(item[0] for item in picked))
     node_rows = {n.id: n for n in db.scalars(select(KnowledgePoint).where(
         KnowledgePoint.id.in_(node_ids)))} if node_ids else {}
+    review_events = {str(q.auto_review_event_id): q.current_auto_review
+        for q in question_rows.values() if q.auto_review_event_id and q.current_auto_review is not None}
+    from backend.services.auto_question_review import preload_uncached_auto_review_snapshots
+    preload_uncached_auto_review_snapshots(db,
+        [(q, node_rows.get(q.kp_id)) for q in question_rows.values()], review_events)
     version_ids = [q.current_version_id for q in question_rows.values() if q.current_version_id]
     version_rows = {v.id: v for v in db.scalars(select(QuestionVersion).where(
         QuestionVersion.id.in_(version_ids)))} if version_ids else {}
@@ -428,7 +449,8 @@ def _paper(db, ids, minutes, now, question_limit=None, candidate_question_ids=No
         q = question_rows.get(question_id)
         node = node_rows.get(kp_id)
         version = version_rows.get(q.current_version_id) if q and q.current_version_id else None
-        assessment = question_eligibility(q, node) if version and version.is_active else None
+        assessment = question_eligibility(q, node,
+            auto_review_events=review_events) if version and version.is_active else None
         if assessment is None or not assessment.practice_eligible:
             raise ValueError("question_version_or_eligibility_invalid")
         questions.append({"question_id": str(q.id), "question_version_id": str(q.current_version_id),
@@ -665,7 +687,7 @@ def _home_inventory(db, ids, now):
     return inventory
 
 
-def read_system(db, recommendations, now):
+def read_system(db, recommendations, now, *, include_evidence=True):
     """Read the canonical recommendation without creating a conversation or task."""
     # Keep request-local strong references: SQLAlchemy's weak identity map
     # otherwise reloads the same nodes during inventory and paper assembly.
@@ -681,11 +703,12 @@ def read_system(db, recommendations, now):
             blockers.append(f"正式选题暂不能形成初案：{exc}；请核对题库资格或选择其他范围。")
     else:
         blockers.append("当前没有可推荐的考核节点，请在知识树选择现有范围。")
-    tools = _tools(db, now)
-    tools.nodes.update(ids)
     states = []
-    for kp_id in ids:
-        states.extend(tools.get_learning_state(db, NodeIds(kp_ids=[kp_id]))["states"])
+    if include_evidence:
+        tools = _tools(db, now)
+        tools.nodes.update(ids)
+        for kp_id in ids:
+            states.extend(tools.get_learning_state(db, NodeIds(kp_ids=[kp_id]))["states"])
     return _json_value({"recommendations": [r.model_dump(mode="json") for r in recommendations],
         "inventory": inventory, "initial_paper": paper, "blockers": blockers,
         "evidence": {"states": states, "captured_at": now.isoformat()},
@@ -853,7 +876,7 @@ def _bank_candidates(db, now, goal, ids, previous, request, minutes, *, base_sco
     return wanted,evidence,None
 
 
-def _subject_plan_scope(db, now, *, subject, count):
+def _subject_plan_scope(db, now, *, subject, count, unattempted_only=False):
     """Select fresh/low-history topics while retaining any genuinely due FSRS nodes."""
     from backend.api.routes.study import _recommendations
     candidates=_recommendations(db,now,subject=subject,limit=1000)
@@ -862,6 +885,13 @@ def _subject_plan_scope(db, now, *, subject, count):
     attempts={str(kp_id):int(total) for kp_id,total in db.execute(
         select(QuestionAttempt.kp_id,func.count(QuestionAttempt.id))
         .where(QuestionAttempt.kp_id.in_(ids)).group_by(QuestionAttempt.kp_id)).all()}
+    if unattempted_only:
+        # An explicit "没做过" constraint is a hard filter. Due review stays
+        # available to ordinary adaptive plans, but cannot override this
+        # user's request to choose only never-attempted, still-unseen topics.
+        candidates=[row for row in candidates
+            if attempts.get(str(row.kp_id),0)==0 and row.state=='unseen']
+        ids=[row.kp_id for row in candidates]
     original_order={str(row.kp_id):index for index,row in enumerate(candidates)}
     def rank(row):
         due=row.reason=='due_review' or '到期' in (row.next_step or '')
@@ -1134,7 +1164,7 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
             and _paper_identity(old.draft) == _paper_identity(baseline)):
         # Repeated restore is a read-only no-op once the canonical snapshot is
         # already current. Do not create another LearningTask for repeated taps.
-        return view(old)
+        return _adjustment_view(db,old)
     if baseline is None and (old is None or old.status!='ready') and system_ids:
         # Capture canonical A before any first manual/chat revision can fail.
         try:
@@ -1249,9 +1279,12 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
         if intent.operation=='subject_plan':
             current=previous_paper or baseline
             selected,selection_facts=_subject_plan_scope(db,now,subject=intent.terms,
-                count=intent.quantity or 6)
+                count=intent.quantity or 6,unattempted_only=intent.unattempted_only)
             if len(selected)!=(intent.quantity or 6):
-                return notice(f'当前有{len(selected)}个符合正式准入的{intent.terms}知识点可安排，少于所需{intent.quantity}个；原方案已保留。')
+                qualifier=('从未作答且仍处于未学习状态、符合正式准入的'
+                    if intent.unattempted_only else '符合正式准入的')
+                return notice(f'当前有{len(selected)}个{qualifier}{intent.terms}知识点可安排，'
+                    f'少于所需{intent.quantity}个；原方案已保留。')
             if not 5<=int(intent.minutes or 0)<=240:
                 return notice('请明确408学习预算；原方案已保留。')
             diagnostics={'diagnostic_id':uuid4().hex,'stage':'subject_replacement',
@@ -1266,7 +1299,8 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                 return notice('未能用满足正式准入的408题目完成完整方案，原方案已保留；没有生成正式卷。')
             exact_edit_used=True
             subject_plan_summary={'subject':intent.terms,'topic_count':len(selected),
-                'topics':selection_facts,'budget_minutes':int(intent.minutes)}
+                'topics':selection_facts,'budget_minutes':int(intent.minutes),
+                'unattempted_only':intent.unattempted_only}
             bank_request=None
         if intent.operation in {'fill_time','replace_question'}:
             current=previous_paper or baseline
@@ -1633,7 +1667,9 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                     if '[underspecified_quantities_defaulted_to_one]' in intent.terms:
                         row.message+=' 原话未给具体数量，每个“几道”先按1道拟成草案，可继续调整。'
                 if subject_plan_summary:
-                    row.message+=(f" 已按未学习或学习记录较少的{subject_plan_summary['subject']}知识点替换当前范围，"
+                    selection_basis=('从未作答的' if subject_plan_summary['unattempted_only']
+                        else '未学习或学习记录较少的')
+                    row.message+=(f" 已按{selection_basis}{subject_plan_summary['subject']}知识点替换当前范围，"
                         f"安排{subject_plan_summary['topic_count']}个知识点，题目预计{paper['total_minutes']}分钟，预算{minutes}分钟；"
                         '原数学范围已从当前待确认方案移除，尚未生成正式今日卷。')
                 if context.get('workload'):
@@ -1735,7 +1771,7 @@ def confirm(db, task_id, body, now):
     if body.draft_version != _draft_version(row):
         raise AppError("learning_task_conflict", status_code=409)
     if (row.metrics or {}).get("commit"):
-        return view(row)
+        return _preview_view(db,row)
     _reject_materialized_daily_plan_mutation(db, now)
     if _legacy_incomplete_addition(row):
         raise AppError('learning_task_stale_draft', status_code=409)
@@ -1820,7 +1856,7 @@ def confirm(db, task_id, body, now):
             previous.metrics = {**(previous.metrics or {}), "memory_lifecycle": "closed", "superseded_by": str(row.id)}
     row.message = f"已按最终预览生成 {len(items)} 道题的今日卷。"
     db.flush()
-    return view(row)
+    return _preview_view(db,row)
 
 
 def _paper_identity(paper):

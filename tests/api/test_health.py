@@ -84,6 +84,30 @@ def test_health_does_not_leak_paths_or_secrets(healthy_client: TestClient) -> No
         assert leaked not in body
 
 
+def test_health_reports_pending_retrieval_import_as_unavailable_not_ready():
+    from types import SimpleNamespace
+    from fastapi import FastAPI
+    from backend.api.routes.health import router
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.settings = SimpleNamespace(
+        app_env="test", llm_api_key=None, llm_base_url=None, llm_model=None,
+    )
+    app.state.retrieval_stack = SimpleNamespace(
+        availability_snapshot=lambda: (False, "dependency_probe_pending"),
+    )
+    app.state.job_runner = None
+    app.dependency_overrides[get_db] = override_healthy_db
+
+    with TestClient(app) as client:
+        body = client.get("/api/health").json()
+
+    assert body["retrieval"] == "unavailable"
+    assert body["retrieval_reason"] == "dependency_probe_pending"
+    app.dependency_overrides.clear()
+
+
 def test_health_returns_503_without_database_details_when_query_fails(
     broken_client: TestClient,
 ) -> None:

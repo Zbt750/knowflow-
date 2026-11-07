@@ -18,8 +18,12 @@ def parse_command(text):
     intent_text=text.replace('等价无穷小替换','等价无穷小')
     if re.fullmatch(r'取消(?:本次)?调整[。！!]?|撤销(?:本次)?方案[。！!]?',text):
         return {'action':'cancel'}
-    if re.fullmatch(r'确认(?:本次)?调整[。！!]?|确认移除已浏览题目[。！!]?',text):
-        return {'action':'confirm','viewed':'已浏览' in text}
+    if re.fullmatch(r'(?:我)?(?:确认(?:本次)?调整|确认移除已浏览题目|确认超预算调整|确认移除已浏览题目并接受超预算)[。！!]?',text):
+        return {'action':'confirm','viewed':'已浏览' in text,'budget_confirmed':'超预算' in text}
+    # A comment, question or deferred acknowledgment about an overrun neither
+    # authorizes a mutation nor withdraws the saved draft.
+    if '超预算' in text and re.search(r'减少|删除|移除|增加|追加|加入|换掉|换成|替换|换一道|重新安排|安排.{0,16}408|408.{0,16}知识点',intent_text) is None:
+        return {'action':'query','text':text,'revoke_proposal':False}
     if re.search(r'减少|删除|移除|增加|追加|加入|换掉|换成|替换|换一道|重新安排|安排.{0,16}408|408.{0,16}知识点',intent_text) is None:return None
     if re.search(r'不要|不许|不准|先不|暂不|不必|不用|不需要|不想|不希望|(?:^|[，。！!？?\s])别|不(?:创建|生成|安排|加入|修改|写入|执行)|能不能|能否|可否|是否|要不要|可以吗|如果|假如|等我|以后|明天|吗[。！!]?\s*$|？|\?',text):
         revoke=bool(re.search(r'(?:先\s*(?:不|别)|暂不|暂时不|不要|别|不需要|不必|不用).{0,10}(?:删除|移除|换|替换|加入|增加|追加|调整|执行)',text))
@@ -42,6 +46,79 @@ def parse_command(text):
         'all_topic':bool(re.search(r'全部|所有|整個|整个|整组|整組|这个知识点的题|该知识点的题',text)),
         'each_topic':bool(re.search(r'各\s*(?:减少|删|移除)|分别',text)),
         'easy':bool(re.search(r'简单|容易|难度',text)),'text':text}
+
+
+def _requested_408_topic_scope(message, nodes):
+    """Resolve an explicit 408 course after the replacement verb to its topic subtree.
+
+    A phrase such as “把洛必达法则全部换成408操作系统” must not silently
+    select an unrelated 408 topic merely because it ranks first in the learner's
+    general recommendation list. A bare “换成408” intentionally remains broad.
+    """
+    switches=list(re.finditer(r'换成|替换成|替换为|改成|改为',message))
+    if not switches:return None,None
+    target_text=message[switches[-1].end():]
+    aliases=(
+        ('计算机组成原理',('计算机组成原理','组成原理','计组')),
+        ('操作系统',('操作系统',)),
+        ('计算机网络',('计算机网络','计网')),
+        ('数据结构',('数据结构',)),
+    )
+    found=[]
+    for course,values in aliases:
+        for alias in values:
+            match=re.search(re.escape(alias),target_text)
+            if match:found.append((match.start(),-len(alias),course))
+    if not found:return None,None
+    course=min(found)[2]
+    is_408=lambda node:bool(re.search(r'408|计算机学科专业基础|cs408',node.subject,re.I))
+    active=[node for node in nodes if getattr(node,'is_active',True) and is_408(node)]
+    roots=[node for node in active if node.name==course]
+    by_id={node.id:node for node in active}
+    if roots:
+        root_ids={node.id for node in roots}
+        scope=set(root_ids)
+        for node in active:
+            current=node;seen=set()
+            while getattr(current,'parent_id',None) is not None and current.id not in seen:
+                seen.add(current.id)
+                if current.parent_id in root_ids:
+                    scope.add(node.id);break
+                current=by_id.get(current.parent_id)
+                if current is None:break
+        return scope,course
+    # Some imports only retain course-qualified leaf names. Fail closed to those
+    # exact descendants instead of widening back to the whole 408 bank.
+    scope={node.id for node in active if node.is_assessable and course in node.name}
+    return scope,course
+
+
+def _replacement_fill_candidates(pools,selected_pools,*,preserve_replaced_quantity):
+    """Return budget-fill questions without silently widening a requested topic set.
+
+    A whole-paper plan with an explicit/default topic count is scoped to the
+    selected topics. A scoped course-topic replacement is different: it must
+    preserve the number of removed questions, so it may draw spare eligible
+    questions from the rest of that explicitly requested course.
+    """
+    selected_ids={node.id for node,_ in selected_pools}
+    source=pools if preserve_replaced_quantity else selected_pools
+    candidates=[question for node,pool in source
+        for question in (pool[1:] if node.id in selected_ids else pool)]
+    return sorted(candidates,key=lambda question:(question.estimated_minutes,str(question.id)))
+
+
+def _is_whole_math_replacement(message):
+    """Only treat an explicit math-paper phrase as a whole-math replacement.
+
+    The bare word “全部” also appears in a single-topic instruction such as
+    “把洛必达法则的题目全部换成408操作系统”, so it cannot widen that edit to
+    every math item in today's paper.
+    """
+    return bool(re.search(
+        r'(?:数学\s*(?:题目?|内容)\s*(?:全部|所有|都|全)|'
+        r'(?:全部|所有)\s*(?:今天|当前)?\s*数学\s*(?:题目?|内容))',
+        message))
 
 
 def _topic_count_batch(message, nodes):
@@ -147,9 +224,14 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         result['proposal']=proposal
         try:
             receipt=confirm_adjustment(factory,UUID(proposal['task_id']),PaperAdjustmentConfirmation(
-                session_id=session_id,draft_version=proposal['draft_version'],confirm_viewed=command['viewed']),now=now)
+                session_id=session_id,draft_version=proposal['draft_version'],confirm_viewed=command['viewed'],
+                accept_budget_overrun=command.get('budget_confirmed',False)),now=now)
         except AppError as exc:
+            if exc.code=='paper_budget_confirmation_required':
+                workload=proposal.get('workload') or (proposal.get('draft') or {}).get('workload') or {}
+                return reply(f"方案预计剩余{workload.get('remaining_minutes')}分钟，超出预算{workload.get('excess_minutes')}分钟，尚未执行。接受超出用时请回复“确认超预算调整”；含已浏览题请回复“确认移除已浏览题目并接受超预算”。")
             return reply({'paper_viewed_confirmation_required':'这些题已经浏览过，需二次确认。确认移除请明确回复“确认移除已浏览题目”。',
+                'paper_budget_unknown':'题目缺少可靠的冻结版本用时，无法核验预算；正式卷和历史记录已保留。',
                 'paper_item_protected':'题目已经开始、作答、完成或跳过，已保留原题及历史记录。',
                 'learning_task_stale_draft':'方案已经过期或卷子状态已变化，请重新预览。'}.get(exc.code,'本次调整未执行，请重新查看当前卷并预览方案。'))
         result.update(receipt=receipt,proposal=proposal,context=memory.get('context',{}))
@@ -157,7 +239,10 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         details='\n'.join(f"第{i['number']}题 · {i['kp_name']}\n{i['stem']}\n来源：{source_label(i['source_category'])}\n题目版本：{i['question_version_id']}" for i in receipt.get('added_items',[]))
         remaining=receipt.get('remaining_minutes')
         timing=f'预计剩余{remaining}分钟。' if remaining is not None else '预计剩余时间暂不可核验。'
-        return reply(f"调整已完成：移除{len(receipt['removed_item_ids'])}道，新增{receipt['added_count']}道，当前共{receipt['total_count']}道。"+timing+ ('\n'+details if details else ''))
+        if receipt.get('budget_overrun_accepted'):
+            timing+=f"已按本次明确同意接受超出预算{receipt['budget_overrun_minutes']}分钟。"
+        before=f"原有{receipt['before_count']}道，" if 'before_count' in receipt else ''
+        return reply(f"调整已完成：{before}移除{len(receipt['removed_item_ids'])}道，新增{receipt['added_count']}道，当前共{receipt['total_count']}道。"+timing+ ('\n'+details if details else ''))
     if command['easy']:
         return reply('目前没有可核验的逐题难度评估，不能据此选题；原卷和待确认方案保持不变，尚未执行。请指定题号。')
     implicit_reference=None
@@ -238,7 +323,7 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         if command['action']=='add' and not matches and not context.get('kp_id') and not implicit_reference:
             return reply('请说明要增加题目的知识点，例如“增加一道洛必达法则题”。原卷保持不变。')
         cross='408' in message and command['action']=='replace'
-        all_math=cross and bool(re.search(r'全部|都换|今天数学|当前数学|当前数学题|数学题都|数学题全部',message))
+        all_math=cross and _is_whole_math_replacement(message)
         cross_all=cross and bool(re.search(r'当前的题目都换|整卷|整套|全部课程内容',message))
         if batch_edits:
             selected=[]
@@ -314,10 +399,19 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
             elif cross:
                 from backend.services.home_recommendation_service import _subject_plan_scope
                 from backend.services.question_eligibility import question_eligibility
+                course_scope_ids,target_course=_requested_408_topic_scope(message,nodes)
+                scoped_topic_replacement=bool(target_course and course_scope_ids and selected
+                    and command['all_topic'] and not all_math and not cross_all
+                    and command['topic_count'] is None)
                 topic_count=command['topic_count'] or (6 if all_math or cross_all or not matches else 1)
                 budget_minutes=command['budget_minutes'] or 60
                 if not 5<=budget_minutes<=240:return reply('预算请指定为5到240分钟；原卷保持不变。')
                 topic_ids,evidence=_subject_plan_scope(db,now,subject='408',count=1000)
+                if target_course:
+                    evidence=[row for row in evidence if UUID(row['kp_id']) in (course_scope_ids or set())]
+                    topic_ids=[UUID(row['kp_id']) for row in evidence]
+                    if not topic_ids:
+                        return reply(f'408{target_course}当前没有真实、符合正式准入且可安排的知识点；未创建方案，原卷保留。')
                 unseen_only=bool(re.search(r'没做过|未做过|未学习|没有做过',message))
                 if unseen_only: evidence=[e for e in evidence if e.get('attempt_count',0)==0]
                 topic_ids=[UUID(e['kp_id']) for e in evidence]
@@ -332,21 +426,42 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
                         and type(q.estimated_minutes) is int and q.estimated_minutes>0]
                     if pool:pools.append((node,pool))
                     else:missing.append(node.name)
+                if scoped_topic_replacement and command['topic_count'] is None:
+                    # Spread a whole-course replacement across as many eligible
+                    # target topics as the old quantity allows, then use spare
+                    # admitted questions from every topic in that course. A
+                    # single high-ranked leaf must not cap the replacement stock.
+                    topic_count=min(len(pools),len(selected))
                 if len(pools)<topic_count:
                     names='、'.join(missing[:8]) if missing else '当前候选列表中的其他知识点'
                     return reply(f'真实正式准入库存只覆盖{len(pools)}个408知识点，目标{topic_count}个，缺{topic_count-len(pools)}个；无可追加合格题的知识点：{names}。未创建方案，原卷保留。')
                 selected_pools=pools[:topic_count]
                 chosen=[pool[0] for _,pool in selected_pools];minutes=sum(q.estimated_minutes for q in chosen)
                 if minutes>budget_minutes:return reply(f'{topic_count}个知识点各选一道的最短预计用时为{minutes}分钟，超过{budget_minutes}分钟。未创建方案，原卷保留。')
-                remaining=[q for _,pool in selected_pools for q in pool[1:]]
-                remaining.sort(key=lambda q:(q.estimated_minutes,str(q.id)))
-                for q in remaining:
-                    if minutes+q.estimated_minutes<=budget_minutes:chosen.append(q);minutes+=q.estimated_minutes
+                replacement_limit=len(selected) if scoped_topic_replacement else None
+                remaining=_replacement_fill_candidates(pools,selected_pools,
+                    preserve_replaced_quantity=replacement_limit is not None)
+                if replacement_limit is not None and len(remaining)+len(chosen)<replacement_limit:
+                    available=len(remaining)+len(chosen)
+                    return reply(f'408{target_course}符合正式准入且卷外可用题量不足：当前需替换{replacement_limit}道，仅有{available}道可用，缺少{replacement_limit-available}道；未创建方案，原卷保留。')
+                for q in remaining[:max(0,replacement_limit-len(chosen))] if replacement_limit is not None else remaining:
+                    if minutes+q.estimated_minutes<=budget_minutes or replacement_limit is not None:
+                        chosen.append(q);minutes+=q.estimated_minutes
+                if replacement_limit is not None and len(chosen)!=replacement_limit:
+                    return reply(f'408{target_course}替换后的预计用时超过{budget_minutes}分钟；方案未创建，原卷保留。请先提高预算后重新预览。')
                 replacements=[ReplacementReference(question_id=q.id,question_version_id=UUID(question_version_reference(q))) for q in chosen]
                 result['context']['estimated_minutes']=minutes
                 result['context']['recommendation_evidence']=evidence
-                result['context']['selected_408_topics']=[{'kp_id':str(node.id),'name':node.name,'attempt_count':next((e.get('attempt_count',0) for e in evidence if e['kp_id']==str(node.id)),0)} for node,_ in selected_pools]
+                chosen_topic_ids={q.kp_id for q in chosen}
+                result['context']['selected_408_topics']=[{'kp_id':str(node.id),'name':node.name,'attempt_count':next((e.get('attempt_count',0) for e in evidence if e['kp_id']==str(node.id)),0)} for node,_ in pools if node.id in chosen_topic_ids]
                 result['context']['budget_minutes']=budget_minutes
+                if scoped_topic_replacement:
+                    result['context']['scoped_topic_replacement']={
+                        'target_course':target_course,
+                        'removed_question_count':len(selected),
+                        'replacement_question_count':len(replacements),
+                        'preserves_removed_quantity':len(selected)==len(replacements),
+                    }
             else:
                 from backend.services.question_eligibility import question_eligibility
                 existing=existing_question_ids|{UUID(value) for value in reserved_pending_ids}
@@ -397,6 +512,7 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         if exc.code=='learning_task_stale_draft' and exc.detail=='replacement_not_formally_eligible':
             return reply('候选题目未通过正式准入复核；本次没有建立方案，原卷保持不变。')
         messages={
+            'paper_budget_unknown':'部分题目缺少可靠的冻结版本用时，无法核验调整预算；原卷和历史记录保持不变。',
             'paper_item_protected':'该题已有学习记录或已被移除，系统保留了题目与历史记录，本次未执行。',
             'paper_viewed_confirmation_required':'这些题已经浏览过，请先预览并单独确认移除。',
             'learning_task_conflict':'正式卷状态已变化或题目范围无效，本次未执行；请刷新后重新预览。',
@@ -406,12 +522,15 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         return reply(messages.get(exc.code,'所选题目当前受到保护，或卷状态发生变化；本次未执行。'))
     warning='所选题目已浏览，最终移除还需明确二次确认。' if result['proposal']['requires_viewed_confirmation'] else ''
     positions='、'.join(str(items.index(i)+1) for i in selected)
-    duration=result['context'].get('estimated_minutes')
-    timing=f'预计{duration}分钟。' if duration is not None else ''
+    workload=result['proposal']['workload']
+    duration=workload['remaining_minutes']
+    timing=f"预计剩余{duration}分钟，预算{workload['budget_minutes']}分钟。"
+    instruction=('超出预算'+str(workload['excess_minutes'])+'分钟，尚未执行。接受超出用时请回复“确认超预算调整”；含已浏览题请回复“确认移除已浏览题目并接受超预算”。'
+        if workload['requires_confirmation'] else '回复“确认调整”后执行。')
     action_label={'remove':'移除','replace':'替换','add':'追加','batch':'批量增减'}[command['action']]
     removal_summary=f"移除当前第{positions}题，共{len(selected)}道" if selected else '保留现有题目'
     selected_topics=result['context'].get('selected_408_topics',[])
     batch_summary='；'.join(f"{row['name']}：{row['before_count']}→{row['after_count']}道"
         for row in result['context'].get('topic_count_edits',[]))
     topic_summary=('知识点：'+'、'.join(n['name'] for n in selected_topics)+'。') if selected_topics else ''
-    return reply(f"待确认方案：{action_label}；{removal_summary}，新增{len(replacements)}道。{topic_summary}{batch_summary}{timing}{warning}回复“确认调整”后执行；当前正式卷尚未改变。")
+    return reply(f"待确认方案：{action_label}；{removal_summary}，新增{len(replacements)}道。{topic_summary}{batch_summary}{timing}{warning}{instruction}当前正式卷尚未改变。")

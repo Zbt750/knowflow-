@@ -56,6 +56,10 @@ def public_preview(value):
     keys=('task_id','session_id','goal','status','message','error_code','draft_version','budget_minutes',
           'receipt','adjustment_origin','adjustment_error','undo_available','redo_available','kind')
     out={k:value[k] for k in keys if k in value}
+    if isinstance(value.get('difficulty_changes'), list):
+        # Report the outcome without exposing the replaced question references
+        # or their contents before the learner generates the formal paper.
+        out['difficulty_change_count']=len(value['difficulty_changes'])
     if isinstance(value.get('intent_trace'),dict):
         out['intent_trace']={k:value['intent_trace'][k] for k in ('operation','source','used_model') if k in value['intent_trace']}
     if 'draft' in value: out['draft']=public_paper(value['draft'])
@@ -63,7 +67,8 @@ def public_preview(value):
     if 'context' in value:
         context=value.get('context') or {}
         out['context']={k:context[k] for k in ('request_origin','study_date','expires_at',
-            'workload_pending','workload_accepted','workload','system_recommendations','unavailable_nodes') if k in context}
+            'workload_pending','workload_accepted','workload','system_recommendations','unavailable_nodes',
+            'required_graduation_set_transition_ids') if k in context}
         out['context']['baseline']=public_paper(context.get('baseline'))
         out['context']['evidence']={}
         out['context']['inventory']=public_inventory(context.get('inventory'))

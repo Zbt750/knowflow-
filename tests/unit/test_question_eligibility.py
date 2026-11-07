@@ -106,6 +106,37 @@ def test_reference_only_mapping_is_not_silently_treated_as_assessable():
     assert "reference_only_mapping" in result.blocking_reasons
 
 
+@pytest.mark.parametrize(("qualification_class", "expected_status", "provenance", "source_status"), [
+    ("exam_curated", "source_attested_reference_topic", "real_exam", "verified"),
+    ("exam_variant", "auto_reviewed_reference_topic", "ai_generated_practice", "traceable"),
+])
+def test_reference_mapping_uses_the_validated_receipt_without_reloading_its_json(
+    monkeypatch, qualification_class, expected_status, provenance, source_status,
+):
+    from backend.services import auto_question_review as review
+
+    node = reviewed_node(reference_only=True)
+    item = question(node, provenance=provenance, answer_provenance="auto_verified",
+        reliability="verified", trust="auto_verified", source_status=source_status,
+        grading_config={"verified": True, "method": "single_choice"})
+
+    class ValidatedReceipt:
+        def __init__(self, value):
+            self.id = uuid4()
+            self.qualification_class = value
+            self.review_version = "public-question-auto-review-v8"
+            self.question_snapshot_sha256 = "a" * 64
+
+        @property
+        def audit_snapshot(self):
+            raise AssertionError("eligibility reloaded receipt JSON after the shared bound check")
+
+    receipt = ValidatedReceipt(qualification_class)
+    monkeypatch.setattr(review, "current_auto_review", lambda *_args, **_kwargs: receipt)
+    result = question_eligibility(item, node)
+    assert result.mapping_status == expected_status
+
+
 def test_human_review_of_exact_full_exam_preserves_source_binding_on_reference_topic():
     from backend.services.question_attestation import question_content_sha256
 

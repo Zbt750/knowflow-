@@ -18,6 +18,7 @@ class HomeIntent(BaseModel):
     order:Literal['easy_to_hard']|None=None
     terms:str=''
     question:str=''
+    unattempted_only:bool=False
 
 
 def reference_map(paper):
@@ -49,7 +50,8 @@ def validate(intent,text,paper):
     if intent.operation=='subject_plan':
         expected=_subject_plan_request(text)
         if (expected is None or expected.operation!='subject_plan'
-                or (intent.terms,intent.quantity,intent.minutes)!=(expected.terms,expected.quantity,expected.minutes)):
+                or (intent.terms,intent.quantity,intent.minutes,intent.unattempted_only)
+                    !=(expected.terms,expected.quantity,expected.minutes,expected.unattempted_only)):
             return clarify('请明确408学习范围、知识点数量和时间预算；当前方案没有改变。')
         return intent
     if intent.operation=='scope_add' and not re.search(
@@ -200,9 +202,17 @@ def _topic_count_intent(text,paper):
             # after a named topic edit has already been recognized.
             unresolved_actions+=1
             continue
-        if len(aliases)!=1 or len(verbs)!=1:
+        if not aliases or len(verbs)!=1:
             return clarify('请明确每个知识点分别增减几道题；本次没有修改方案。')
-        key,row,_=aliases[0]
+        # A specific leaf name can contain a shorter parent alias (for
+        # example, “操作系统概念与发展” also contains “操作系统”). Prefer
+        # the longest display-derived alias, and only clarify if multiple
+        # different scopes have the same most-specific match.
+        most_specific=max(len(alias) for _,_,alias in aliases)
+        specific=[match for match in aliases if len(match[2])==most_specific]
+        if len({key for key,_,_ in specific})!=1:
+            return clarify('请明确每个知识点分别增减几道题；本次没有修改方案。')
+        key,row,_=specific[0]
         quantity,loose=_topic_quantity(verbs[0].group(0))
         if quantity is None:return clarify('请给出每个知识点的题目数量；本次没有修改方案。')
         direction=1 if re.match(add_words,verbs[0].group(0)) else -1
@@ -245,7 +255,10 @@ def _subject_plan_request(text):
     count=question_count(count_match[1]) if count_match else max(1,min(6,round(budget/10)))
     if not count or not 1<=count<=12:
         return clarify('请把知识点数量控制在1到12个；当前方案没有改变。')
-    return HomeIntent(operation='subject_plan',quantity=count,minutes=budget,terms='408')
+    unattempted_only=bool(re.search(
+        r'(?:没(?:有)?做过|未(?:曾)?学习过?|没有(?:学习|做过)|从未(?:学习|做过)|没学过)',text))
+    return HomeIntent(operation='subject_plan',quantity=count,minutes=budget,terms='408',
+        unattempted_only=unattempted_only)
 
 
 def parse_rule(text,paper):

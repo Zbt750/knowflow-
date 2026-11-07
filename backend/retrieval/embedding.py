@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
+import importlib.util
 import math
 import threading
 from collections import OrderedDict
-from typing import Sequence
+from typing import Callable, Sequence
 
 from backend.retrieval.protocols import EmbeddingUnavailableError
 
@@ -156,7 +158,7 @@ class SentenceTransformerEmbedder:
             self._dimension = int(get_dimension())
 
     def probe(self) -> str | None:
-        """启动期探活：返回 None 表示可用，否则返回**不含敏感信息**的原因。
+        """快速检查可选包是否可发现，不执行包导入。
 
         为什么需要它（真实缺陷）：
         `RetrievalStack` 只是把 `SentenceTransformerEmbedder` 装配起来，而真正的
@@ -169,18 +171,50 @@ class SentenceTransformerEmbedder:
         排查时先怀疑模型文件、再怀疑向量库，最后才发现是镜像里没有依赖。
         健康检查必须能回答「检索到底能不能用」，否则它只是在骗人。
 
-        边界：这里只确认**依赖可导入**，不会真的把模型加载进内存
-        （加载要 20 秒左右、几百 MB 常驻）。模型文件是否齐全会由第一次
-        真实 encode 暴露，届时依然走既有的降级路径。只记异常类型名，
-        绝不记完整异常文本（可能带路径）。
+        这里只检查顶层包是否能被 Python 导入系统发现。`build_retrieval_stack`
+        会另起后台线程实际导入依赖，并在完成前把健康状态保持为检查中，
+        这样启动不会被重量级导入阻塞，也不会因仅仅发现包文件而谎报 ready。
+        模型权重仍由首次真实 encode 懒加载；这里只记录异常类型名，不记录
+        可能含路径或连接信息的异常全文。
         """
         if self._model is not None:
             return None
+        # Avoid executing the heavyweight optional dependency tree on the API
+        # startup thread. The complete importability check runs asynchronously.
         try:
-            import sentence_transformers  # noqa: F401
-        except ImportError as error:
+            if importlib.util.find_spec("sentence_transformers") is None:
+                return "missing_dependency:ModuleNotFoundError"
+        except (ImportError, ValueError) as error:
             return f"missing_dependency:{type(error).__name__}"
         return None
+
+    def probe_runtime_async(self, on_result: Callable[[str | None], None]) -> threading.Thread:
+        """Import the optional runtime off the startup thread and report a safe result.
+
+        This verifies import-time dependencies (which `find_spec` cannot verify)
+        without loading model weights. The returned daemon thread never blocks API
+        startup. Retrieval health stays in a pending/unavailable state until the
+        callback reports success or a safe failure reason.
+        """
+
+        def run_probe() -> None:
+            try:
+                importlib.import_module("sentence_transformers")
+            except ImportError as error:
+                result = f"missing_dependency:{type(error).__name__}"
+            except Exception as error:  # noqa: BLE001 - native dependency failures vary
+                result = f"dependency_import_failed:{type(error).__name__}"
+            else:
+                result = None
+            on_result(result)
+
+        worker = threading.Thread(
+            target=run_probe,
+            name="sentence-transformers-startup-probe",
+            daemon=True,
+        )
+        worker.start()
+        return worker
 
     def encode(self, texts: Sequence[str]) -> list[list[float]]:
         self._ensure_model()

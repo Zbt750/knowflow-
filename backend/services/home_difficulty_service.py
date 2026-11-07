@@ -17,7 +17,7 @@ from backend.services.home_recommendation_service import (
     _reject_materialized_daily_plan_mutation,
     _serialize_daily_plan_mutation,
     _session,
-    view,
+    _preview_view,
 )
 from backend.services.learning_task_service import _draft_version
 from backend.services.question_eligibility import question_eligibility
@@ -97,7 +97,7 @@ def adjust_paper_difficulty(
 
     actions = dict(context.get("difficulty_actions") or {})
     if request_key in actions:
-        return {**view(row), "difficulty_changes": actions[request_key]["changes"], "replayed": True}
+        return {**_preview_view(db, row), "difficulty_changes": actions[request_key]["changes"], "replayed": True}
 
     paper = deepcopy(row.draft)
     old_questions = list(paper.get("questions") or [])
@@ -185,4 +185,4 @@ def adjust_paper_difficulty(
     flag_modified(row, "draft")
     flag_modified(row, "context")
     db.flush()
-    return {**view(row), "difficulty_changes": changes, "draft_version": _draft_version(row)}
+    return {**_preview_view(db, row), "difficulty_changes": changes, "draft_version": _draft_version(row)}

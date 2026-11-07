@@ -65,8 +65,14 @@ def question_availability(db: Session, *, now: datetime, subject: str | None = N
         question_filters.append(Question.question_type == question_type)
     if excluded_questions:
         question_filters.append(Question.id.not_in(excluded_questions))
-    questions = list(db.scalars(select(Question).options(*question_read_options()).where(*question_filters)
+    questions = list(db.scalars(select(Question).options(
+        *question_read_options(defer_auto_review_snapshot=True)).where(*question_filters)
         .order_by(Question.created_at, Question.id)))
+    review_events = {str(question.auto_review_event_id): question.current_auto_review
+        for question in questions if question.auto_review_event_id and question.current_auto_review is not None}
+    from backend.services.auto_question_review import preload_uncached_auto_review_snapshots
+    preload_uncached_auto_review_snapshots(db,
+        [(question, node_by_id.get(question.kp_id)) for question in questions], review_events)
     if plan_id is None:
         today = now.astimezone(SHANGHAI).date().isoformat()
         current_plan = db.scalar(select(DailyPlan).where(DailyPlan.study_date == today))
@@ -89,7 +95,7 @@ def question_availability(db: Session, *, now: datetime, subject: str | None = N
         if node is None:
             continue
         groups[node.id].append(question)
-        assessment = question_eligibility(question, node)
+        assessment = question_eligibility(question, node, auto_review_events=review_events)
         assessments_by_node[node.id][question.id] = assessment
         if assessment.practice_eligible:
             from backend.services.question_admission import formal_use_allowed

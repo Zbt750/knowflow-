@@ -32,6 +32,8 @@ class ErrorResponse(BaseModel):
 # 唯一错误响应契约：{"error": {"code": ..., "message": ...}}
 # 前端按 code 分支，不解析 message 的自然语言文案。
 SAFE_MESSAGES: dict[str, str] = {
+    "paper_budget_confirmation_required": "调整后的剩余用时超出预算，请先明确接受超预算调整；正式卷尚未改变。",
+    "paper_budget_unknown": "部分题目缺少可靠的冻结版本用时，无法核验调整预算；正式卷尚未改变。",
     "home_selection_unavailable": "选题校验暂时不可用，原方案已保留；本次未生成正式试卷。",
     "home_difficulty_candidates_insufficient": "当前题库没有足够的相邻难度候选题，整卷保持不变；可调整范围或稍后重试。",
     "home_difficulty_constraint_failed": "难度替换未满足题量或覆盖约束，整卷保持不变。",

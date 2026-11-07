@@ -90,9 +90,13 @@ def health(
         recorded = getattr(request.app.state, "retrieval_error", None)
         retrieval_reason = recorded.split(":", 1)[0] if recorded else "stack_not_built"
     else:
-        available = bool(getattr(stack, "available", True))
+        snapshot = getattr(stack, "availability_snapshot", None)
+        if callable(snapshot):
+            available, retrieval_reason = snapshot()
+        else:
+            available = bool(getattr(stack, "available", True))
+            retrieval_reason = getattr(stack, "unavailable_reason", None)
         retrieval = "ready" if available else "unavailable"
-        retrieval_reason = getattr(stack, "unavailable_reason", None)
     return HealthResponse(
         status="ok",
         database="connected",

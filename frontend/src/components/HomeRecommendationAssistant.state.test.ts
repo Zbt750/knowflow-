@@ -4,8 +4,8 @@ import {mountStateComponent,all,text,flush,deferred,type Node} from './stateTest
 import {ApiError} from '../api/client';
 import {homeStudyDay,homeDayKey,homeDayTitle} from '../lib/homeDailyConversation';
 import type {HomePreview} from '../api/homeRecommendation';
-const mocks=vi.hoisted(()=>({system:vi.fn(),recover:vi.fn(),adjust:vi.fn(),confirm:vi.fn(),list:vi.fn(),history:vi.fn(),create:vi.fn(),stream:vi.fn()}));
-vi.mock('../api/homeRecommendation',()=>({readHomeSystemRecommendation:mocks.system,recoverHomePreview:mocks.recover,adjustHomePreview:mocks.adjust,confirmHomePreview:mocks.confirm}));
+const mocks=vi.hoisted(()=>({system:vi.fn(),recover:vi.fn(),adjust:vi.fn(),confirm:vi.fn(),list:vi.fn(),history:vi.fn(),create:vi.fn(),stream:vi.fn(),difficulty:vi.fn()}));
+vi.mock('../api/homeRecommendation',()=>({readHomeSystemRecommendation:mocks.system,recoverHomePreview:mocks.recover,adjustHomePreview:mocks.adjust,confirmHomePreview:mocks.confirm,adjustHomeDifficulty:mocks.difficulty}));
 vi.mock('../api/chat',()=>({listChatSessions:mocks.list,fetchChatMessages:mocks.history,createChatSession:mocks.create,streamChatAnswer:mocks.stream}));
 vi.mock('./MarkdownContent.vue',()=>({default:{props:['text'],setup:(p:{text:string})=>()=>h('div',p.text)}}));
 vi.mock('./StudyMascot.vue',()=>({default:{setup:()=>()=>h('i')}}));
@@ -474,4 +474,36 @@ it('undo and redo controls send the current version and never call formal confir
  await (button(r,'重做').props.onClick as()=>Promise<void>)();await flush();
  expect(mocks.adjust).toHaveBeenLastCalledWith(expect.objectContaining({action:'redo',expected_version:undone.draft_version}));
  expect(mocks.confirm).not.toHaveBeenCalled();
+});
+
+it('prompts for newly selected allocated topics even outside original recommendations',async()=>{
+ const current=task();current.context.system_recommendations=[];
+ current.context.required_graduation_set_transition_ids=['allocated-child'];
+ mocks.recover.mockResolvedValue(current);const consent=vi.fn(()=>true);vi.stubGlobal('window',{confirm:consent,addEventListener:vi.fn(),removeEventListener:vi.fn()});
+ mocks.confirm.mockResolvedValue({...current,receipt:{plan_id:'p1'}});
+ const r=await mounted();await (button(r,'确认并生成').props.onClick as()=>Promise<void>)();await flush();
+ expect(consent).toHaveBeenCalledOnce();
+ expect(mocks.confirm).toHaveBeenCalledWith('one',expect.objectContaining({confirm_legacy_set_transition_ids:['allocated-child']}));
+});
+it('declining the newly selected topic transition creates no formal paper',async()=>{
+ const current=task();current.context.system_recommendations=[];
+ current.context.required_graduation_set_transition_ids=['allocated-child'];
+ mocks.recover.mockResolvedValue(current);vi.stubGlobal('window',{confirm:vi.fn(()=>false),addEventListener:vi.fn(),removeEventListener:vi.fn()});
+ const r=await mounted();await (button(r,'确认并生成').props.onClick as()=>Promise<void>)();await flush();
+ expect(mocks.confirm).not.toHaveBeenCalled();expect(button(r,'确认并生成').props.disabled).toBe(false);
+});
+it('changed transition requirements invalidate consent even with unchanged draft version',async()=>{
+ const current=task();current.context.required_graduation_set_transition_ids=['first'];
+ mocks.recover.mockResolvedValueOnce(current).mockResolvedValueOnce({...current,context:{...current.context,required_graduation_set_transition_ids:['second']}});
+ vi.stubGlobal('window',{confirm:vi.fn(()=>true),addEventListener:vi.fn(),removeEventListener:vi.fn()});const r=await mounted();
+ await (button(r,'确认并生成').props.onClick as()=>Promise<void>)();await flush();
+ expect(mocks.confirm).not.toHaveBeenCalled();expect(text(r)).toContain('预览已更新');
+});
+
+it('difficulty feedback uses the public count while question references remain hidden',async()=>{
+ const current=task();mocks.recover.mockResolvedValue(current);
+ mocks.difficulty.mockResolvedValue({...current,difficulty_change_count:2});
+ const r=await simpleMounted();await (button(r,'提高难度').props.onClick as()=>Promise<void>)();await flush();
+ expect(mocks.difficulty).toHaveBeenCalledOnce();expect(text(r)).toContain('已替换 2 道题');
+ expect(text(r)).not.toContain('没有可替换');expect(text(r)).not.toContain('合成题');
 });

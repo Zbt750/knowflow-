@@ -159,6 +159,7 @@ python -m alembic check        # 期望 No new upgrade operations detected.
 
 | 命令 | 作用 |
 |---|---|
+| `启动服务.bat` | 双击启动本地开发服务，全部就绪后打开今日学习页 |
 | `scripts\start-dev.cmd` | 启动 PostgreSQL + 后端 + 前端，确认就绪后返回 |
 | `scripts\stop-dev.cmd` | 停止全部服务 |
 | `scripts\status.cmd` | 查看服务状态、今日学习、每个叶子的毕业条件缺口 |

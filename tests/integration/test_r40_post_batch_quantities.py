@@ -163,7 +163,14 @@ def test_each_topic_quantity_is_applied_once_after_explicit_confirmation(client,
             assert len(targets)==max(0,delta)
         assert all(db.get(PracticeItem,item_id).removed_at is None for item_id in originals)
     say(client,sid,ctx,'确认调整')
+    confirmation=reply(session_factory,sid)
+    if pending['workload']['requires_confirmation']:
+        assert confirmation.metadata_['paper_adjustment']['receipt'] is None
+        assert '超出预算' in confirmation.content
+        assert business_rows(session_factory)==after
+        say(client,sid,ctx,'确认超预算调整')
     receipt=reply(session_factory,sid).metadata_['paper_adjustment']['receipt']
+    assert receipt,reply(session_factory,sid).content
     assert receipt['plan_id']==str(ctx.daily_plan_id) and receipt['total_count']==5+sum(deltas)
     with session_factory() as db:
         rows=list(db.scalars(select(PracticeItem).where(PracticeItem.plan_id==ctx.daily_plan_id,PracticeItem.removed_at.is_(None))))
@@ -328,3 +335,24 @@ def test_append_does_not_silently_bind_preexisting_legacy_unbound_items(client,s
     assert rejected.json()['error']['code']=='graduation_set_binding_missing_for_started_learner'
     assert business_rows(session_factory)==before
     with session_factory() as db:assert db.get(KpState,kp_id) is None
+
+@pytest.mark.parametrize('action,delta',[('增加',1),('减少',-1),('替换',0)])
+def test_adjustment_receipt_keeps_real_before_and_after_counts_on_replay(client,session_factory,batch_bank,action,delta):
+    sid,ctx,topics,originals=batch_bank
+    def active_ids():
+        with session_factory() as db:
+            return set(db.scalars(select(PracticeItem.id).where(PracticeItem.plan_id==ctx.daily_plan_id,PracticeItem.removed_at.is_(None))))
+    before=active_ids()
+    say(client,sid,ctx,f'{action}一道批量甲节点的题目。')
+    assert active_ids()==before
+    say(client,sid,ctx,'确认调整')
+    first=reply(session_factory,sid)
+    receipt=first.metadata_['paper_adjustment']['receipt']
+    after=active_ids()
+    assert receipt['before_count']==len(before)
+    assert receipt['total_count']==len(after)==len(before)+delta
+    assert receipt['before_count']-len(receipt['removed_item_ids'])+receipt['added_count']==receipt['total_count']
+    assert f'原有{len(before)}道' in first.content and f'当前共{len(after)}道' in first.content
+    say(client,sid,ctx,'确认调整')
+    repeated=reply(session_factory,sid).metadata_['paper_adjustment']['receipt']
+    assert repeated==receipt and active_ids()==after

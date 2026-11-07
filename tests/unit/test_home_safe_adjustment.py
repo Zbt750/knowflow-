@@ -3,7 +3,11 @@ from uuid import uuid4
 from backend.services import home_recommendation_service as home
 
 def test_failed_adjustment_recovers_same_session_active_paper_without_mutating_rows(monkeypatch):
-    sid=uuid4();base=SimpleNamespace(id=uuid4(),session_id=sid,status='ready',draft={'questions':[{'question_id':'base'}]},context={'home_recommendation':True,'bank_scope':{'scope_mode':'append'}},goal='系统推荐',metrics={},message='原方案',error_code=None,budget_minutes=90)
+    sid=uuid4();node=uuid4();base=SimpleNamespace(id=uuid4(),session_id=sid,status='ready',draft={'selected_kp_ids':[str(node)],'questions':[{'question_id':'base'}]},context={'home_recommendation':True,'bank_scope':{'scope_mode':'append'}},goal='系统推荐',metrics={},message='原方案',error_code=None,budget_minutes=90)
+    def policies(db, ids, *, include_missing):
+        assert ids==[node] and include_missing
+        return {node:SimpleNamespace(graduation_binding_pending=False)},None
+    monkeypatch.setattr('backend.services.study_read_context.policies_for_nodes',policies)
     failed=SimpleNamespace(session_id=sid,status='failed',context={'fallback_task_id':str(base.id)},message='检索异常')
     monkeypatch.setattr(home,'_draft_version',lambda r:'v')
     result=home._result_view(SimpleNamespace(get=lambda *a:base),failed)

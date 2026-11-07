@@ -41,6 +41,16 @@ class RetrievalStack:
     available: bool = True
     # 探活失败的原因（只含状态与异常类型名，不含路径/连接串/密钥）。
     unavailable_reason: str | None = None
+    availability_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def set_availability(self, available: bool, reason: str | None) -> None:
+        with self.availability_lock:
+            self.unavailable_reason = reason
+            self.available = available
+
+    def availability_snapshot(self) -> tuple[bool, str | None]:
+        with self.availability_lock:
+            return self.available, self.unavailable_reason
 
     def rebuild_keyword_index(self, session: Session) -> int:
         """从数据库全量重建关键词索引。
@@ -89,14 +99,22 @@ def build_retrieval_stack(
         keyword_index=KeywordIndex(),
         reranker=build_reranker(reranker_model, cache_dir=cache),
     )
-    # 启动期探活：把「检索到底能不能用」变成装配阶段就知道的事实。
-    # 这里只探依赖，不加载模型（加载代价大），失败也只记下来、不阻止进程启动 ——
-    # 降级可用性是这个系统的既定设计，但**降级必须被如实报告**。
+    # 快速缺包检查在启动线程执行；存在时，再用后台线程验证真实依赖导入。
+    # 依赖导入完成前保持 unavailable，避免健康检查把「包文件存在」误报成 ready。
+    # 该检查不加载模型权重，也不阻塞学习服务启动。
     reason = embedder.probe()
     if reason is not None:
-        stack.available = False
-        stack.unavailable_reason = reason
+        stack.set_availability(False, reason)
         stack.startup_warnings.append(f"retrieval_degraded:{reason}")
+    else:
+        stack.set_availability(False, "dependency_probe_pending")
+
+        def complete_probe(result: str | None) -> None:
+            stack.set_availability(result is None, result)
+            if result is not None:
+                stack.startup_warnings.append(f"retrieval_degraded:{result}")
+
+        embedder.probe_runtime_async(complete_probe)
     return stack
 
 

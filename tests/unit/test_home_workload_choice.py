@@ -7,15 +7,21 @@ from backend.services import home_recommendation_service as home
 
 
 def rows():
-    sid=uuid4();base=NS(id=uuid4(),session_id=sid,status='ready',draft={'questions':[{'question_id':'base'}]},
+    sid=uuid4();node=str(uuid4());base=NS(id=uuid4(),session_id=sid,status='ready',draft={'selected_kp_ids':[node],'questions':[{'question_id':'base'}]},
         context={'home_recommendation':True},goal='系统推荐',metrics={},message='原方案',error_code=None,budget_minutes=90)
-    candidate=NS(id=uuid4(),session_id=sid,status='ready',draft={'questions':[{'question_id':'base'},{'question_id':'new'}]},
+    candidate=NS(id=uuid4(),session_id=sid,status='ready',draft={'selected_kp_ids':[node],'questions':[{'question_id':'base'},{'question_id':'new'}]},
         context={'home_recommendation':True,'workload_pending':True,'fallback_task_id':str(base.id),
                  'workload':{'requires_confirmation':True}},goal='追加一题',metrics={},message='预计超出预算',error_code=None,budget_minutes=90)
     return base,candidate
 
 
+def read_only_policies(db, ids, *, include_missing):
+    assert include_missing and all(isinstance(key,UUID) for key in ids)
+    return {key:NS(graduation_binding_pending=False) for key in ids},None
+
+
 def test_pending_workload_does_not_replace_the_active_paper_or_become_failure(monkeypatch):
+    monkeypatch.setattr('backend.services.study_read_context.policies_for_nodes',read_only_policies)
     base,candidate=rows();monkeypatch.setattr(home,'_draft_version',lambda row:str(row.id))
     result=home._result_view(NS(get=lambda *a:base),candidate)
     assert result['task_id']==str(base.id) and result['draft']==base.draft
@@ -52,6 +58,7 @@ def test_first_turn_fallback_insert_order_does_not_hide_the_budget_choice():
 
 @pytest.mark.parametrize('accept',[True,False])
 def test_workload_decision_preserves_exact_candidate_and_never_calls_formal_creation(monkeypatch,accept):
+    monkeypatch.setattr('backend.services.study_read_context.policies_for_nodes',read_only_policies)
     base,candidate=rows();now=datetime.now(timezone.utc)
     candidate.context.update(study_date=now.astimezone(home.SHANGHAI).date().isoformat(),expires_at=(now+timedelta(minutes=30)).isoformat())
     candidate.draft={'selected_kp_ids':[str(uuid4())], 'questions':[

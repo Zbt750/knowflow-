@@ -46,6 +46,17 @@ def test_pending_workload_draft_remains_editable_without_losing_quantity_changes
     initial = client.post(ROOT, json={'session_id':home['session_id'], 'request_key':uuid4().hex,
         'action':'default', 'goal':'', 'selected_kp_ids':[node_id], 'budget_minutes':10}).json()
     assert initial['status'] == 'ready', initial
+    # A manual scope may itself exceed ten minutes when the canonical
+    # recommendation already allocated this topic. Establish an accepted
+    # baseline before testing dismissal of later unaccepted revisions.
+    with session_factory() as db:
+        initial_pending=bool(db.get(LearningTask,UUID(initial['task_id'])).context.get('workload_pending'))
+    if initial_pending:
+        accepted=client.post(ROOT,json={'session_id':home['session_id'],'request_key':uuid4().hex,
+            'action':'accept_workload','goal':'','target_task_id':initial['task_id'],
+            'expected_version':initial['draft_version']})
+        assert accepted.status_code==200,accepted.text
+        initial=accepted.json()
     count = initial['draft']['question_count']
     # The adaptive baseline may already allocate all five frozen fixture
     # questions. Add two explicitly synthetic qualified spare questions after
@@ -70,6 +81,7 @@ def test_pending_workload_draft_remains_editable_without_losing_quantity_changes
         'expected_version':second['draft_version']})
     assert dismissed.status_code == 200, dismissed.text
     assert dismissed.json()['draft']['question_count'] == count
+    assert dismissed.json()['draft']['selected_kp_ids']==initial['draft']['selected_kp_ids']
     after = formal_rows(session_factory)
     assert after['daily_plans'] == after['practice_items'] == 0
 
@@ -669,9 +681,18 @@ def test_cross_subject_replacement_uses_six_low_history_408_topics_and_keeps_mat
     assert second.status_code==200,second.text
     revised=second.json()
     assert revised['status']=='ready',revised
-    assert revised['draft']['selected_kp_ids']==proposal['draft']['selected_kp_ids']
+    assert len(revised['draft']['selected_kp_ids'])==6
+    assert set(revised['draft']['selected_kp_ids']).isdisjoint(baseline_ids)
     assert all(node['assigned_count']>=1 for node in revised['draft']['scope_nodes'])
+    with session_factory() as db:
+        from backend.models.learning_task import LearningTask
+        stored=db.get(LearningTask,UUID(revised['task_id']))
+        assert all(topic['attempt_count']==0 for topic in stored.context['subject_plan']['topics'])
     assert '安排6个知识点' in revised['message'] and '尚未生成正式今日卷' in revised['message']
+    with session_factory() as db:
+        from backend.models.learning import QuestionAttempt
+        assert db.scalar(select(func.count()).select_from(QuestionAttempt).where(
+            QuestionAttempt.kp_id.in_([UUID(value) for value in revised['draft']['selected_kp_ids']])))==0
     after=formal_rows(session_factory)
     assert after['daily_plans']==before['daily_plans']==0
     assert after['practice_items']==before['practice_items']==0

@@ -154,7 +154,7 @@ onMounted(() => void refresh());
         <h2>本地服务</h2>
         <dl>
           <div><dt>数据库</dt><dd>{{ health.database === "connected" ? "已连接" : "不可用" }}</dd></div>
-          <div><dt>资料检索</dt><dd>{{ health.retrieval === "ready" ? "可用" : "不可用" }}</dd></div>
+          <div><dt>资料检索</dt><dd>{{ health.retrieval === "ready" ? "可用" : health.retrieval_reason === "dependency_probe_pending" ? "检查中" : "不可用" }}</dd></div>
           <div><dt>后台处理</dt><dd>{{ health.worker === "running" ? "运行中" : "未运行" }}</dd></div>
           <div><dt>运行环境</dt><dd>{{ health.environment || "未知" }}</dd></div>
         </dl>

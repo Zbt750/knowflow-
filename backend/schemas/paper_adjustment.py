@@ -24,3 +24,4 @@ class PaperAdjustmentConfirmation(BaseModel):
     session_id: UUID
     draft_version: str = Field(pattern=r'^[0-9a-f]{64}$')
     confirm_viewed: bool = Field(default=False, strict=True)
+    accept_budget_overrun: bool = Field(default=False, strict=True)

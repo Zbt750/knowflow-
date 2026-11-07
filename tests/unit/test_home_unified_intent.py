@@ -104,6 +104,34 @@ def test_multi_topic_count_edit_is_atomic_and_defaults_unspecified_few_to_one():
     assert trace['source']=='rule' and trace['model_calls']==0
 
 
+def test_longest_matching_topic_alias_wins_over_parent_topic_name():
+    current={
+        'selected_kp_ids':['os-parent','os-leaf','disk'],
+        'scope_nodes':[
+            {'kp_id':'os-parent','name':'操作系统'},
+            {'kp_id':'os-leaf','name':'操作系统概念与发展'},
+            {'kp_id':'disk','name':'磁盘调度'},
+        ],
+        'questions':[],
+    }
+    intent=parse_rule('增加一道磁盘调度的题目，增加一道操作系统概念与发展的题目。',current)
+    assert intent.operation=='topic_count'
+    assert intent.refs==['k3','k2'] and intent.deltas==[1,1]
+
+
+def test_duplicate_equally_specific_topic_aliases_still_clarify():
+    current={
+        'selected_kp_ids':['os-a','os-b'],
+        'scope_nodes':[
+            {'kp_id':'os-a','name':'操作系统'},
+            {'kp_id':'os-b','name':'操作系统'},
+        ],
+        'questions':[],
+    }
+    intent=parse_rule('增加一道操作系统的题目。',current)
+    assert intent.operation=='clarify'
+
+
 def test_followup_count_correction_reuses_the_named_topic():
     intent,trace=resolve('帮我减少两道洛必达法则的题目，减少1道吧。',paper(),
         lambda:pytest.fail('explicit same-message correction should be rule parsed'))
@@ -120,6 +148,18 @@ def test_cross_subject_replacement_is_a_versioned_proposal_intent(text):
     assert intent.operation=='subject_plan' and intent.terms=='408'
     assert intent.quantity==6 and intent.minutes==60
     assert trace['source']=='rule' and trace['model_calls']==0
+
+
+def test_explicit_unattempted_scope_is_a_hard_subject_plan_constraint():
+    unseen, trace = resolve(
+        '根据我没有做过的知识点安排六个408知识点，60分钟左右。', paper(),
+        lambda: pytest.fail('explicit unseen scope is parsed deterministically'))
+    low_history, _ = resolve(
+        '安排六个408知识点，60分钟左右。', paper(),
+        lambda: pytest.fail('ordinary subject plan is parsed deterministically'))
+    assert unseen.operation == 'subject_plan' and unseen.unattempted_only is True
+    assert low_history.operation == 'subject_plan' and low_history.unattempted_only is False
+    assert trace['source'] == 'rule' and trace['model_calls'] == 0
 
 
 def test_check_today_arrangement_is_read_only_summary_intent():

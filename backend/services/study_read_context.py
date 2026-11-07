@@ -4,6 +4,8 @@ All policy decisions still go through policy_for_node. The context only supplies
 the exact rows/activity facts that the single-node path would query separately.
 """
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 from uuid import UUID
 
 from sqlalchemy import select
@@ -12,11 +14,15 @@ from sqlalchemy.orm import selectinload
 from backend.models.learning import (
     KpMasteryPolicy, KpState, KpGraduationQuestionSetVersion,
     LearningEvent, PracticeItem, Question, QuestionAttempt, QuestionVersion,
+    QuestionAutoReviewEvent,
 )
 
 
-def question_read_options():
-    return (selectinload(Question.current_auto_review),
+def question_read_options(*, defer_auto_review_snapshot: bool = False):
+    auto_review = selectinload(Question.current_auto_review)
+    if defer_auto_review_snapshot:
+        auto_review = auto_review.defer(QuestionAutoReviewEvent.audit_snapshot)
+    return (auto_review,
             selectinload(Question.current_answer_verification))
 
 
@@ -28,6 +34,46 @@ class PolicyReadContext:
     activity_ids: set
     # Immutable member identity pairs, not full question bodies/audit JSON.
     content_versions: dict
+
+
+_SHARED_POLICY_READ_CONTEXT: ContextVar[dict | None] = ContextVar(
+    "naiwa_shared_policy_read_context", default=None)
+
+
+@contextmanager
+def shared_policy_read_context(db):
+    """Reuse exact learner-policy rows across a single read-only request.
+
+    Homepage recommendation, inventory, and draft-paper reads overlap heavily
+    in their knowledge-point scopes. This request-local context loads only new
+    IDs on expansion and then serves subset lookups from the same ORM snapshot.
+    It is never installed for write endpoints or shared between sessions.
+    """
+    state={"db":db,"ids":set(),"context":PolicyReadContext({}, {}, {}, set(), {})}
+    token=_SHARED_POLICY_READ_CONTEXT.set(state)
+    try:
+        yield
+    finally:
+        _SHARED_POLICY_READ_CONTEXT.reset(token)
+
+
+def _merge_policy_context(target: PolicyReadContext, source: PolicyReadContext) -> None:
+    target.policy_rows.update(source.policy_rows)
+    target.states.update(source.states)
+    target.versions.update(source.versions)
+    target.activity_ids.update(source.activity_ids)
+    target.content_versions.update(source.content_versions)
+
+
+def _policy_read_context_for(db, ids) -> PolicyReadContext:
+    shared=_SHARED_POLICY_READ_CONTEXT.get()
+    if shared is None or shared["db"] is not db:
+        return load_policy_read_context(db,ids)
+    missing=set(ids)-shared["ids"]
+    if missing:
+        _merge_policy_context(shared["context"],load_policy_read_context(db,missing))
+        shared["ids"].update(missing)
+    return shared["context"]
 
 
 def load_policy_read_context(db, kp_ids) -> PolicyReadContext:
@@ -66,6 +112,6 @@ def load_policy_read_context(db, kp_ids) -> PolicyReadContext:
 def policies_for_nodes(db, kp_ids, *, include_missing=False):
     from backend.mastery.storage import policy_for_node
     ids = set(kp_ids)
-    context = load_policy_read_context(db, ids)
+    context = _policy_read_context_for(db, ids)
     return ({kp_id: policy_for_node(db, kp_id, _read_context=context)
              for kp_id in (ids if include_missing else context.policy_rows)}, context)

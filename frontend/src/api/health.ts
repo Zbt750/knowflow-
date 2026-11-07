@@ -21,6 +21,8 @@ export type HealthResponse = {
   database: "connected";
   /** 检索栈状态；后端可能不返回（旧版本），因此可选。 */
   retrieval?: string;
+  /** 检索尚在后台验证导入时返回 pending；依赖失败时只包含安全原因码。 */
+  retrieval_reason?: string | null;
   /** worker 状态；同上。 */
   worker?: string;
   /** 仅报告服务端配置状态，不返回密钥。 */

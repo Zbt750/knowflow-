@@ -156,58 +156,60 @@ def _current_event_matches(question: Question, event: QuestionAutoReviewEvent,
 
 def _current_event_cache_key(question: Question, event: QuestionAutoReviewEvent,
                              node: KnowledgePoint | None) -> tuple[Any, ...] | None:
-    """Key a positive v8 receipt check by immutable version and mapping state.
+    """Key a positive immutable receipt check by version and mapping state.
 
     Automatic-review events are append-only in PostgreSQL and every supported
     Question mutation creates a new QuestionVersion. Including both version
     identity and updated_at means a different content revision cannot reuse an
-    old positive check. This cache stores no eligibility decision and is only
-    used after the full hash/audit check has succeeded once in this process.
+    old positive check. Legacy receipt versions still run their full live
+    structure check on a cache miss; only that successful, content-bound check
+    may be reused. This cache stores no eligibility decision.
     """
     version_id = getattr(question, "current_version_id", None)
-    if event.review_version != AUTO_REVIEW_VERSION or version_id is None:
+    if event.review_version not in SUPPORTED_AUTO_REVIEW_VERSIONS or version_id is None:
         return None
     # Do not reuse a positive cache entry while an ORM object involved in the
     # decision has unflushed changes. Supported Question writes append a new
     # version during flush; this guard also handles a caller checking a dirty
     # object before that flush happens.
-    try:
-        from sqlalchemy import inspect as sa_inspect
-        from backend.services.question_versions import VERSION_FIELDS
-        question_state = sa_inspect(question)
-        if any(question_state.attrs[name].history.has_changes() for name in VERSION_FIELDS):
+    untracked_question_fingerprint = None
+    untracked_event_fingerprint = None
+    question_state = getattr(question, "_sa_instance_state", None)
+    if question_state is not None:
+        if question_state.modified:
             return None
-        event_state = sa_inspect(event)
-        if any(event_state.attrs[name].history.has_changes() for name in (
-                "event_type", "qualification_class", "review_version",
-                "question_snapshot_sha256", "answer_sha256", "audit_sha256", "audit_snapshot")):
+    else:
+        untracked_question_fingerprint = question_snapshot_sha256(question)
+    event_state = getattr(event, "_sa_instance_state", None)
+    if event_state is not None:
+        if event_state.modified:
             return None
-        if node is not None:
-            node_state_orm = sa_inspect(node)
-            if any(node_state_orm.attrs[name].history.has_changes() for name in (
-                    "code", "subject", "is_active", "is_assessable", "is_reference_only", "children")):
-                return None
-    except Exception:
-        # Lightweight test doubles have no ORM state. For mapped-looking
-        # objects, an inspection failure means we skip the optimization.
-        if hasattr(question, "_sa_instance_state"):
-            return None
+    else:
+        # ORM audit events are database-enforced append-only. For lightweight
+        # non-ORM callers, bind the current audit JSON itself into the key.
+        untracked_event_fingerprint = digest(event.audit_snapshot)
+    node_state_orm = getattr(node, "_sa_instance_state", None) if node is not None else None
+    if node_state_orm is not None and node_state_orm.modified:
+        return None
     if node is None:
         node_state: tuple[Any, ...] = (None,)
     else:
         node_state = (
-            str(node.id), node.code, node.subject, bool(node.is_active),
+            node.id, node.code, node.subject, bool(node.is_active),
             bool(node.is_assessable), bool(node.is_reference_only),
             bool(getattr(node, "children", None)),
         )
     return (
-        str(question.id), str(version_id), getattr(question, "updated_at", None),
-        str(getattr(question, "auto_review_event_id", None)),
+        question.id, version_id, getattr(question, "updated_at", None),
+        untracked_question_fingerprint, untracked_event_fingerprint,
+        getattr(question, "kp_id", None),
+        getattr(question, "auto_review_event_id", None),
         bool(getattr(question, "is_active", True)), bool(getattr(question, "is_hidden", False)),
         getattr(question, "bank_scope", "public"),
-        str(getattr(question, "generation_batch_id", None)),
-        str(event.id), event.event_type, event.review_version, event.qualification_class,
-        event.question_snapshot_sha256, event.answer_sha256, event.audit_sha256,
+        getattr(question, "generation_batch_id", None),
+        event.id, getattr(event, "question_id", None), event.event_type,
+        event.review_version, event.qualification_class, event.question_snapshot_sha256,
+        event.answer_sha256, event.audit_sha256,
         node_state,
     )
 
@@ -227,6 +229,53 @@ def _remember_current_event_match(key: tuple[Any, ...]) -> None:
         _AUTO_REVIEW_MATCH_CACHE.move_to_end(key)
         while len(_AUTO_REVIEW_MATCH_CACHE) > _AUTO_REVIEW_MATCH_CACHE_MAX:
             _AUTO_REVIEW_MATCH_CACHE.popitem(last=False)
+
+
+def preload_uncached_auto_review_snapshots(db: Session, question_nodes: list[tuple[Question, KnowledgePoint]],
+                                           events: dict[str, QuestionAutoReviewEvent]) -> int:
+    """Batch-load deferred immutable audit JSON only for receipt cache misses.
+
+    The recommendation query can join the small receipt identity fields for all
+    questions while deferring the large JSON audit body. Warm positive receipt
+    checks need only immutable hashes; cold or dirty checks still receive the
+    exact stored snapshot in one batch before the full validation runs.
+    """
+    from sqlalchemy import Text, cast, select
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy.orm.attributes import set_committed_value
+
+    pending: dict[UUID, QuestionAutoReviewEvent] = {}
+    for question, node in question_nodes:
+        event_id = getattr(question, "auto_review_event_id", None)
+        if event_id is None:
+            continue
+        event = events.get(str(event_id))
+        if event is None or event.id != event_id:
+            continue
+        key = _current_event_cache_key(question, event, node)
+        if key is not None and _cached_current_event_match(key):
+            continue
+        try:
+            state = sa_inspect(event)
+        except Exception:
+            continue
+        if "audit_snapshot" in state.unloaded:
+            pending[event.id] = event
+    if not pending:
+        return 0
+
+    rows = db.execute(select(
+        QuestionAutoReviewEvent.id,
+        cast(QuestionAutoReviewEvent.audit_snapshot, Text),
+    ).where(QuestionAutoReviewEvent.id.in_(pending))).all()
+    loaded = 0
+    for event_id, snapshot_json in rows:
+        event = pending.get(event_id)
+        if event is None:
+            continue
+        set_committed_value(event, "audit_snapshot", json.loads(snapshot_json))
+        loaded += 1
+    return loaded
 
 
 def current_auto_review(question: Question, node: KnowledgePoint | None = None,

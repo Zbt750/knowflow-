@@ -153,6 +153,7 @@ def test_v8_match_cache_is_bounded_by_question_version_and_node_state(monkeypatc
 def test_legacy_auto_review_receipt_keeps_live_structure_validation(monkeypatch):
     from backend.services import auto_question_review as review
 
+    review._AUTO_REVIEW_MATCH_CACHE.clear()
     question, node, event = _review_receipt_fixture("public-question-auto-review-v7")
     event.audit_snapshot["version"] = event.review_version
     event.audit_sha256 = review.digest(event.audit_snapshot)
@@ -161,6 +162,100 @@ def test_legacy_auto_review_receipt_keeps_live_structure_validation(monkeypatch)
         calls.append(True) or SimpleNamespace(completeness="complete")))
     assert review.current_auto_review(question, node) is event
     assert calls == [True]
+    assert review.current_auto_review(question, node) is event
+    assert calls == [True], "a successful immutable legacy receipt can reuse its full check"
+
+    question.current_version_id = uuid4()
+    assert review.current_auto_review(question, node) is event
+    assert calls == [True, True], "a new QuestionVersion must run legacy validation again"
+
+    event.audit_snapshot['stages']['structure']['status'] = 'FAIL'
+    assert review.current_auto_review(question, node) is None
+    review._AUTO_REVIEW_MATCH_CACHE.clear()
+
+
+def test_public_eligibility_cache_is_version_bound_and_fails_closed_while_dirty(monkeypatch):
+    from sqlalchemy import Boolean, Column, DateTime, String, create_engine
+    from sqlalchemy.orm import DeclarativeBase, Session
+    from backend.services import question_eligibility as eligibility
+
+    class Base(DeclarativeBase):
+        pass
+
+    class BoundQuestion(Base):
+        __tablename__ = "eligibility_cache_questions"
+        id = Column(String, primary_key=True)
+        current_version_id = Column(String, nullable=False)
+        updated_at = Column(DateTime, nullable=True)
+        kp_id = Column(String, nullable=False)
+        question_type = Column(String, nullable=False)
+        question_provenance = Column(String, nullable=False)
+        content_trust = Column(String, nullable=False)
+        source_status = Column(String, nullable=False)
+        answer_provenance = Column(String, nullable=False)
+        answer_reliability = Column(String, nullable=False)
+        content_reviewed_by = Column(String, nullable=True)
+        content_reviewed_at = Column(DateTime, nullable=True)
+        answer_reviewed_by = Column(String, nullable=True)
+        answer_reviewed_at = Column(DateTime, nullable=True)
+        source_attestation_key = Column(String, nullable=True)
+        source_attestation_sha256 = Column(String, nullable=True)
+        answer_attestation_key = Column(String, nullable=True)
+        answer_attestation_sha256 = Column(String, nullable=True)
+        answer_verification_event_id = Column(String, nullable=True)
+        auto_review_event_id = Column(String, nullable=True)
+        is_active = Column(Boolean, nullable=False)
+        is_hidden = Column(Boolean, nullable=False)
+        bank_scope = Column(String, nullable=False)
+        generation_batch_id = Column(String, nullable=True)
+
+    class BoundNode(Base):
+        __tablename__ = "eligibility_cache_nodes"
+        id = Column(String, primary_key=True)
+        code = Column(String, nullable=False)
+        subject = Column(String, nullable=False)
+        is_active = Column(Boolean, nullable=False)
+        is_assessable = Column(Boolean, nullable=False)
+        is_reference_only = Column(Boolean, nullable=False)
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    calls = []
+    marker = object()
+    monkeypatch.setattr(eligibility, "_question_eligibility_uncached",
+        lambda *_args, **_kwargs: (calls.append(True) or marker))
+    try:
+        with Session(engine) as session:
+            question = BoundQuestion(id="q-cache", current_version_id="v1", updated_at=None,
+                kp_id="node-cache", question_type="single_choice", question_provenance="real_exam",
+                content_trust="auto_verified", source_status="verified", answer_provenance="auto_verified",
+                answer_reliability="verified", is_active=True, is_hidden=False, bank_scope="public")
+            node = BoundNode(id="node-cache", code="cache.leaf", subject="math2",
+                is_active=True, is_assessable=True, is_reference_only=False)
+            node.children = []
+            session.add_all([question, node])
+            session.flush()
+
+            first = eligibility.question_eligibility(question, node)
+            assert eligibility.question_eligibility(question, node) is first is marker
+            assert len(calls) == 1
+            assert eligibility.cached_question_eligibility(question, node) is marker
+            assert len(calls) == 1, "warm lookup must not run the content validator again"
+
+            question.current_version_id = "v2"
+            assert eligibility._eligibility_cache_key(question, node, None, None) is None
+            assert eligibility.cached_question_eligibility(question, node) is None
+            session.flush()
+            second = eligibility.question_eligibility(question, node)
+            assert second is marker and len(calls) == 2
+
+            node.is_reference_only = True
+            assert eligibility._eligibility_cache_key(question, node, None, None) is None
+            session.flush()
+            third = eligibility.question_eligibility(question, node)
+            assert third is marker and len(calls) == 3
+    finally:
+        engine.dispose()
 
 
 def test_knowledge_tree_cache_returns_defensive_copy_and_is_invalidated_after_commit():

@@ -41,6 +41,8 @@ from backend.models.learning import (
     LearningEvent,
     PracticeItem,
     Question,
+    QuestionAutoReviewEvent,
+    QuestionAnswerVerificationEvent,
     QuestionAttempt,
     QuestionVersion,
 )
@@ -255,13 +257,52 @@ def _recommendations(db: Session, now: datetime, *, subject: str | None = None,
                      limit: int = 6) -> list[RecommendationItem]:
     """准备页的候选：只推荐可考核叶子，理由来自真实的毕业缺口。"""
     eligible_kp_ids = set()
-    # Each pointer names at most one immutable receipt. Joining these scalar
-    # relationships avoids separate whole-bank receipt hydration queries.
-    from sqlalchemy.orm import joinedload
-    eligible_rows = db.execute(select(Question, KnowledgePoint).options(
-        joinedload(Question.current_auto_review),
-        joinedload(Question.current_answer_verification),
-        selectinload(KnowledgePoint.children)).join(
+    # A warm process already has immutable, version-bound public eligibility
+    # decisions. Read only their key columns on those requests; cold starts and
+    # cache misses still load the full question and run the original validator.
+    from sqlalchemy.orm import joinedload, load_only, undefer
+    from backend.services.question_eligibility import (
+        cached_question_eligibility, public_eligibility_cache_ready,
+    )
+    warm_eligibility_cache = public_eligibility_cache_ready(db.get_bind())
+    eligibility_columns = (
+        Question.id, Question.current_version_id, Question.updated_at, Question.kp_id,
+        Question.question_type, Question.question_provenance, Question.content_trust,
+        Question.source_status, Question.answer_provenance, Question.answer_reliability,
+        Question.content_reviewed_by, Question.content_reviewed_at,
+        Question.answer_reviewed_by, Question.answer_reviewed_at,
+        Question.source_attestation_key, Question.source_attestation_sha256,
+        Question.answer_attestation_key, Question.answer_attestation_sha256,
+        Question.answer_verification_event_id, Question.auto_review_event_id,
+        Question.is_active, Question.is_hidden, Question.bank_scope,
+        Question.generation_batch_id,
+    )
+    query_options = [
+        joinedload(Question.current_auto_review).load_only(
+            QuestionAutoReviewEvent.id, QuestionAutoReviewEvent.question_id,
+            QuestionAutoReviewEvent.event_type, QuestionAutoReviewEvent.review_version,
+            QuestionAutoReviewEvent.qualification_class,
+            QuestionAutoReviewEvent.question_snapshot_sha256,
+            QuestionAutoReviewEvent.answer_sha256, QuestionAutoReviewEvent.audit_sha256,
+        ).defer(QuestionAutoReviewEvent.audit_snapshot),
+        selectinload(KnowledgePoint.children),
+    ]
+    if warm_eligibility_cache:
+        query_options.insert(0, load_only(*eligibility_columns))
+        query_options.append(joinedload(Question.current_answer_verification).load_only(
+            QuestionAnswerVerificationEvent.id, QuestionAnswerVerificationEvent.question_id,
+            QuestionAnswerVerificationEvent.event_type,
+            QuestionAnswerVerificationEvent.verification_type,
+            QuestionAnswerVerificationEvent.answer_sha256,
+            QuestionAnswerVerificationEvent.verifier,
+            QuestionAnswerVerificationEvent.created_at,
+        ))
+    else:
+        # The full validator reads reference metadata and hashes on a cold
+        # decision. Keep that receipt eager so cold inventory evaluation cannot
+        # regress into per-question deferred JSON queries.
+        query_options.append(joinedload(Question.current_answer_verification))
+    eligible_rows = db.execute(select(Question, KnowledgePoint).options(*query_options).join(
         KnowledgePoint, KnowledgePoint.id == Question.kp_id).where(
             Question.is_active.is_(True), KnowledgePoint.is_active.is_(True),
             KnowledgePoint.is_assessable.is_(True))).all()
@@ -275,9 +316,39 @@ def _recommendations(db: Session, now: datetime, *, subject: str | None = None,
     review_events = {str(q.auto_review_event_id): q.current_auto_review
                      for q, _ in eligible_rows
                      if q.auto_review_event_id and q.current_auto_review is not None}
+    cached_eligibility = {}
+    full_load_rows = []
+    if warm_eligibility_cache:
+        for question, node in eligible_rows:
+            decision = cached_question_eligibility(
+                question, node, auto_review_events=review_events)
+            if decision is None:
+                full_load_rows.append((question, node))
+            else:
+                cached_eligibility[question.id] = decision
+        if full_load_rows:
+            from sqlalchemy.orm import undefer
+            missed_ids = {question.id for question, _ in full_load_rows}
+            db.execute(select(Question).where(Question.id.in_(missed_ids)).options(
+                undefer("*"),
+                joinedload(Question.current_auto_review).undefer("*").defer(
+                    QuestionAutoReviewEvent.audit_snapshot),
+                joinedload(Question.current_answer_verification).undefer("*"),
+            ).execution_options(populate_existing=True)).scalars().all()
+            review_events = {str(question.auto_review_event_id): question.current_auto_review
+                for question, _ in full_load_rows
+                if question.auto_review_event_id and question.current_auto_review is not None}
+            from backend.services.auto_question_review import preload_uncached_auto_review_snapshots
+            preload_uncached_auto_review_snapshots(db, full_load_rows, review_events)
+    else:
+        from backend.services.auto_question_review import preload_uncached_auto_review_snapshots
+        preload_uncached_auto_review_snapshots(db, eligible_rows, review_events)
     eligible_versions = {}
     for question, node in eligible_rows:
-        if question_eligibility(question, node, auto_review_events=review_events).practice_eligible:
+        decision = cached_eligibility.get(question.id)
+        if decision is None:
+            decision = question_eligibility(question, node, auto_review_events=review_events)
+        if decision.practice_eligible:
             eligible_kp_ids.add(node.id)
             if question.current_version_id:
                 eligible_versions[(str(question.id), str(question.current_version_id))] = str(node.id)
@@ -568,7 +639,12 @@ def read_home_system_recommendation(response: Response, db: Session = Depends(ge
     from backend.db import reset_sql_profile, sql_profile_snapshot
     reset_sql_profile()
     service_started = _time.perf_counter()
-    result = home_recommendation.read_system(db, _recommendations(db, now), now)
+    # public_system deliberately strips learner evidence. Avoid constructing
+    # those private per-topic diagnostics only to discard them on this GET.
+    # Internal draft planning keeps the default evidence-rich representation.
+    from backend.services.study_read_context import shared_policy_read_context
+    with shared_policy_read_context(db):
+        result = home_recommendation.read_system(db, _recommendations(db, now), now, include_evidence=False)
     service_seconds = _time.perf_counter() - service_started
     snap = sql_profile_snapshot()
     response.headers["X-SQL-Count"] = str(snap["count"])

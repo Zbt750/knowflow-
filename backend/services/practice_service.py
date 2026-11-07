@@ -568,11 +568,17 @@ def preview_initial_questions(session: Session, *, selected_kp_ids: list[UUID], 
             if state is not None else _empty_snapshot()
         )
         online_rows = list(session.scalars(select(Question).options(
-            *question_read_options()).where(
+            *question_read_options(defer_auto_review_snapshot=True)).where(
             Question.kp_id == kp_id, Question.is_active.is_(True)
         ).order_by(Question.question_type, Question.id)).all())
-        reference_node = session.get(KnowledgePoint, kp_id).is_reference_only
-        rows = [row for row in online_rows if question_eligibility(row, session.get(KnowledgePoint, kp_id)).practice_eligible]
+        node = session.get(KnowledgePoint, kp_id)
+        review_events = {str(row.auto_review_event_id): row.current_auto_review
+            for row in online_rows if row.auto_review_event_id and row.current_auto_review is not None}
+        from backend.services.auto_question_review import preload_uncached_auto_review_snapshots
+        preload_uncached_auto_review_snapshots(session, [(row, node) for row in online_rows], review_events)
+        reference_node = node.is_reference_only
+        rows = [row for row in online_rows if question_eligibility(
+            row, node, auto_review_events=review_events).practice_eligible]
         if require_active_version:
             active_version_ids = set(session.scalars(select(QuestionVersion.id).where(
                 QuestionVersion.id.in_([row.current_version_id for row in rows

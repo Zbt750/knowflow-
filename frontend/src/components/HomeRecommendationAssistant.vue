@@ -201,26 +201,31 @@ async function changeDifficulty(direction:'harder'|'easier'){
   const result=await adjustHomeDifficulty(taskId,{session_id:id,direction,request_key:crypto.randomUUID()});
   if(session.value!==id)return;
   publish(id,result);
-  const count=(result as HomePreview&{difficulty_changes?:unknown[]}).difficulty_changes?.length??0;
+  const count=result.difficulty_change_count??0;
   difficultyNotice.value=count
     ?`已替换 ${count} 道题：${direction==='harder'?'提高':'降低'}难度；题量、知识点覆盖与时间预算保持不变。`
     :'没有可替换的相邻难度题，整卷保持不变。';
  }catch(e){difficultyNotice.value=errorText(e);}
  finally{difficultyBusy.value=false;}
 }
+function requiredTransitions(task:HomePreview){
+ // Current servers report the allocated leaves; keep recommendation flags only
+ // as a compatibility fallback when that metadata is absent.
+ return [...new Set(task.context.required_graduation_set_transition_ids??task.context.system_recommendations.filter(r=>r.requires_graduation_set_confirmation&&task.draft?.selected_kp_ids.includes(r.kp_id)).map(r=>r.kp_id))].sort();
+}
 async function confirm(){
  if(!checkDay())return;
  const task=preview.value;if(!canConfirm.value||!task?.draft_version)return;
  const workload=task.context.workload;
  if(workload?.requires_confirmation&&!task.context.workload_accepted&&!window.confirm(`追加后共${homePaperCount(task.draft)}道，预计${workload.effective_budget_minutes}分钟，比原预算多${workload.extra_minutes}分钟。题量较大，是否继续生成？`))return;
- const ids=task.context.system_recommendations.filter(r=>r.requires_graduation_set_confirmation&&task.draft?.selected_kp_ids.includes(r.kp_id)).map(r=>r.kp_id);
- if(ids.length&&!window.confirm('这些节点需要绑定当前冻结题集；确认进入既有题集绑定流程？历史作答保留。'))return;
+ const ids=requiredTransitions(task);
+ if(ids.length&&!window.confirm('这些知识点将开始新的考核题集，历史作答仍保留。是否继续？'))return;
  busy.value=true;confirming.value=true;error.value='';const token=generation;
  try{
   const displayed=homePreviewIdentity(task);
   const live=await recoverHomePreview(task.session_id);
   if(token!==generation||displayed!==previewIdentity.value||selectionDirty.value)return;
-  if(!coherentHomePreview(live)||homePreviewIdentity(live)!==displayed||JSON.stringify(live?.draft)!==JSON.stringify(task.draft))throw new Error('预览已更新或已失效，请读取最新预览后重新确认');
+  if(!coherentHomePreview(live)||homePreviewIdentity(live)!==displayed||JSON.stringify(live?.draft)!==JSON.stringify(task.draft)||JSON.stringify(requiredTransitions(live!))!==JSON.stringify(ids))throw new Error('预览已更新或已失效，请读取最新预览后重新确认');
   const result=await confirmHomePreview(task.task_id,{session_id:task.session_id,draft_version:task.draft_version,confirm_legacy_set_transition_ids:ids,...(workload?.requires_confirmation?{accept_workload_increase:true}:{})});
   if(token!==generation)return;publish(task.session_id,result);emit('confirmed');
  }

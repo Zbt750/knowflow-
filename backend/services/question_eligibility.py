@@ -1,7 +1,9 @@
 """One fail-closed decision for entering new practice, independent of answer source."""
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
+from threading import RLock
 from backend.mastery.enums import QuestionType
 
 from backend.models.learning import KnowledgePoint, Question
@@ -12,6 +14,9 @@ from backend.services.question_attestation import has_current_source_attestation
 
 
 KNOWN_QUESTION_TYPES = {kind.value for kind in QuestionType if kind is not QuestionType.EXTERNAL_EXAM}
+_ELIGIBILITY_CACHE_MAX = 16384
+_ELIGIBILITY_CACHE: OrderedDict[tuple, "QuestionEligibility"] = OrderedDict()
+_ELIGIBILITY_CACHE_LOCK = RLock()
 
 
 @dataclass(frozen=True)
@@ -146,16 +151,16 @@ def legacy_question_eligibility(question: Question, node: KnowledgePoint | None 
         elif not node.is_assessable:
             mapping_status = "not_assessable"
             reasons.append("mapping_not_assessable")
+        # current_auto_review(question, node) has already validated the full,
+        # hash-bound mapping receipt, including these exact reference-topic
+        # fields. Re-reading audit_snapshot here is both redundant and can
+        # trigger one deferred JSON SELECT per question on homepage reads.
         elif node.is_reference_only and auto_review_current and (
             auto_review.qualification_class == "exam_curated"
-            and (auto_review.audit_snapshot.get("stages", {}).get("mapping", {}).get("node_code") == node.code)
-            and (auto_review.audit_snapshot.get("stages", {}).get("mapping", {}).get("source_pack_node_code") == node.code)
         ):
             mapping_status = "source_attested_reference_topic"
         elif node.is_reference_only and auto_review_current and (
             auto_review.qualification_class in {"development_original", "exam_variant"}
-            and (auto_review.audit_snapshot.get("stages", {}).get("mapping", {}).get("node_code") == node.code)
-            and (auto_review.audit_snapshot.get("stages", {}).get("mapping", {}).get("generated_node_mapping") is True)
         ):
             # A Codex-authored public original/variant may practice against an
             # exact bound reference-topic leaf. Its own generation record and
@@ -261,9 +266,138 @@ def legacy_question_eligibility(question: Question, node: KnowledgePoint | None 
     )
 
 
-def question_eligibility(question: Question, node: KnowledgePoint | None = None,
-                         *, teaching_enabled: bool | None = None,
-                         auto_review_events: dict | None = None) -> QuestionEligibility:
+def _eligibility_cache_key(question: Question, node: KnowledgePoint | None,
+                           teaching_enabled: bool | None,
+                           auto_review_events: dict | None) -> tuple | None:
+    """Bind a process-local static eligibility result to immutable row versions.
+
+    Learner mastery, attempts, scheduling, and plan state are deliberately not
+    part of QuestionEligibility. Public versioned question and receipt rows are
+    immutable; all mutable admission pointers and node mapping state are bound
+    below. Dirty, detached, personal, and unversioned objects fail closed and
+    use the original evaluator.
+    """
+    if (getattr(question, "bank_scope", "public") != "public"
+            or getattr(question, "generation_batch_id", None)
+            or getattr(question, "current_version_id", None) is None):
+        return None
+    question_state = getattr(question, "_sa_instance_state", None)
+    if question_state is None or question_state.modified:
+        return None
+    if node is None:
+        node_key = None
+    else:
+        node_state = getattr(node, "_sa_instance_state", None)
+        if node_state is None or node_state.modified:
+            return None
+        node_key = (node.id, node.code, node.subject, bool(node.is_active),
+            bool(node.is_assessable), bool(node.is_reference_only), bool(getattr(node, "children", None)))
+
+    try:
+        from sqlalchemy.orm import object_session
+        from sqlalchemy.orm.attributes import NO_VALUE
+        session = object_session(question)
+    except Exception:
+        return None
+    if session is None:
+        return None
+
+    def immutable_event_key(pointer_name: str, relationship_name: str, provided=None):
+        pointer = getattr(question, pointer_name, None)
+        if pointer is None:
+            return None
+        event = provided
+        if event is None:
+            try:
+                event = question_state.attrs[relationship_name].loaded_value
+            except Exception:
+                return NO_VALUE
+            if event is NO_VALUE:
+                return NO_VALUE
+        event_state = getattr(event, "_sa_instance_state", None)
+        if event_state is None or event_state.modified:
+            return NO_VALUE
+        if event.id != pointer:
+            return ("mismatch", event.id)
+        if relationship_name == "current_auto_review":
+            return (event.id, event.question_id, event.event_type, event.review_version,
+                event.qualification_class, event.question_snapshot_sha256,
+                event.answer_sha256, event.audit_sha256)
+        return (event.id, event.question_id, event.event_type, event.verification_type,
+            event.answer_sha256, event.verifier, event.created_at)
+
+    auto_event = None
+    if auto_review_events is not None:
+        auto_event = auto_review_events.get(str(getattr(question, "auto_review_event_id", None)))
+    auto_key = immutable_event_key("auto_review_event_id", "current_auto_review", auto_event)
+    if auto_key is NO_VALUE:
+        return None
+    answer_key = immutable_event_key("answer_verification_event_id", "current_answer_verification")
+    if answer_key is NO_VALUE:
+        return None
+
+    # The engine object distinguishes isolated databases even when their
+    # Question UUIDs happen to overlap. It stays bounded by the LRU below.
+    try:
+        bind = session.get_bind()
+    except Exception:
+        return None
+    return (
+        bind, question.id, question.current_version_id, question.updated_at,
+        question.kp_id, question.question_type, question.question_provenance,
+        question.content_trust, question.source_status, question.answer_provenance,
+        question.answer_reliability, question.content_reviewed_by, question.content_reviewed_at,
+        question.answer_reviewed_by, question.answer_reviewed_at,
+        question.source_attestation_key, question.source_attestation_sha256,
+        question.answer_attestation_key, question.answer_attestation_sha256,
+        question.answer_verification_event_id, question.auto_review_event_id,
+        question.is_active, question.is_hidden, question.bank_scope,
+        question.generation_batch_id, auto_key, answer_key, node_key, teaching_enabled,
+    )
+
+
+def _remember_eligibility(key: tuple, result: QuestionEligibility) -> None:
+    with _ELIGIBILITY_CACHE_LOCK:
+        _ELIGIBILITY_CACHE[key] = result
+        _ELIGIBILITY_CACHE.move_to_end(key)
+        while len(_ELIGIBILITY_CACHE) > _ELIGIBILITY_CACHE_MAX:
+            _ELIGIBILITY_CACHE.popitem(last=False)
+
+
+def public_eligibility_cache_ready(bind, *, minimum_entries: int = 512) -> bool:
+    """Return whether this database has enough warm immutable decisions.
+
+    Callers use this only to choose between a first-read/full-load path and a
+    warm/narrow-load path. A cache miss on the narrow path is still reloaded
+    with the full Question and re-evaluated by the original fail-closed rules.
+    """
+    with _ELIGIBILITY_CACHE_LOCK:
+        return sum(1 for key in _ELIGIBILITY_CACHE if key and key[0] is bind) >= minimum_entries
+
+
+def cached_question_eligibility(question: Question, node: KnowledgePoint | None = None,
+                                *, teaching_enabled: bool | None = None,
+                                auto_review_events: dict | None = None) -> QuestionEligibility | None:
+    """Return a clean, version-bound cached decision without evaluating content.
+
+    This is for read paths that deliberately load only static eligibility key
+    columns. A missing, dirty, detached, personal, or stale object returns
+    ``None`` so the caller can load the complete record and use the ordinary
+    evaluator.
+    """
+    key = _eligibility_cache_key(question, node, teaching_enabled, auto_review_events)
+    if key is None:
+        return None
+    with _ELIGIBILITY_CACHE_LOCK:
+        cached = _ELIGIBILITY_CACHE.get(key)
+        if cached is not None:
+            _ELIGIBILITY_CACHE.move_to_end(key)
+        return cached
+
+
+def _question_eligibility_uncached(question: Question, node: KnowledgePoint | None = None,
+                                   *, teaching_enabled: bool | None = None,
+                                   auto_review_events: dict | None = None) -> QuestionEligibility:
     """Serve one formal public bank and the separate personal practice bank.
 
     Historical release/teaching flags remain in old records for audit but no
@@ -310,6 +444,23 @@ def question_eligibility(question: Question, node: KnowledgePoint | None = None,
         blocking_reasons=tuple(dict.fromkeys((*baseline.blocking_reasons, "public_formal_review_required"))),
         teaching_use=None, objective_feedback_eligible=False, teaching_rule_version=None,
         presentation_label="历史资料记录", explanation_label=None)
+
+
+def question_eligibility(question: Question, node: KnowledgePoint | None = None,
+                         *, teaching_enabled: bool | None = None,
+                         auto_review_events: dict | None = None) -> QuestionEligibility:
+    key = _eligibility_cache_key(question, node, teaching_enabled, auto_review_events)
+    if key is not None:
+        with _ELIGIBILITY_CACHE_LOCK:
+            cached = _ELIGIBILITY_CACHE.get(key)
+            if cached is not None:
+                _ELIGIBILITY_CACHE.move_to_end(key)
+                return cached
+    result = _question_eligibility_uncached(question, node,
+        teaching_enabled=teaching_enabled, auto_review_events=auto_review_events)
+    if key is not None:
+        _remember_eligibility(key, result)
+    return result
 
 
 def is_practice_eligible(question: Question, node: KnowledgePoint | None = None) -> bool:

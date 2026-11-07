@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, text
 from backend.errors import AppError
 from backend.models.chat import ChatSession
-from backend.models.learning import DailyPlan, PracticeItem, Question, QuestionAttempt, LearningEvent
+from backend.models.learning import DailyPlan, PracticeItem, Question, QuestionVersion, QuestionAttempt, LearningEvent
 from backend.models.learning_task import LearningTask
 from backend.services.practice_service import DAILY_PLAN_MATERIALIZATION_LOCK_KEY, append_questions_to_plan
 from backend.services.question_versions import question_version_reference
@@ -65,6 +65,28 @@ def _session(db, session_id):
         raise AppError('chat_session_not_found', status_code=404)
 
 
+def _adjustment_workload(db, items, remove_ids, replacements, budget):
+    """Estimate unfinished work from pinned versions, never mutable labels."""
+    from backend.services.today_append_result import paper_time_estimates
+    removed=set(map(str,remove_ids))
+    # _items also locks historical soft-removed rows for signatures and repeat
+    # exclusion. Those rows are not part of the current workload or count.
+    kept=[item for item in items if item.removed_at is None and str(item.id) not in removed]
+    remaining=paper_time_estimates(db,kept)['remaining_minutes']
+    if remaining is None:
+        raise AppError('paper_budget_unknown',status_code=409)
+    for ref in replacements:
+        version=db.get(QuestionVersion,UUID(str(ref['question_version_id'])))
+        if version is None or version.question_id!=UUID(str(ref['question_id'])) or not version.is_active:
+            raise AppError('learning_task_stale_draft',status_code=409)
+        minutes=version.estimated_minutes
+        if type(minutes) is not int or minutes<=0:
+            raise AppError('paper_budget_unknown',status_code=409)
+        remaining+=minutes
+    return {'budget_minutes':budget,'remaining_minutes':remaining,
+            'excess_minutes':max(0,remaining-budget),'requires_confirmation':remaining>budget}
+
+
 def propose_adjustment(factory, body, *, now):
     with factory.begin() as db:
         _lock_adjustment_workflow(db)
@@ -107,9 +129,10 @@ def propose_adjustment(factory, body, *, now):
             replacements.append(ref.model_dump(mode='json'))
         if len({r['question_id'] for r in replacements}) != len(replacements):
             raise AppError('learning_task_conflict',status_code=409,detail='duplicate_replacements')
+        workload=_adjustment_workload(db,items,body.remove_item_ids,replacements,body.budget_minutes)
         draft={'kind':'paper_adjustment', 'plan_id':str(plan.id), 'signature':_signature(items),
             'remove_item_ids':list(map(str,body.remove_item_ids)), 'replacements':replacements,
-            'states':states, 'expires_at':(now+timedelta(minutes=30)).isoformat()}
+            'states':states,'workload':workload, 'expires_at':(now+timedelta(minutes=30)).isoformat()}
         row=LearningTask(session_id=body.session_id,goal='正式卷受控调整',budget_minutes=body.budget_minutes,
             status='ready',draft=draft,context={'paper_adjustment':True},metrics={})
         db.add(row);db.flush()
@@ -118,6 +141,7 @@ def propose_adjustment(factory, body, *, now):
             old.context={**(old.context or {}),'superseded_by':str(row.id),'superseded_at':now.isoformat()}
             old.message='该待确认方案已被同一会话中的更新方案取代。'
         return {'task_id':str(row.id),'draft_version':_version(draft),'draft':draft,
+            'workload':workload,
             'requires_viewed_confirmation':'viewed' in states.values()}
 
 
@@ -142,20 +166,32 @@ def confirm_adjustment(factory, task_id, body, *, now):
             raise AppError('learning_task_conflict',status_code=409)
         items=_items(db,plan.id)
         if _signature(items)!=draft['signature']:raise AppError('learning_task_stale_draft',status_code=409)
+        before_count=sum(item.removed_at is None for item in items)
         selected=[i for i in items if str(i.id) in draft['remove_item_ids']]
         for item in selected:
             state=_state(db,item)
             if state != draft['states'][str(item.id)]:
                 raise AppError('learning_task_stale_draft',status_code=409)
             require_removable(state,viewed_confirmed=body.confirm_viewed)
-        replacement_ids=[];minutes=0
+        workload=_adjustment_workload(db,items,draft['remove_item_ids'],draft['replacements'],row.budget_minutes)
+        disclosed=draft.get('workload')
+        if disclosed and disclosed['budget_minutes']!=row.budget_minutes:
+            raise AppError('learning_task_stale_draft',status_code=409)
+        if workload['requires_confirmation']:
+            if not disclosed or workload['remaining_minutes']>disclosed['remaining_minutes']:
+                raise AppError('learning_task_stale_draft',status_code=409)
+            if getattr(body,'accept_budget_overrun',False) is not True:
+                raise AppError('paper_budget_confirmation_required',status_code=409)
+        replacement_ids=[]
         for ref in draft['replacements']:
             q=db.get(Question,UUID(ref['question_id']))
             if q is None or question_version_reference(q)!=ref['question_version_id']:
                 raise AppError('learning_task_stale_draft',status_code=409)
-            minutes+=q.estimated_minutes
             replacement_ids.append(q.id)
-        if minutes>row.budget_minutes:raise AppError('learning_task_conflict',status_code=409)
+        # The workload check above covers retained unfinished items and pinned
+        # replacements together, with a separate explicit overrun permission.
+        # A second mutable-question/replacements-only cap would reject that
+        # permission while missing overruns caused by the retained paper.
         try:
             added=append_questions_to_plan(db,plan_id=plan.id,question_ids=replacement_ids,now=now) if replacement_ids else 0
         except ValueError:
@@ -173,9 +209,14 @@ def confirm_adjustment(factory, task_id, body, *, now):
         db.flush()
         active=list(db.scalars(select(PracticeItem).where(PracticeItem.plan_id==plan.id,PracticeItem.removed_at.is_(None))))
         receipt={'task_id':str(row.id),'plan_id':str(plan.id),'removed_item_ids':draft['remove_item_ids'],
-            'added_count':added,'total_count':len(active),'active_item_ids':[str(i.id) for i in active]}
+            'before_count':before_count,'added_count':added,'total_count':len(active),'active_item_ids':[str(i.id) for i in active]}
         from backend.services.today_append_result import paper_time_estimates
         receipt.update(paper_time_estimates(db,active))
+        if receipt['remaining_minutes']!=workload['remaining_minutes']:
+            raise AppError('learning_task_stale_draft',status_code=409)
+        receipt.update(budget_minutes=row.budget_minutes,
+            budget_overrun_minutes=workload['excess_minutes'],
+            budget_overrun_accepted=bool(workload['requires_confirmation'] and getattr(body,'accept_budget_overrun',False) is True))
         if replacement_ids:
             from backend.services.today_append_result import read_append_result
             new_ids=[i.id for i in active if i.question_id in replacement_ids]
@@ -183,5 +224,5 @@ def confirm_adjustment(factory, task_id, body, *, now):
                 item_ids=new_ids,added_count=added)
             if added_receipt is None:raise AppError('learning_task_stale_draft',status_code=409)
             receipt['added_items']=added_receipt['items']
-        row.metrics={'commit':receipt};row.message=f'已移除{len(selected)}道，新增{added}道，当前共{len(active)}道。'
+        row.metrics={'commit':receipt};row.message=f'原有{before_count}道，已移除{len(selected)}道，新增{added}道，调整后共{len(active)}道。'
     return receipt
