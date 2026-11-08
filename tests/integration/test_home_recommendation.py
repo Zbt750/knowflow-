@@ -565,6 +565,36 @@ def test_selector_outage_invalidates_preview_and_reports_failure(client,home,ses
     assert counts(session_factory)==before
 
 
+def test_home_initial_recommendation_database_failure_logs_traceback_and_preserves_old_preview(
+        client,home,session_factory,monkeypatch):
+    from sqlalchemy.exc import OperationalError
+    old=post(client,home,'只练线性代数，90分钟')
+    before=counts(session_factory)
+    from backend.api.routes import study
+    from backend import errors as error_module
+    captured=[]
+    monkeypatch.setattr(error_module.logger,'error',lambda *args,**kwargs:captured.append((args,kwargs)))
+    def unavailable(*args,**kwargs):
+        raise OperationalError('SELECT recommendations',{},OSError('synthetic DB disconnect'))
+    monkeypatch.setattr(study,'_recommendations',unavailable)
+
+    failed=client.get('/api/plans/today/home-recommendation')
+    assert failed.status_code==503,failed.text
+    assert failed.json()['error']['code']=='database_unavailable'
+    assert 'synthetic DB disconnect' not in failed.text
+    assert len(captured)==1
+    exc_info=captured[0][1]['exc_info']
+    assert exc_info[0] is OperationalError and exc_info[2] is not None
+
+    assert counts(session_factory)==before
+    saved=read_home_domain(client,home['session_id'])
+    assert saved['task_id']==old['task_id'] and saved['draft']==old['draft'] and saved['status']=='ready'
+    monkeypatch.undo()
+    confirmed=client.post(f"{ROOT}/{old['task_id']}/confirm",json={
+        'session_id':home['session_id'],'draft_version':old['draft_version']})
+    assert confirmed.status_code==200,confirmed.text
+
+
 def test_explanation_keeps_objective_records_separate_from_self_report(client,home,session_factory,clock):
     # Legitimate answer evidence via the existing formal API, not inserted Attempts.
     t=post(client,home,'只练线性代数，60分钟')

@@ -34,6 +34,7 @@ goto startup_failed
 :startup_failed
 echo.
 echo Startup failed. Check the messages above and these logs:
+echo storage\alembic-dev.log
 echo storage\postgres-dev.log
 echo storage\backend-dev.log
 echo storage\frontend-dev.log

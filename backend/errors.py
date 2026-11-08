@@ -368,5 +368,16 @@ async def http_error_handler(_: Request, exc: HTTPException) -> JSONResponse:
 
 
 async def unexpected_error_handler(_: Request, exc: Exception) -> JSONResponse:
-    logger.error("unexpected API error: %s", type(exc).__name__)
+    # Keep the generic client response deliberately opaque, but preserve the
+    # traceback in the server log. Logging only the class name made an
+    # intermittent 500 impossible to diagnose from the application log.
+    logger.error("unexpected API error: %s", type(exc).__name__,
+                 exc_info=(type(exc), exc, exc.__traceback__))
+    from sqlalchemy.exc import DBAPIError, DisconnectionError, InterfaceError, OperationalError, TimeoutError
+    database_unavailable = isinstance(exc, (
+        OperationalError, InterfaceError, DisconnectionError, TimeoutError,
+    )) or isinstance(exc, DBAPIError) and exc.connection_invalidated
+    if database_unavailable:
+        return JSONResponse(status_code=503, content=AppError("database_unavailable").to_payload(),
+                            headers={"Retry-After": "2"})
     return JSONResponse(status_code=500, content=AppError("internal_error").to_payload())

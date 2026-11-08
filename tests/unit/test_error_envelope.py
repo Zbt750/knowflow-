@@ -1,9 +1,14 @@
 import json
+import asyncio
+import traceback
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from sqlalchemy.exc import OperationalError
+from backend.errors import unexpected_error_handler
 
 from backend.errors import AppError, register_error_handlers
 
@@ -71,3 +76,34 @@ def test_invalid_json_does_not_echo_raw_body(client):
     result = client.post('/body', content='SECRET-PASSWORD-invalid-json', headers={'content-type': 'application/json'})
     assert result.status_code == 422
     assert 'SECRET-PASSWORD' not in result.text
+
+
+def test_unexpected_error_logs_traceback_but_keeps_client_response_safe():
+    try:
+        raise RuntimeError('SECRET-PASSWORD-DO-NOT-RETURN')
+    except RuntimeError as exc:
+        with patch('backend.errors.logger.error') as log_error:
+            response = asyncio.run(unexpected_error_handler(None, exc))
+
+    assert response.status_code == 500
+    payload = json.loads(response.body)
+    assert payload['error']['code'] == 'internal_error'
+    assert 'SECRET-PASSWORD' not in response.body.decode()
+    exc_info = log_error.call_args.kwargs['exc_info']
+    assert exc_info[0] is RuntimeError
+    assert 'SECRET-PASSWORD-DO-NOT-RETURN' in ''.join(traceback.format_exception(*exc_info))
+
+
+def test_database_disconnect_is_retryable_503_and_logs_traceback():
+    try:
+        raise OperationalError('SELECT 1', {}, OSError('connection refused'))
+    except OperationalError as exc:
+        with patch('backend.errors.logger.error') as log_error:
+            response = asyncio.run(unexpected_error_handler(None, exc))
+
+    assert response.status_code == 503
+    assert response.headers['Retry-After'] == '2'
+    payload = json.loads(response.body)
+    assert payload['error']['code'] == 'database_unavailable'
+    assert 'connection refused' not in response.body.decode()
+    assert log_error.call_args.kwargs['exc_info'][0] is OperationalError

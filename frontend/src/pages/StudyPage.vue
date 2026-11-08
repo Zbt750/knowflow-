@@ -355,6 +355,7 @@ const orderedItems = computed(() => [...(active.value?.items ?? [])].sort((a, b)
     : (questionTypeRank[a.question_type] ?? 3) - (questionTypeRank[b.question_type] ?? 3))
   || a.ordinal - b.ordinal,
 ));
+const paperScrollRegion = ref<HTMLElement | null>(null);
 const remainingItems = computed(() => orderedItems.value.filter((item) => !item.completed));
 const wrongItems = computed(() => wrongAnswerItems(orderedItems.value, active.value?.retry_wrong_items ?? []));
 const wrongKpIds = computed(() => new Set(wrongItems.value.map(item=>item.kp_id)));
@@ -367,7 +368,8 @@ function wrongItemNumber(item: PlanItemView): number {
 async function returnToPaper() {
   if(retryItem.value)closeRetry();
   showPicker.value=false;mode.value='paper';
-  await nextTick();document.querySelector('[data-testid="paper-list"]')?.scrollIntoView({block:'start',behavior:'smooth'});
+  await nextTick();
+  if (paperScrollRegion.value) paperScrollRegion.value.scrollTop = 0;
 }
 async function reviewPickerWrong(kpId: string) {
   const item=wrongItems.value.find(row=>row.kp_id===kpId);
@@ -469,7 +471,18 @@ function jumpToPaperItem(id: string): void {
   if (!orderedItems.value.some(item => item.id === id)) return;
   focusItemId.value = id;
   rememberPaperItem(id);
-  document.getElementById("paper-item-" + id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const scrollRegion = paperScrollRegion.value;
+  const target = document.getElementById("paper-item-" + id);
+  if (!scrollRegion || !target || !scrollRegion.contains(target)) return;
+
+  // scrollIntoView() is allowed to scroll every scrollable ancestor, including
+  // the page. Compute the target position relative to the paper viewport and
+  // move only that viewport so the app header and reader controls stay put.
+  const regionTop = scrollRegion.getBoundingClientRect().top + scrollRegion.clientTop;
+  const targetTop = scrollRegion.scrollTop + target.getBoundingClientRect().top - regionTop;
+  // Apply this position immediately. Rapid successive number clicks should not
+  // leave overlapping smooth-scroll animations racing each other.
+  scrollRegion.scrollTop = Math.max(0, targetTop - 8);
 }
 
 async function load(): Promise<boolean> {
@@ -1161,31 +1174,33 @@ onBeforeUnmount(() => {
       </section>
 
       </div>
-      <nav class="mode-switch" data-testid="paper-reading-controls">
-        <button
-          type="button"
-          :class="{ active: mode === 'focus' }"
-          data-testid="mode-focus"
-          @click="mode = 'focus'"
-        >
-          专注模式
-        </button>
-        <button
-          type="button"
-          :class="{ active: mode === 'paper' }"
-          data-testid="full-paper"
-          @click="mode = 'paper'"
-        >
-          阅览全卷
-        </button>
-        <button type="button" data-testid="paper-ask-frog" @click="assistantOpen = true">向奶蛙提问</button>
-        <div v-if="mode === 'paper'" class="paper-reader-numbers" role="navigation" aria-label="全卷题号">
+      <div class="paper-reader-sticky" :class="{ 'paper-reader-sticky--active': mode === 'paper' }">
+        <nav class="mode-switch" data-testid="paper-reading-controls" aria-label="学习模式和操作">
+          <button
+            type="button"
+            :class="{ active: mode === 'focus' }"
+            data-testid="mode-focus"
+            @click="mode = 'focus'"
+          >
+            专注模式
+          </button>
+          <button
+            type="button"
+            :class="{ active: mode === 'paper' }"
+            data-testid="full-paper"
+            @click="mode = 'paper'"
+          >
+            阅览全卷
+          </button>
+          <button type="button" data-testid="paper-ask-frog" @click="assistantOpen = true">向奶蛙提问</button>
+        </nav>
+        <nav v-if="mode === 'paper'" class="paper-reader-numbers" data-testid="paper-reader-numbers" aria-label="全卷题号">
           <button v-for="(item, index) in orderedItems" :key="item.id" type="button" :aria-label="'跳转第 ' + (index + 1) + ' 题'" @click="jumpToPaperItem(item.id)">{{ index + 1 }}</button>
-        </div>
-      </nav>
+        </nav>
+      </div>
 
       <div class="study-active-layout">
-        <div class="study-active-main" data-testid="paper-scroll-region">
+        <div ref="paperScrollRegion" class="study-active-main" data-testid="paper-scroll-region">
       <!-- 专注模式：逐题浏览，允许回看已完成题 -->
       <section
         v-if="mode === 'focus' && currentItem && currentItem.is_external_reference"
@@ -1740,30 +1755,56 @@ onBeforeUnmount(() => {
 
 .study-setup--workbench .study-setup-intro{padding-block:8px;margin-bottom:12px;min-height:0}.study-setup--workbench .study-setup-intro h2{font-size:28px;margin:8px 0}.study-setup--workbench .study-setup-mascot{width:72px;max-height:90px;flex:0 0 72px}.confirmed-home-workbench{min-width:0}.confirmed-home-workbench>header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}@media(max-width:640px){.study-setup--workbench .study-setup-intro h2{font-size:23px}.study-setup--workbench .study-setup-mascot{width:48px;flex-basis:48px}}
 
-/* Keep reader actions outside the independently scrolling paper content. */
-.study-active--paper .mode-switch {
+/* The reader controls and number strip form two explicit sticky rows. The
+   question list below is their only vertical scroll container. */
+.study-active--paper .paper-reader-sticky {
   position: sticky;
   top: var(--topbar-height, 64px);
-  z-index: 5;
-  padding: 10px 0;
+  z-index: 2;
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 0;
+  min-width: 0;
+  padding: 0 0 6px;
   background: var(--surface, #fff);
   border-bottom: 1px solid var(--border);
+}
+.study-active--paper .paper-reader-sticky .mode-switch {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
 }
 .study-active--paper .study-active-main {
+  min-height: 0;
   max-height: calc(100dvh - var(--topbar-height, 64px) - 160px);
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
   scrollbar-gutter: stable;
 }
 .paper-reader-numbers {
   display: flex;
+  align-items: center;
   gap: 6px;
-  width: 100%;
-  max-height: 66px;
-  overflow: auto;
-  padding: 3px 0;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 42px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  padding: 4px 0 2px;
+  white-space: nowrap;
 }
-.paper-reader-numbers button { flex: 0 0 auto; min-width: 36px; }
+.paper-reader-numbers button { flex: 0 0 auto; min-width: 36px; min-height: 32px; }
+.study-active--paper .study-active-main :deep(.paper-item) { scroll-margin-top: 8px; }
 .study-active--paper .study-active-aside .paper-navigation { display: none; }
+@media (max-width: 600px) {
+  .study-active--paper .paper-reader-sticky { padding-bottom: 5px; }
+  .study-active--paper .paper-reader-sticky .mode-switch { gap: 12px; }
+  .study-active--paper .paper-reader-sticky .mode-switch button { min-height: 38px; white-space: nowrap; }
+  .paper-reader-numbers { min-height: 40px; }
+}
 </style>

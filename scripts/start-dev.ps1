@@ -81,7 +81,23 @@ function Get-PgIdentity {
 $pgIdent = Get-PgIdentity
 
 function Test-Port([int]$Port) {
-    return [bool](Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+    # Get-NetTCPConnection may return no rows for a reachable service when the
+    # current Windows session cannot enumerate socket ownership. A loopback
+    # TCP handshake is the readiness question we need here; PID enumeration is
+    # still performed separately before any process could be stopped.
+    $client = New-Object System.Net.Sockets.TcpClient
+    $connect = $null
+    try {
+        $connect = $client.BeginConnect([System.Net.IPAddress]::Loopback, $Port, $null, $null)
+        if (-not $connect.AsyncWaitHandle.WaitOne(750, $false)) { return $false }
+        $client.EndConnect($connect)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($connect) { $connect.AsyncWaitHandle.Close() }
+        $client.Dispose()
+    }
 }
 
 # 端口被监听不等于数据库可用：PostgreSQL 启动过程中会先监听端口，但此时连接会被拒绝
@@ -251,11 +267,46 @@ if (Test-PgReady 5433) {
 }
 
 # ---------------------------------------------------------------------------
+# 1.5/3 数据库结构迁移
+# 数据库可连接只代表 PostgreSQL 活着，不代表当前源码需要的列/约束已经存在。
+# 今日推荐读取 PracticeItem.removed_at；f59e33bc52d8 是软移除字段和历史 FK 保护迁移。
+# helper 会核对 .env、.pgdata/postmaster.pid、数据库身份和 Alembic 版本；不匹配就拒绝升级。
+# ---------------------------------------------------------------------------
+Write-Host '=== 1.5/3 数据库结构 ===' -ForegroundColor Cyan
+$migrationReady = $false
+if ($failed -contains '解释器' -or $failed -contains 'PostgreSQL') {
+    Write-Host '  Python 或 PostgreSQL 尚未就绪，跳过迁移；后端不会启动。' -ForegroundColor Red
+    $failed += '数据库迁移'
+} else {
+    $migrationLog = Join-Path $storageDir 'alembic-dev.log'
+    New-Item -ItemType Directory -Path $storageDir -Force | Out-Null
+    Write-Host '  核对本项目数据库身份并应用缺失迁移…'
+    $migrationExitCode = 1
+    Push-Location $root
+    try {
+        & python 'scripts\upgrade-dev-database.py' *>> $migrationLog
+        $migrationExitCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    if ($migrationExitCode -eq 0) {
+        $migrationReady = $true
+        Write-Host '  数据库结构已确认与当前源码兼容。' -ForegroundColor Green
+    } else {
+        Write-Host '  数据库身份或迁移校验失败；不会启动后端。' -ForegroundColor Red
+        Show-LogTail $migrationLog 30
+        $failed += '数据库迁移'
+    }
+}
+
+# ---------------------------------------------------------------------------
 # 2/3 后端 FastAPI
 # ---------------------------------------------------------------------------
 Write-Host '=== 2/3 后端 FastAPI ===' -ForegroundColor Cyan
-$launchBackend = -not (Test-Port 8000)
-if (-not $launchBackend) {
+$launchBackend = $migrationReady -and -not (Test-Port 8000)
+if (-not $migrationReady) {
+    Write-Host '  因数据库迁移未通过，保持后端不启动。' -ForegroundColor Red
+} elseif (-not $launchBackend) {
     $probe = Get-DevBackendProbe
     if ($probe.Ok) {
         $backendPids = @(Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue |
@@ -308,7 +359,7 @@ if ($launchBackend) {
         -ArgumentList @('/c', ('"' + (Join-Path $root 'scripts\run-backend.cmd') + '"')) `
         -WorkingDirectory $root -WindowStyle Hidden | Out-Null
 }
-if ($failed -notcontains '后端') {
+if ($migrationReady -and $failed -notcontains '后端') {
     $health = Wait-BackendReady
     if ($health.Ok) {
         $backendLabel = $(if ($launchBackend) { '已启动' } else { '健康检查通过' })
