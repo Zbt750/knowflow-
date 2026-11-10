@@ -5,17 +5,38 @@ import pytest
 from backend.services.personal_question_families import (
     BY_NODE_CODE, FAMILIES, VERSION, contract_for, resolve_family, validate_contract,
     build_problem_spec, verify_problem_spec_candidate, supports_difficulty,
-    learning_focus_from_progress, render_problem_spec,
+    learning_focus_from_progress, render_problem_spec, requirement_supported_by_family,
 )
 
 
-def test_registry_has_ten_exact_canonical_targets_and_rejects_name_similarity():
+def test_registry_has_ten_bounded_families_and_only_declared_canonical_node_codes():
     assert len(FAMILIES) == 10
-    assert len(BY_NODE_CODE) == 10
+    declared_node_codes={code for spec in FAMILIES.values() for code in spec.node_codes}
+    assert len(BY_NODE_CODE) == len(declared_node_codes) == 11
+    assert set(BY_NODE_CODE) == declared_node_codes
     assert resolve_family("math.exam.c431f98f817c").family_id == "power_integral"
+    assert resolve_family("math.exam.c5c672022b7f") is resolve_family("math.calculus.limit.lhopital")
     assert resolve_family("TEST_FIXTURE.math.exam.c431f98f817c") is None
     assert resolve_family("unknown", "single_choice") is None
     assert resolve_family("math.exam.fd2f9e3739d9", "fill_blank") is None
+
+
+@pytest.mark.parametrize("requirement", [
+    "给我生成一道洛必达法则的练习题",
+    "根据当前洛必达知识点，给我出一道稍难的极限题，要求只生成一道、答案与解析一致；不确定的内容标明未核验，不加入今日学习。",
+    r"给我生成一道题：计算 lim_{x→0}(e^{3x}-1-3x)/x²",
+    r"计算极限：\lim_{x\to 0}\frac{e^{3x}-1-3x}{x^2}",
+])
+def test_exp_limit_family_accepts_topic_only_or_its_supported_formula(requirement):
+    assert requirement_supported_by_family(requirement, FAMILIES["exp_limit"])
+
+
+@pytest.mark.parametrize("requirement", [
+    "给我生成一道洛必达法则的单选题：求 x 趋于正无穷时 (5x²−3x+1)/(2x²+x−4) 的极限。",
+    r"计算 lim_{x→1}(x^3-1)/(x-1)",
+])
+def test_exp_limit_family_refuses_explicit_formula_outside_its_contract(requirement):
+    assert not requirement_supported_by_family(requirement, FAMILIES["exp_limit"])
 
 
 @pytest.mark.parametrize("spec", FAMILIES.values(), ids=lambda item: item.family_id)

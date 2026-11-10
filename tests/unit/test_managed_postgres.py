@@ -51,6 +51,13 @@ def test_owner_marker_is_stable_and_bound_to_root(manager):
         manager._load_owner()
 
 
+@pytest.mark.parametrize("startup_wait", [29, 901, True])
+def test_startup_wait_is_bounded_before_start(manager, startup_wait):
+    manager.startup_wait_s = startup_wait
+    with pytest.raises(ValueError, match="startup_wait_invalid"):
+        manager.preflight()
+
+
 def test_partial_cluster_not_reinitialized(manager, monkeypatch):
     manager.paths.ensure_data_dirs()
     manager.cluster.mkdir()

@@ -118,6 +118,12 @@ def _verify_limit(stem: str, options, answer) -> dict | None:
     point = _parse(match.group(1) or match.group(2))
     rest = re.split(r"[，,。；;]", stem[match.end():])[0]
     rest = re.sub(r"(?:的值为?|等于|的值是?|结果是?)\s*$", "", rest)
+    # Generated fill-in and choice prompts commonly append an explicit blank
+    # to the mathematical statement (for example ``.../x^2=____``). The
+    # blank is presentation, not part of the expression. Strip only bounded,
+    # terminal answer markers after an equality; never remove arbitrary
+    # formula text or silently turn a contradictory stated value into a pass.
+    rest = re.sub(r"\s*=\s*(?:_{2,}|□{1,}|[?？])\s*$", "", rest)
     expression = _parse(rest)
     if point is None or expression is None:
         return _needs_review("unparseable_expression", "limit")
@@ -285,8 +291,70 @@ DETECTORS = (_verify_limit, _verify_derivative, _verify_implicit, _verify_integr
              _verify_parametric, _verify_multiple_integral, _verify_matrix, _verify_partial)
 
 
-def verify_question(stem: str, options, correct_answer) -> dict:
+def _verify_with_registered_problem_verifier(stem: str, options, correct_answer,
+                                             question_type: str | None) -> dict | None:
+    """Reuse the server's whole-statement allowlisted verifier when applicable.
+
+    Personal question versions used to run a second, weaker text parser here.
+    That parser rejected valid generated LaTeX (notably an answer blank after
+    an exponential limit) even though the production verifier had already
+    derived the unique answer. Keep this fallback bounded to the registered
+    adapters: unsupported output returns ``None`` and proceeds to the legacy
+    exact SymPy parser; no model text is passed to a general-purpose evaluator.
+    """
+    # An explicitly empty option mapping is still a choice question payload,
+    # not a fill-in answer.  The allowlisted whole-statement adapters can
+    # independently derive numeric answers for fill-in items, so letting an
+    # empty choice set fall through as ``fill_blank`` would incorrectly bless
+    # a question with no selectable options.
+    if question_type == "single_choice" and not options:
+        return None
+    if isinstance(options, dict) and not options and question_type is None:
+        return None
+    try:
+        from types import SimpleNamespace
+        from backend.services.quality_verifiers import verify_problem
+
+        kind = question_type or ("single_choice" if isinstance(options, dict) and options else "fill_blank")
+        result = verify_problem(SimpleNamespace(
+            stem=stem, options=options, correct_answer=correct_answer,
+            question_type=kind,
+        ))
+    except Exception:
+        return None
+    if not isinstance(result, dict) or result.get("status") not in {"PASS", "FAIL"}:
+        return None
+    proof = result.get("proof") or {}
+    computed = proof.get("derived_value") or proof.get("derived_answer") or result.get("derived_answer")
+    if result["status"] == "PASS":
+        return {"status": "verified", "engine": "bounded_problem_verifiers",
+                "kind": result.get("adapter", "registered_problem"),
+                "adapter": result.get("adapter"), "reason": "independent_answer_verified",
+                "computed": str(computed) if computed is not None else None,
+                "matches": list(result.get("matching_options") or
+                                 ([result["derived_key"]] if result.get("derived_key") else [])),
+                "proof": proof}
+    reason = result.get("reason", "independent_answer_conflict")
+    # The bounded adapter has already derived the unique mathematically
+    # correct choice; this verdict means the supplied answer key points at a
+    # different choice.  Keep the public verifier reason stable across engines.
+    if reason == "derived_key_conflict":
+        reason = "answer_mismatch"
+    return {"status": "rejected", "engine": "bounded_problem_verifiers",
+            "kind": result.get("adapter", "registered_problem"),
+            "adapter": result.get("adapter"),
+            "reason": reason,
+            "computed": str(computed) if computed is not None else None,
+            "expected_option": result.get("derived_key"),
+            "matches": list(result.get("matching_options") or []),
+            "proof": proof}
+
+
+def verify_question(stem: str, options, correct_answer, *, question_type: str | None = None) -> dict:
     text = str(stem or "")
+    registered = _verify_with_registered_problem_verifier(text, options, correct_answer, question_type)
+    if registered is not None:
+        return registered
     # 语义前置检查：单侧极限/上下限倒置不能被当成普通双侧极限或定积分。
     if re.search(r"左极限|右极限|0\s*\^?\s*[+-]|x\s*→\s*\d+\s*\^?\s*[+-]|x\\to\s*\d+\s*\^?\s*[+-]", text):
         return {"status": "needs_review", "engine": "sympy", "kind": "limit",

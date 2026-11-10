@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import event
 
 from backend.mastery.storage import policy_for_node
-from backend.models.learning import DailyPlan, PracticeItem, KpGraduationQuestionSetVersion
+from backend.models.learning import DailyPlan, LearningEvent, PracticeItem, KpGraduationQuestionSetVersion
 from backend.services.study_read_context import load_policy_read_context
 from backend.services.graduation_question_set import freeze_graduation_question_set
 from tests.integration.test_learning_loop import session_factory, clean_database
@@ -85,6 +85,51 @@ def test_read_context_is_not_reused_after_a_new_request(session_factory, clean_d
         # The next read must see newly created history and keep the existing
         # fail-closed missing-binding guard, not reuse yesterday's facts.
         for kwargs in ({}, {'_read_context': completed}):
+            with pytest.raises(ValueError, match='graduation_set_binding_missing_for_started_learner'):
+                policy_for_node(db, node.id, **kwargs)
+        db.rollback()
+
+
+def test_explicit_non_mastery_events_do_not_mark_an_unstarted_learner_as_started(session_factory, clean_database):
+    from datetime import datetime, timezone
+
+    with session_factory() as db:
+        node, _, questions = make_origin_slice(db)
+        make_questions_distinct(db, questions)
+        freeze_graduation_question_set(db, kp_id=node.id, question_ids=[q.id for q in questions],
+            reason='TEST_FIXTURE: non-mastery audit event is not learning history')
+        db.add(LearningEvent(kp_id=node.id, source_id=None, event_type='paper_item_removed',
+            evidence_level=None, payload={'changes_mastery': False},
+            occurred_at=datetime(2026, 11, 8, tzinfo=timezone.utc),
+            idempotency_key='test-non-mastery-removal-event'))
+        db.flush()
+
+        context = load_policy_read_context(db, [node.id])
+        assert node.id not in context.activity_ids
+        direct = policy_for_node(db, node.id)
+        batched = policy_for_node(db, node.id, _read_context=context)
+        assert direct.graduation_set_version == 1
+        assert asdict(batched) == asdict(direct)
+        db.rollback()
+
+
+def test_real_learning_events_without_false_flag_still_require_binding(session_factory, clean_database):
+    from datetime import datetime, timezone
+
+    with session_factory() as db:
+        node, _, questions = make_origin_slice(db)
+        make_questions_distinct(db, questions)
+        freeze_graduation_question_set(db, kp_id=node.id, question_ids=[q.id for q in questions],
+            reason='TEST_FIXTURE: answer event keeps fail-closed binding guard')
+        db.add(LearningEvent(kp_id=node.id, source_id=None, event_type='answer_submitted',
+            evidence_level='weak', payload={'result': 'wrong'},
+            occurred_at=datetime(2026, 11, 8, tzinfo=timezone.utc),
+            idempotency_key='test-answer-event-requires-binding'))
+        db.flush()
+
+        context = load_policy_read_context(db, [node.id])
+        assert node.id in context.activity_ids
+        for kwargs in ({}, {'_read_context': context}):
             with pytest.raises(ValueError, match='graduation_set_binding_missing_for_started_learner'):
                 policy_for_node(db, node.id, **kwargs)
         db.rollback()

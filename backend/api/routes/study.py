@@ -260,9 +260,10 @@ def _recommendations(db: Session, now: datetime, *, subject: str | None = None,
     # A warm process already has immutable, version-bound public eligibility
     # decisions. Read only their key columns on those requests; cold starts and
     # cache misses still load the full question and run the original validator.
-    from sqlalchemy.orm import joinedload, load_only, undefer
+    from sqlalchemy.orm import joinedload, load_only, selectinload, undefer
     from backend.services.question_eligibility import (
-        cached_question_eligibility, public_eligibility_cache_ready,
+        cached_public_eligibility_from_row, cached_question_eligibility,
+        public_eligibility_cache_ready,
     )
     warm_eligibility_cache = public_eligibility_cache_ready(db.get_bind())
     eligibility_columns = (
@@ -277,81 +278,122 @@ def _recommendations(db: Session, now: datetime, *, subject: str | None = None,
         Question.is_active, Question.is_hidden, Question.bank_scope,
         Question.generation_batch_id,
     )
-    query_options = [
-        joinedload(Question.current_auto_review).load_only(
-            QuestionAutoReviewEvent.id, QuestionAutoReviewEvent.question_id,
-            QuestionAutoReviewEvent.event_type, QuestionAutoReviewEvent.review_version,
-            QuestionAutoReviewEvent.qualification_class,
-            QuestionAutoReviewEvent.question_snapshot_sha256,
-            QuestionAutoReviewEvent.answer_sha256, QuestionAutoReviewEvent.audit_sha256,
-        ).defer(QuestionAutoReviewEvent.audit_snapshot),
-        selectinload(KnowledgePoint.children),
-    ]
+    eligible_versions = {}
     if warm_eligibility_cache:
-        query_options.insert(0, load_only(*eligibility_columns))
-        query_options.append(joinedload(Question.current_answer_verification).load_only(
-            QuestionAnswerVerificationEvent.id, QuestionAnswerVerificationEvent.question_id,
-            QuestionAnswerVerificationEvent.event_type,
-            QuestionAnswerVerificationEvent.verification_type,
-            QuestionAnswerVerificationEvent.answer_sha256,
-            QuestionAnswerVerificationEvent.verifier,
-            QuestionAnswerVerificationEvent.created_at,
-        ))
-    else:
-        # The full validator reads reference metadata and hashes on a cold
-        # decision. Keep that receipt eager so cold inventory evaluation cannot
-        # regress into per-question deferred JSON queries.
-        query_options.append(joinedload(Question.current_answer_verification))
-    eligible_rows = db.execute(select(Question, KnowledgePoint).options(*query_options).join(
-        KnowledgePoint, KnowledgePoint.id == Question.kp_id).where(
+        # A warm inventory is already covered by strict immutable eligibility
+        # decisions. Fetch the same version-bound key fields as scalar rows to
+        # avoid constructing thousands of temporary Question/receipt ORM
+        # objects. Any cache miss still loads the complete row and runs the
+        # original fail-closed evaluator below.
+        child_nodes = select(KnowledgePoint.parent_id.label("parent_id")).where(
+            KnowledgePoint.parent_id.is_not(None)).distinct().subquery()
+        question_columns = [getattr(Question, column.key).label(f"q_{column.key}")
+            for column in eligibility_columns]
+        auto_review_fields = (
+            "id", "question_id", "event_type", "review_version", "qualification_class",
+            "question_snapshot_sha256", "answer_sha256", "audit_sha256",
+        )
+        answer_verification_fields = (
+            "id", "question_id", "event_type", "verification_type", "answer_sha256", "verifier", "created_at",
+        )
+        scalar_rows = db.execute(select(
+            *question_columns,
+            KnowledgePoint.id.label("node_id"), KnowledgePoint.code.label("node_code"),
+            KnowledgePoint.subject.label("node_subject"), KnowledgePoint.is_active.label("node_is_active"),
+            KnowledgePoint.is_assessable.label("node_is_assessable"),
+            KnowledgePoint.is_reference_only.label("node_is_reference_only"),
+            child_nodes.c.parent_id.is_not(None).label("node_has_children"),
+            *[getattr(QuestionAutoReviewEvent, name).label(f"auto_review_{name}") for name in auto_review_fields],
+            *[getattr(QuestionAnswerVerificationEvent, name).label(f"answer_verification_{name}")
+                for name in answer_verification_fields],
+        ).join(KnowledgePoint, KnowledgePoint.id == Question.kp_id).outerjoin(
+            QuestionAutoReviewEvent, QuestionAutoReviewEvent.id == Question.auto_review_event_id
+        ).outerjoin(
+            QuestionAnswerVerificationEvent,
+            QuestionAnswerVerificationEvent.id == Question.answer_verification_event_id,
+        ).outerjoin(child_nodes, child_nodes.c.parent_id == KnowledgePoint.id).where(
             Question.is_active.is_(True), KnowledgePoint.is_active.is_(True),
-            KnowledgePoint.is_assessable.is_(True))).all()
-    if subject == '408':
-        eligible_rows=[(question,node) for question,node in eligible_rows
-            if node.subject in {'408','cs408','计算机学科专业基础'} or node.code.startswith('cs408')]
-    elif subject:
-        eligible_rows=[(question,node) for question,node in eligible_rows if node.subject==subject]
-    # R25：请求级映射（已用真实库验证与原版 eligibility 判定完全等价：
-    # 1931 行、eligible_plain=eligible_map=1822）。复用已预载关系，零额外查询。
-    review_events = {str(q.auto_review_event_id): q.current_auto_review
-                     for q, _ in eligible_rows
-                     if q.auto_review_event_id and q.current_auto_review is not None}
-    cached_eligibility = {}
-    full_load_rows = []
-    if warm_eligibility_cache:
-        for question, node in eligible_rows:
-            decision = cached_question_eligibility(
-                question, node, auto_review_events=review_events)
+            KnowledgePoint.is_assessable.is_(True))).mappings().all()
+        misses = []
+        for row in scalar_rows:
+            node_subject = row["node_subject"]
+            node_code = row["node_code"]
+            if subject == "408" and not (
+                node_subject in {"408", "cs408", "计算机学科专业基础"} or node_code.startswith("cs408")
+            ):
+                continue
+            if subject and subject != "408" and node_subject != subject:
+                continue
+            decision = cached_public_eligibility_from_row(row, db.get_bind())
             if decision is None:
-                full_load_rows.append((question, node))
-            else:
-                cached_eligibility[question.id] = decision
-        if full_load_rows:
-            from sqlalchemy.orm import undefer
-            missed_ids = {question.id for question, _ in full_load_rows}
-            db.execute(select(Question).where(Question.id.in_(missed_ids)).options(
+                misses.append(row)
+                continue
+            if decision.practice_eligible:
+                question_id = row["q_id"]
+                version_id = row["q_current_version_id"]
+                node_id = row["node_id"]
+                eligible_kp_ids.add(node_id)
+                if version_id:
+                    eligible_versions[(str(question_id), str(version_id))] = str(node_id)
+        if misses:
+            from sqlalchemy.orm import joinedload, selectinload, undefer
+            missed_ids = {row["q_id"] for row in misses}
+            full_questions = db.scalars(select(Question).where(Question.id.in_(missed_ids)).options(
                 undefer("*"),
                 joinedload(Question.current_auto_review).undefer("*").defer(
                     QuestionAutoReviewEvent.audit_snapshot),
                 joinedload(Question.current_answer_verification).undefer("*"),
-            ).execution_options(populate_existing=True)).scalars().all()
+            ).execution_options(populate_existing=True)).all()
+            node_ids = {question.kp_id for question in full_questions}
+            nodes = {node.id: node for node in db.scalars(select(KnowledgePoint).where(
+                KnowledgePoint.id.in_(node_ids)).options(selectinload(KnowledgePoint.children)))}
+            full_load_rows = [(question, nodes.get(question.kp_id)) for question in full_questions]
             review_events = {str(question.auto_review_event_id): question.current_auto_review
                 for question, _ in full_load_rows
                 if question.auto_review_event_id and question.current_auto_review is not None}
             from backend.services.auto_question_review import preload_uncached_auto_review_snapshots
             preload_uncached_auto_review_snapshots(db, full_load_rows, review_events)
+            for question, node in full_load_rows:
+                decision = question_eligibility(question, node, auto_review_events=review_events)
+                if decision.practice_eligible:
+                    eligible_kp_ids.add(node.id)
+                    if question.current_version_id:
+                        eligible_versions[(str(question.id), str(question.current_version_id))] = str(node.id)
     else:
+        # The full validator reads reference metadata and hashes on a cold
+        # decision. Keep receipts eager so cold inventory evaluation cannot
+        # regress into per-question deferred JSON queries.
+        query_options = [
+            joinedload(Question.current_auto_review).load_only(
+                QuestionAutoReviewEvent.id, QuestionAutoReviewEvent.question_id,
+                QuestionAutoReviewEvent.event_type, QuestionAutoReviewEvent.review_version,
+                QuestionAutoReviewEvent.qualification_class,
+                QuestionAutoReviewEvent.question_snapshot_sha256,
+                QuestionAutoReviewEvent.answer_sha256, QuestionAutoReviewEvent.audit_sha256,
+            ).defer(QuestionAutoReviewEvent.audit_snapshot),
+            selectinload(KnowledgePoint.children),
+            joinedload(Question.current_answer_verification),
+        ]
+        eligible_rows = db.execute(select(Question, KnowledgePoint).options(*query_options).join(
+            KnowledgePoint, KnowledgePoint.id == Question.kp_id).where(
+                Question.is_active.is_(True), KnowledgePoint.is_active.is_(True),
+                KnowledgePoint.is_assessable.is_(True))).all()
+        if subject == '408':
+            eligible_rows=[(question,node) for question,node in eligible_rows
+                if node.subject in {'408','cs408','计算机学科专业基础'} or node.code.startswith('cs408')]
+        elif subject:
+            eligible_rows=[(question,node) for question,node in eligible_rows if node.subject==subject]
+        review_events = {str(q.auto_review_event_id): q.current_auto_review
+                         for q, _ in eligible_rows
+                         if q.auto_review_event_id and q.current_auto_review is not None}
         from backend.services.auto_question_review import preload_uncached_auto_review_snapshots
         preload_uncached_auto_review_snapshots(db, eligible_rows, review_events)
-    eligible_versions = {}
-    for question, node in eligible_rows:
-        decision = cached_eligibility.get(question.id)
-        if decision is None:
+        for question, node in eligible_rows:
             decision = question_eligibility(question, node, auto_review_events=review_events)
-        if decision.practice_eligible:
-            eligible_kp_ids.add(node.id)
-            if question.current_version_id:
-                eligible_versions[(str(question.id), str(question.current_version_id))] = str(node.id)
+            if decision.practice_eligible:
+                eligible_kp_ids.add(node.id)
+                if question.current_version_id:
+                    eligible_versions[(str(question.id), str(question.current_version_id))] = str(node.id)
     rows = db.execute(
         select(
             KnowledgePoint,
@@ -623,7 +665,13 @@ def read_today_recommendations(db: Session = Depends(get_db),
     time_provider: Callable[[], datetime] = Depends(get_time_provider)):
     """Read-only selection view, also available when today's paper has items."""
     now = time_provider()
-    return TodaySetup(study_date=_today(now).isoformat(), recommendations=_recommendations(db, now))
+    try:
+        recommendations = _recommendations(db, now)
+    except ValueError as exc:
+        if exc.args and exc.args[0] == "graduation_set_binding_missing_for_started_learner":
+            raise _http_error(exc) from exc
+        raise
+    return TodaySetup(study_date=_today(now).isoformat(), recommendations=recommendations)
 
 
 from backend.schemas.home_recommendation import HomeRecommendationRequest, HomeRecommendationConfirm, HomeDifficultyRequest
@@ -643,8 +691,13 @@ def read_home_system_recommendation(response: Response, db: Session = Depends(ge
     # those private per-topic diagnostics only to discard them on this GET.
     # Internal draft planning keeps the default evidence-rich representation.
     from backend.services.study_read_context import shared_policy_read_context
-    with shared_policy_read_context(db):
-        result = home_recommendation.read_system(db, _recommendations(db, now), now, include_evidence=False)
+    try:
+        with shared_policy_read_context(db):
+            result = home_recommendation.read_system(db, _recommendations(db, now), now, include_evidence=False)
+    except ValueError as exc:
+        if exc.args and exc.args[0] == "graduation_set_binding_missing_for_started_learner":
+            raise _http_error(exc) from exc
+        raise
     service_seconds = _time.perf_counter() - service_started
     snap = sql_profile_snapshot()
     response.headers["X-SQL-Count"] = str(snap["count"])

@@ -31,6 +31,17 @@ const hasReferenceOnly = computed(() => {
   const references = new Set(props.generation.reference_only_question_ids ?? []);
   return props.generation.question_ids.some(id => references.has(id));
 });
+const verifiedAnswerIds = computed(() => new Set(
+  (props.generation.answer_verification_events ?? [])
+    .filter(item => item.status === 'verified')
+    .map(item => item.question_id),
+));
+const hasVerifiedAnswer = computed(() => verifiedAnswerIds.value.size > 0);
+const hasVerifiedAnswerReference = computed(() =>
+  (props.generation.answer_verified_explanation_reference_question_ids ?? [])
+    .some(id => verifiedAnswerIds.value.has(id)));
+const canAddAllQuestions = computed(() =>
+  questions.value.length > 0 && questions.value.every(question => question.practice_eligible));
 const alreadyAdded = computed(() => {
   const ids = props.generation.question_ids ?? [];
   if (!ids.length || !currentPlanId.value || props.generation.plan_id !== currentPlanId.value) return false;
@@ -142,7 +153,9 @@ watch(() => props.generation.batch_id, () => { void loadQuestions(props.generati
 <template>
   <section class="generated-question-result" data-testid="personal-generation-result" :data-generation-batch="generation.batch_id" aria-live="polite">
     <header class="generation-result-heading"><strong>{{ hasReferenceOnly ? '已保存的个人参考练习' : '通过检查并保存的练习题' }}</strong><StudyMascot pose="pencil"/></header>
-    <p v-if="hasReferenceOnly" role="note">包含尚未完整独立核验答案的参考题；保存不代表答案正确性已获证明，不计入正式毕业证据。</p>
+    <p v-if="hasVerifiedAnswer && !hasVerifiedAnswerReference" role="status">答案已通过独立计算核验；此状态只适用于个人练习，不授予公共题库或毕业资格。</p>
+    <p v-if="hasVerifiedAnswerReference" role="note">答案已通过独立计算核验；解析仍有部分内容未能自动证明，已标为参考解析。仅用于个人学习，不计入公共题库或毕业证据。</p>
+    <p v-else-if="hasReferenceOnly" role="note">答案尚未通过独立核验；保存不代表答案正确。当前不能加入今日学习，也不计入正式毕业证据。</p>
     <GenerationOutcomeSummary :generation="generation" />
     <p v-if="nodeName">所属知识点：{{ nodeName }}</p>
     <p v-else-if="questions.length">所属知识节点已绑定</p>
@@ -152,7 +165,7 @@ watch(() => props.generation.batch_id, () => { void loadQuestions(props.generati
     <p v-if="(added || alreadyAdded) && !appendResults.length" role="status">这批题已在学习卷中；旧记录没有可恢复的本次入卷详情。</p>
     <p v-else-if="postponed" role="status">已暂不加入。题目仍保存在对应知识节点的题目列表中。</p>
     <div class="generated-question-result__actions">
-      <button v-if="!added && !alreadyAdded && !postponed" type="button" :disabled="adding || loading || !questions.length" @click="addToToday">
+      <button v-if="!added && !alreadyAdded && !postponed" type="button" :disabled="adding || loading || !canAddAllQuestions" @click="addToToday">
         {{ adding ? "正在加入…" : "加入今日学习" }}
       </button>
       <button v-if="!added && !alreadyAdded && !postponed" type="button" :disabled="adding" @click="postponed = true">暂不加入</button>
@@ -170,7 +183,8 @@ watch(() => props.generation.batch_id, () => { void loadQuestions(props.generati
       </li>
     </ol>
     <p class="hint">题目已保存到该知识节点；加入今日学习与保存题目是两个独立操作。个人练习不计入正式毕业证据。</p>
-    <p v-if="generation.reference_only_question_ids?.length" class="hint" data-testid="general-generation-reference-notice">通用 AI 练习：已检查格式及可核验内容，参考答案尚未完整独立验证；可练习和记录，不用于正式毕业判断。</p>
+    <p v-if="questions.length && !canAddAllQuestions && !added && !alreadyAdded" class="hint" role="status">至少一道题尚未通过个人练习准入，当前不能加入今日学习。请保留题目状态，重新生成或改用正式题库。</p>
+    <p v-if="generation.unverified_reference_question_ids?.length" class="hint" data-testid="general-generation-reference-notice">其中有答案未能独立验证的个人参考题；可查看，但不能加入今日学习或作为毕业证据。</p>
   </section>
 </template>
 

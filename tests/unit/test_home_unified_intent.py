@@ -139,6 +139,12 @@ def test_followup_count_correction_reuses_the_named_topic():
     assert trace['source']=='rule' and trace['model_calls']==0
 
 
+def test_followup_count_correction_precedes_last_topic_context_inheritance():
+    context={'last_topic_name':'洛必达法则','last_topic_kp_id':'a'}
+    intent=parse_rule('帮我减少两道洛必达法则的题目，减少1道吧。',paper(),context)
+    assert intent.operation=='topic_count' and intent.refs==['k1'] and intent.deltas==[-1]
+
+
 @pytest.mark.parametrize('text', [
     '帮我把当前这些内容都换成408的题目，我今天打算做1个小时408的。',
     '根据我没有做过的知识点来进行安排题目就好，把当前的题目都换了，你安排6个知识点的408题目，题量是1个小时左右的。',
@@ -273,6 +279,85 @@ def test_explicit_count_reduction_preserves_scope_and_retained_versions():
     assert b['selected_kp_ids']==a['selected_kp_ids']
     assert b['question_limit']==2
     assert a==paper()
+
+
+@pytest.mark.parametrize(('text','operation','delta'),[
+    ('那你随便帮我减少两道隐函数的题目','topic_count',-2),
+    ('隐函数少一道','topic_count',-1),
+    ('隐函数题目减少三道','topic_count',-3),
+])
+def test_r46_topic_reductions_use_the_named_scope_and_stable_plan_order(text,operation,delta):
+    intent=parse_rule(text,paper())
+    assert intent.operation==operation and intent.refs==['k2'] and intent.deltas==[delta]
+
+
+def test_r46_easy_target_stays_unverified_but_autonomous_choice_does_not_need_question_id():
+    easy=parse_rule('帮我减少两道比较简单的隐函数题目',paper())
+    arbitrary=parse_rule('那你随便帮我减少两道隐函数的题目',paper())
+    assert easy.operation=='clarify' and '没有可核验' in easy.question
+    assert arbitrary.operation=='topic_count' and arbitrary.refs==['k2'] and arbitrary.deltas==[-2]
+
+
+@pytest.mark.parametrize(('text','operation'),[
+    ('删除洛必达法则的题目','topic_remove_questions'),
+    ('洛必达法则所有题目都删除','topic_remove_questions'),
+    ('把今天洛必达法则的题目全部去掉','topic_remove_questions'),
+    ('今天不安排洛必达法则','exclude_scope'),
+    ('今天不学洛必达法则','exclude_scope'),
+])
+def test_r46_topic_batch_remove_is_distinct_from_today_scope_exclusion(text,operation):
+    original=paper();intent=parse_rule(text,original);edited=exact_edit(original,intent)
+    assert intent.operation==operation and intent.refs==['k1']
+    if operation=='topic_remove_questions':
+        assert edited['selected_kp_ids']==original['selected_kp_ids']
+        assert all(q['kp_id']!='a' for q in edited['questions'])
+    else:
+        assert edited['selected_kp_ids']==['b']
+        assert all(q['kp_id']!='a' for q in edited['questions'])
+
+
+def test_r46_retain_target_and_multi_turn_topic_inheritance():
+    current=paper()
+    target=parse_rule('洛必达法则只留一道',current)
+    assert target.operation=='topic_target' and target.refs==['k1'] and target.quantity==1
+    context={'last_topic_name':'隐函数求导','last_topic_kp_id':'b'}
+    reduced=parse_rule('再少一道',current,context)
+    added=parse_rule('再增加一道',current,context)
+    assert reduced.operation=='topic_count' and reduced.refs==['k2'] and reduced.deltas==[-1]
+    assert added.operation=='topic_count' and added.refs==['k2'] and added.deltas==[1]
+
+
+@pytest.mark.parametrize('text,target',[('把当前题量补足到90分钟',90),('根据薄弱知识点补到90分钟左右',90)])
+def test_r46_target_time_is_not_misclassified_as_an_unscoped_topic_add(text,target):
+    intent=parse_rule(text,paper())
+    assert intent.operation=='fill_time' and intent.minutes==target
+
+
+def test_r46_local_cross_subject_replacement_inherits_scope_count_and_topic():
+    current=paper();context={'subject_topic_replacement':{'source_kp_ids':['b'],
+        'destination_topics':[{'kp_id':'408-os','name':'操作系统概念与发展'}]}}
+    replaced={'selected_kp_ids':['408-os'],'budget_minutes':90,'total_minutes':5,
+        'scope_nodes':[{'kp_id':'408-os','name':'操作系统概念与发展'}],
+        'questions':[{'question_id':'os-q1','question_version_id':'os-v1','kp_id':'408-os',
+            'kp_name':'操作系统概念与发展','minutes':5}]}
+    first=parse_rule('帮我把隐函数的题目换成408的题目',current)
+    alternate=parse_rule('换成408操作系统',replaced,context)
+    same_count=parse_rule('一样的题量',current,context)
+    restore=parse_rule('不换了，恢复原来的隐函数题目',current,context)
+    negative_restore=parse_rule('不要删除了，恢复原方案',current)
+    assert (first.operation,first.refs,first.quantity,first.topic_count,first.destination_topic)==('subject_topic_replace',['k2'],15,1,None)
+    assert alternate.operation=='subject_topic_replace' and alternate.destination_topic=='操作系统'
+    assert same_count.operation=='reuse_preview'
+    assert restore.operation=='restore_subject_source'
+    assert negative_restore.operation=='restore'
+
+
+def test_r46_partial_restore_uses_last_edit_evidence_and_full_cancel_restores_baseline():
+    current=paper();context={'home_last_edit':{'removed_questions':[{'question_id':'5'},{'question_id':'6'}]}}
+    partial=parse_rule('刚才那两道再恢复一道',current,context)
+    all_restore=parse_rule('全部恢复',current)
+    assert partial.operation=='restore_recent_removed' and partial.quantity==1
+    assert all_restore.operation=='restore'
 
 
 @pytest.mark.parametrize('text,count', [

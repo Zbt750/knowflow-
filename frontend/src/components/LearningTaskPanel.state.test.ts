@@ -294,6 +294,27 @@ it('a true failed mathematical reply has one body owner and a separate short dia
   expect(text(alert)).not.toContain(formula);
   expect(text(alert)).toContain('重试这条回复');
 });
+it('a non-retryable personal generation daily limit shows the reason without a retry promise', async () => {
+  storage.set(`learning-assistant:study:${day()}`, 'today-study');
+  mocks.history.mockResolvedValue([
+    reply('u', 'user', '生成一道二叉树练习题'),
+    {...reply('a', 'assistant', '今日个人出题次数已达到本地调用上限；没有调用模型或保存题目，请明天再试。', 'failed'),
+      assistant_error_code: 'personal_generation_daily_limit', retryable: false,
+      personal_generation: {batch_id: '', status: 'failed', question_ids: [], failure_code: 'personal_generation_daily_limit',
+        failure_stage: 'generation_preflight', failure_type: 'AppError', diagnostics: [], message: '个人练习题生成未开始。',
+        outcome_summary: {requested_count: 0, saved_count: 0, failed_count: 0, attempted_count: 0, not_attempted_count: 0,
+          unresolved_count: 0, provider_calls: 0, quality_rejected_count: 0, response_failed_count: 0,
+          structure_rejected_count: 0, failure_details: []}}},
+  ]);
+  const mounted = mountStateComponent(Panel, {sessionId: null, mascot: false, open: true}); unmount = mounted.unmount;
+  await flush();
+  expect(text(mounted.root)).toContain('今日个人出题次数已达到本地调用上限');
+  expect((text(mounted.root).match(/今日个人出题次数已达到本地调用上限/g) ?? [])).toHaveLength(1);
+  expect(text(mounted.root)).not.toContain('可重试这条回复');
+  expect(text(mounted.root)).not.toContain('重试这条回复');
+  expect(text(mounted.root)).toContain('编辑原提问');
+  expect(all(mounted.root).some(node => node.props['data-testid'] === 'frog-message-failed-status')).toBe(false);
+});
 it('session epoch switch aborts the old stream and ignores its late frames and completion', async () => {
   storage.set(`learning-assistant:study:${day()}`, 'today-study');
   mocks.list.mockResolvedValue(['today-study', 'second-study'].map(id => ({session_id:id,mode:'builtin',purpose:'study',study_date:day()})));

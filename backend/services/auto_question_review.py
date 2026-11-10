@@ -52,7 +52,7 @@ ALLOWED_SOLVERS = frozenset({
     "teaching_family_v1", "chain_differential_v1", "rational_improper_parameter_v1",
     "log1p_improper_integral_v1", "full_binary_tree_edges_v1",
     "phase45i_twos_complement_range_v1", "phase45d_fcfs_waiting_time_v1",
-    "phase45i_complete_tree_leaf_count_v1",
+    "phase45i_complete_tree_leaf_count_v1", "phase45i_complete_tree_symbolic_leaf_count_v1",
 })
 from backend.services.phase45hs_verifiers import SOLVERS as HS_SOLVERS
 from backend.services.phase45hx_exam_verifiers import SOLVERS as HX_EXAM_SOLVERS

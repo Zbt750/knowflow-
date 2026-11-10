@@ -144,7 +144,23 @@ def _topic_count_batch(message, nodes):
     return [(by_id[refs[key]['value']],delta) for key,delta in zip(intent.refs,intent.deltas)],None
 
 
-def handle_paper_chat(factory, *, session_id, ctx, message, now):
+def _latest_ready_adjustment(factory, session_id):
+    """返回该会话最新仍未提交的正式卷调整方案（可能为空）。"""
+    from backend.services.paper_adjustment_service import _version
+    with factory() as db:
+        rows=db.scalars(select(LearningTask)
+            .where(LearningTask.session_id==session_id)
+            .order_by(LearningTask.updated_at.desc().nullslast(), LearningTask.id.desc()))
+        for row in rows:
+            if (row.status=='ready' and (row.context or {}).get('paper_adjustment')
+                    and not (row.metrics or {}).get('commit') and row.draft):
+                draft=row.draft
+                return {'task_id':str(row.id),'draft_version':_version(draft),
+                    'draft':draft,'workload':draft.get('workload')}
+    return None
+
+
+def handle_paper_chat(factory, *, session_id, ctx, message, now, target_item_id=None):
     command=parse_command(message)
     if command is None or not ctx.daily_plan_id:return None
     # Explicitly selecting a question from the bank is handled by the shared
@@ -221,6 +237,12 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
     if command['action']=='confirm':
         proposal=memory.get('proposal')
         if not proposal:return reply('当前没有可确认的正式卷调整方案，请先指定要调整的题目。')
+        # 连续多轮调整时，上一条消息里记住的 proposal 可能已被同一会话的
+        # 新方案取代（旧 task 被标记 cancelled）。此时直接确认旧 task 会得到
+        # “方案已经过期”，用户刚看到的方案反而无法执行。确认动作应作用于
+        # 当前会话里最新仍然有效的那份待确认方案。
+        fresh=_latest_ready_adjustment(factory,session_id)
+        if fresh:proposal=fresh
         result['proposal']=proposal
         try:
             receipt=confirm_adjustment(factory,UUID(proposal['task_id']),PaperAdjustmentConfirmation(
@@ -274,6 +296,8 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         correcting_removal=(previous_operation=='remove' or
             (previous_operation is None and pending_draft and not pending_draft.get('replacements')))
         quantity_correction=bool(pending_draft and correcting_removal and command['action']=='remove'
+            # 只有“减少一道/减少两道”这种不带知识点的短句才是对上一组数量的修正；
+            # 带知识点的“减少一道X的题”按 R40 契约继续累加，不能被误当成修正。
             and re.fullmatch(r'(?:那\s*)?(?:(?:改成|改为)\s*)?(?:减少|删除|移除)\s*[一二两三四五六七八九十\d]+\s*(?:道|题)(?:吧|好了)?[。！!？?]*',message.strip())
             and not re.search(r'再|继续|另外|额外',message))
         planned_removals=set(pending_draft.get('remove_item_ids',[])) if pending_draft else set()
@@ -338,6 +362,10 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
             selected=[i for i in items if i.kp_id in math_ids]
         elif cross_all:
             selected=list(items)
+        elif target_item_id is not None:
+            selected=[item for item in items if str(item.id)==str(target_item_id)]
+            if len(selected)!=1:
+                return reply('刚才引用的题目已不在当前可调整方案中；今日卷未改变，请刷新后重新预览。')
         elif command['number']:
             selected=items[command['number']-1:command['number']] if command['number']>0 else []
         elif command['action']=='add':
@@ -499,7 +527,7 @@ def handle_paper_chat(factory, *, session_id, ctx, message, now):
         result['proposal']=propose_adjustment(factory,PaperAdjustmentRequest(session_id=session_id,
             plan_id=ctx.daily_plan_id,remove_item_ids=ordered_removals,
             replacements=[ReplacementReference.model_validate(ref) for ref in replacement_refs],
-            budget_minutes=result['context'].get('budget_minutes',command['budget_minutes'] or 60)),now=now)
+            budget_minutes=command['budget_minutes'] or result['context'].get('budget_minutes') or 60),now=now)
     except AppError as exc:
         stale_reasons={
             'replacement_question_missing':'候选题目已不存在',

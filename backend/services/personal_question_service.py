@@ -21,6 +21,7 @@ from backend.services.question_generation import (
 from backend.services.personal_question_families import (
     resolve_family, contract_for, build_problem_spec, candidate_profile,
     learning_focus_from_progress, render_problem_spec, teaching_module, supports_difficulty,
+    requirement_supported_by_family,
 )
 from backend.services.practice_service import (
     DAILY_PLAN_MATERIALIZATION_LOCK_KEY,
@@ -48,7 +49,12 @@ def generation_storage_permissions(db, *, write=True):
     if write:
         required.update({"personal_generation_batches": ("SELECT", "INSERT", "UPDATE"),
                          "questions": ("SELECT", "INSERT", "UPDATE"),
-                         "question_versions": ("SELECT", "INSERT")})
+                         "question_versions": ("SELECT", "INSERT"),
+                         # Every saved personal question receives an immutable,
+                         # version-bound machine-verification event. The runtime
+                         # role needs read access for idempotency and INSERT only;
+                         # it must never update or delete this evidence.
+                         "personal_answer_verification_events": ("SELECT", "INSERT")})
     missing = []
     for relation, privileges in required.items():
         for privilege in privileges:
@@ -221,8 +227,18 @@ def result_message(result):
     mode = result.get("generation_mode")
     identity = "快速练习题" if mode == "deterministic_fast" else "奶蛙AI生成练习题" if mode == "ai_generated" else "奶蛙AI辅助练习题"
     text = f"你请求了{requested}道{identity}，{saved}道通过检查并保存到对应知识点的题目列表。"
-    if result.get("reference_only_question_ids"):
-        text += "\n其中通用AI出题已完成格式、选项和可执行计算检查；尚无完整独立正确性证明，答案和解析仅供参考，不计入正式毕业证据。"
+    verified_explanation_reference = set(result.get("answer_verified_explanation_reference_question_ids") or [])
+    unverified_reference = set(result.get("unverified_reference_question_ids") or [])
+    verified_answer_count = sum(1 for event in result.get("answer_verification_events", [])
+                                if event.get("status") == "verified")
+    if verified_explanation_reference:
+        text += (f"\n其中{len(verified_explanation_reference)}道题的答案已通过独立计算核验；"
+                 "解析仍有部分内容未能自动证明，已明确标为参考解析。只用于个人学习，不计入正式毕业证据。")
+    elif verified_answer_count:
+        text += f"\n{verified_answer_count}道题的答案已通过独立计算核验；个人题不会进入公共题库或毕业证据。"
+    if unverified_reference:
+        text += (f"\n另有{len(unverified_reference)}道个人参考题的答案尚未通过独立核验，不能加入今日学习；"
+                 "仅保存在个人题目列表供查看，不代表答案正确。")
     text += details
     if result.get("numbers") or result.get("appended_question_ids"):
         for kind,label in (("single_choice","选择题"),("fill_blank","填空题")):
@@ -234,8 +250,12 @@ def result_message(result):
     else:
         text += "题目已保存在对应知识节点的题目列表中，尚未加入今日学习。"
         if result.get("reference_only_question_ids"):
-            text += ("这批题尚未完成完整独立正确性验证（needs_review），可用于个人练习与学习记录，"
-                     "但不计入正式毕业证据；如需正式卷请使用正式题库题目。")
+            if verified_explanation_reference:
+                text += "答案验证通过的题目可加入个人今日学习；解析仍是参考内容，且不产生公共毕业证据。"
+            elif unverified_reference:
+                text += "答案未独立验证的题目暂不能加入今日学习；请重新生成或选择正式题库题目。"
+            else:
+                text += "个人参考题的答案仍需复核；在验证通过前不能加入今日学习，也不计入正式毕业证据。"
         else:
             text += "你可以先查看题目，再选择加入或暂不加入。"
     return text
@@ -341,6 +361,8 @@ def run_generation(factory, body, provider=None, *, now=None):
                     KnowledgePoint.id).where(KnowledgePoint.parent_id == node.id,
                     KnowledgePoint.is_active.is_(True)).limit(1)) is not None:
                 raise AppError("personal_generation_unsupported", status_code=422)
+            if family and not requirement_supported_by_family(body.user_requirement, family):
+                raise AppError("personal_generation_requirement_unsupported", status_code=422)
             if family and not supports_difficulty(family, target.difficulty):
                 if mode == "ai_generated": family = None
                 else: raise AppError("personal_generation_unsupported_difficulty", status_code=422)
@@ -420,6 +442,9 @@ def run_generation(factory, body, provider=None, *, now=None):
         "attempted_indices": [], "saved_items": [],
         "difficulty_summaries": {},
         "reference_only_question_ids": [],
+        "answer_verification_events": [],
+        "answer_verified_explanation_reference_question_ids": [],
+        "unverified_reference_question_ids": [],
         "learning_focus": list({v["focus"] for v in learning_focus.values()}),
         "model_calls": 0, "question_ids": [], "failures": [], "calls": []}
     idx = 0
@@ -585,46 +610,85 @@ def run_generation(factory, body, provider=None, *, now=None):
                         "review_status": "CONFIRMED_WRONG", "issues": ["adaptation_only_numeric_change"]})
                     continue
                 phase = "save_question_version"
-                with factory.begin() as db:
-                    db.execute(text("SELECT pg_advisory_xact_lock(4520261011)"))
-                    live = db.get(KnowledgePoint, node.id)
-                    q.bank_scope = "personal"; q.generation_batch_id = batch_id; q.is_hidden = False
-                    if not current_generation_binding(q, live):
-                        result["failures"].append({"index": idx, "reason": "node_or_verifier_drift"})
-                        continue
-                    if parent:
-                        from backend.services.question_generation import source_input_hash
-                        live_parent = db.get(Question, parent.id)
-                        if not live_parent or source_input_hash(live_parent) != source_input_hash(parent):
-                            result["failures"].append({"index": idx, "reason": "parent_content_drift"})
+                try:
+                    with factory.begin() as db:
+                        db.execute(text("SELECT pg_advisory_xact_lock(4520261011)"))
+                        live = db.get(KnowledgePoint, node.id)
+                        q.bank_scope = "personal"; q.generation_batch_id = batch_id; q.is_hidden = False
+                        if not current_generation_binding(q, live):
+                            result["failures"].append({"index": idx, "reason": "node_or_verifier_drift"})
                             continue
-                    # 通用题可能超出独立求解器范围；不让可选的语义去重器
-                    # 阻断整个领域，精确题干/选项去重仍始终执行。
-                    identity=None if general else verified_problem_identity(q)
-                    if any(duplicate_key(old_question) == duplicate_key(q) or
-                            identity is not None and verified_problem_identity(old_question)==identity
-                            for old_question in db.scalars(select(Question).where(Question.bank_scope=='personal'))):
-                        result["failures"].append({"index": idx, "reason": "duplicate"})
-                        continue
-                    q.bank_scope = "personal"; q.generation_batch_id = batch_id; q.is_hidden = False
-                    db.add(q); db.flush()
-                    saved_id = str(q.id)
-                    saved_ids = [*result["question_ids"], saved_id]
-                    saved_items=[*result['saved_items'],{'index':idx,'question_id':saved_id}]
-                    saved_summaries = {**result['difficulty_summaries'], saved_id:difficulty_summary}
-                    reference_ids = [*result["reference_only_question_ids"], saved_id] if general else result["reference_only_question_ids"]
-                    ledger = db.get(PersonalGenerationBatch, batch_id, with_for_update=True)
-                    ledger.result = {**result, "question_ids": saved_ids,
-                        'saved_items':saved_items,
-                        'difficulty_summaries':saved_summaries,
-                        "reference_only_question_ids": reference_ids,
-                        "calls": list(budget.records) if budget else []}
+                        if parent:
+                            from backend.services.question_generation import source_input_hash
+                            live_parent = db.get(Question, parent.id)
+                            if not live_parent or source_input_hash(live_parent) != source_input_hash(parent):
+                                result["failures"].append({"index": idx, "reason": "parent_content_drift"})
+                                continue
+                        # 通用题可能超出独立求解器范围；不让可选的语义去重器
+                        # 阻断整个领域，精确题干/选项去重仍始终执行。
+                        identity=None if general else verified_problem_identity(q)
+                        if any(duplicate_key(old_question) == duplicate_key(q) or
+                                identity is not None and verified_problem_identity(old_question)==identity
+                                for old_question in db.scalars(select(Question).where(Question.bank_scope=='personal'))):
+                            result["failures"].append({"index": idx, "reason": "duplicate"})
+                            continue
+                        q.bank_scope = "personal"; q.generation_batch_id = batch_id; q.is_hidden = False
+                        db.add(q); db.flush()
+                        saved_id = str(q.id)
+                        from backend.services.personal_answer_verification import record_personal_answer_verification
+                        answer_event = record_personal_answer_verification(db, q, live)
+                        answer_events = [*result.get("answer_verification_events", []), {
+                            "event_id": str(answer_event.id), "question_id": saved_id,
+                            "question_version_id": str(q.current_version_id),
+                            "status": answer_event.status, "verifier_version": answer_event.verifier_version,
+                            "adapter": answer_event.adapter,
+                        }]
+                        saved_ids = [*result["question_ids"], saved_id]
+                        saved_items=[*result['saved_items'],{'index':idx,'question_id':saved_id}]
+                        saved_summaries = {**result['difficulty_summaries'], saved_id:difficulty_summary}
+                        reference_ids = ([*result["reference_only_question_ids"], saved_id]
+                            if candidate.get("status") == "REFERENCE_SAVED"
+                            else result["reference_only_question_ids"])
+                        verified_reference_ids = ([*result["answer_verified_explanation_reference_question_ids"], saved_id]
+                            if answer_event.status == "verified"
+                            and record.get("review_status") == "ANSWER_VERIFIED_EXPLANATION_REFERENCE_ONLY"
+                            else result["answer_verified_explanation_reference_question_ids"])
+                        unverified_reference_ids = ([*result["unverified_reference_question_ids"], saved_id]
+                            if candidate.get("status") == "REFERENCE_SAVED" and answer_event.status != "verified"
+                            else result["unverified_reference_question_ids"])
+                        ledger = db.get(PersonalGenerationBatch, batch_id, with_for_update=True)
+                        ledger.result = {**result, "question_ids": saved_ids,
+                            'saved_items':saved_items,
+                            'difficulty_summaries':saved_summaries,
+                            "reference_only_question_ids": reference_ids,
+                            "answer_verification_events": answer_events,
+                            "answer_verified_explanation_reference_question_ids": verified_reference_ids,
+                            "unverified_reference_question_ids": unverified_reference_ids,
+                            "calls": list(budget.records) if budget else []}
+                except ValueError as exc:
+                    # The immutable-version hook is the final independent math
+                    # verifier. A proven answer mismatch rolls back this item's
+                    # transaction; classify it as a retryable quality rejection
+                    # rather than a generic storage/processing failure.
+                    if str(exc) != "math_verification_rejected":
+                        raise
+                    result["failure_stage"] = "math_verification"
+                    result["failure_type"] = type(exc).__name__
+                    result["failures"].append({"index": idx, "reason": "CONFIRMED_WRONG",
+                        "review_status": "CONFIRMED_WRONG", "stage": "math_verification",
+                        "error_type": type(exc).__name__, "issues": ["independent_answer_conflict"]})
+                    logger.exception("personal_generation_math_verification_rejected request_key=%s batch_id=%s index=%s; item transaction rolled back",
+                                     body.request_key, batch_id, idx)
+                    continue
                 # Expose an ID only after its transaction commits. A failed
                 # QuestionVersion/ledger write must not look like a saved题.
                 result["question_ids"] = saved_ids
                 result['saved_items']=saved_items
                 result['difficulty_summaries'] = saved_summaries
                 result["reference_only_question_ids"] = reference_ids
+                result["answer_verification_events"] = answer_events
+                result["answer_verified_explanation_reference_question_ids"] = verified_reference_ids
+                result["unverified_reference_question_ids"] = unverified_reference_ids
     except Exception as exc:
         result["failure_stage"] = phase
         result["failure_type"] = type(exc).__name__
@@ -636,7 +700,10 @@ def run_generation(factory, body, provider=None, *, now=None):
             result.setdefault("provider_error", type(exc).__name__)
         else:
             result["processing_error"] = "storage_permission_denied" if sqlstate == "42501" else "generation_stopped"
-        logger.error("personal_generation_failed request_key=%s batch_id=%s stage=%s exception_type=%s sqlstate=%s saved_count=%s model_calls=%s",
+        # Keep the concrete traceback in the private service log. The learner
+        # receives a stage-specific, safe diagnostic through the persisted
+        # batch result; credentials/provider payloads stay out of chat history.
+        logger.exception("personal_generation_failed request_key=%s batch_id=%s stage=%s exception_type=%s sqlstate=%s saved_count=%s model_calls=%s",
                      body.request_key, batch_id, phase, type(exc).__name__, sqlstate,
                      len(result["question_ids"]), result["model_calls"])
 

@@ -6,7 +6,7 @@ NOT_APPLICABLE, never sampled into a proof or inferred from a year/question ID.
 import re
 from backend.services.constant_expression import constant_expression, compare_constant_expressions
 
-VERSION = "bounded-problem-verifiers-v17"
+VERSION = "bounded-problem-verifiers-v19"
 
 
 def option_value(raw):

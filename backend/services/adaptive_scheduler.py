@@ -23,6 +23,10 @@ class Observation:
     assisted: bool = False
     error_kind: str = 'unclassified'
     rating: str | None = None
+    # FSRS may accept a content-bound, independently verified personal answer
+    # without granting it BKT or graduation authority. None preserves the
+    # historical behavior where FSRS reliability follows ``reliable``.
+    schedule_reliable: bool | None = None
 
 
 @dataclass
@@ -74,10 +78,14 @@ def replay(observations, now):
             skill.skipped += 1
             continue
         skill.last_at = max(skill.last_at or o.at, o.at)
-        if o.result not in {'right', 'wrong'} or not o.reliable or o.assisted:
+        if o.result not in {'right', 'wrong'}:
             skill.unknown += 1
-            # Ratings are not trust certificates. Reference/assisted responses
-            # stay observations and cannot change the trusted memory queue.
+            continue
+        schedule_reliable = o.reliable if o.schedule_reliable is None else o.schedule_reliable
+        if not schedule_reliable or o.assisted:
+            skill.unknown += 1
+            # Ratings are not trust certificates. Unverified/assisted answers
+            # stay observations and cannot change the memory queue.
             continue
         key = (o.question_id, o.version_id)
         first_question_review = key not in projection.cards
@@ -89,6 +97,11 @@ def replay(observations, now):
         card, _ = FSRS.review_card(card, rating,
                                    review_datetime=review_at)
         projection.cards[key] = card
+        # A verified personal answer may update this exact FSRS question
+        # version, but its personal scope never becomes BKT evidence.
+        if not o.reliable:
+            skill.unknown += 1
+            continue
         if first_question_review:
             skill.last_new_at=max(skill.last_new_at or o.at,o.at)
         if not o.reliable or o.assisted:

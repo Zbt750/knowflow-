@@ -118,7 +118,11 @@ def _preferences(message):
            for part in message.split('\n最新出题要求：')]
     quantity_source=None; quantity_part=-1
     for i,part in enumerate(parts):
-        actions=list(re.finditer(r'生成|出(?=[一二两三四五六七八九十\d几题])|再来|再给我|换(?=[一二两三四五\d])',part))
+        # `给出四个选项` is not a request for four generated questions.
+        # Counted `出` actions must be followed by a count plus 道/题 (or 题 itself).
+        actions=list(re.finditer(
+            r'生成|出(?=(?:题|[一二两三四五六七八九十\d几]+\s*(?:道|题)))|再来|再给我|换(?=[一二三四五\d])',
+            part))
         scope=part[actions[-1].start():] if actions else part
         if re.search(r'[百千万]\s*(?:道|题)',scope): raise AppError('validation_failed',status_code=422)
         if re.search(NUMERAL+r'\s*(?:道|题)',scope):quantity_source=scope;quantity_part=i
@@ -163,7 +167,7 @@ def _node_phrases(node):
     """Return deliberately narrow human-readable aliases for one real node."""
     phrases = {node.name.strip()} if getattr(node, "name", None) else set()
     name = getattr(node, "name", "") or ""
-    short = re.sub(r"(?:求导|法则|性质|应用|结构|定理|公式|方法)$", "", name).strip()
+    short = re.sub(r"(?:求导|法则|性质|应用|结构|定理|公式|方法)$", "", name).removesuffix("的").strip()
     if len(short) >= 2 and short != name:
         phrases.add(short)
     integral_topic = re.sub(r'积分$', '', name).strip()
@@ -331,10 +335,18 @@ def generation_intent(db, message, ctx, request_key, *, generation_mode="ai_gene
                       confirmed_targets=None):
     difficulty, types = _preferences(message)
     nodes = list(db.scalars(select(KnowledgePoint).where(KnowledgePoint.is_active.is_(True), KnowledgePoint.is_assessable.is_(True))))
-    mentions = _explicit_node_mentions(message, nodes)
-    matches = list({item[4].id: item[4] for item in mentions}.values())
-    matched_ids = {node.id for node in matches}
-    matches.extend(node for node in nodes if node.code in message and node.id not in matched_ids)
+    # A server-bound confirmation carries the exact selected node IDs. Do not
+    # parse the original wording again here: identical node names or shared
+    # aliases can be ambiguous in text even after the learner selected one
+    # concrete node in the confirmation card.
+    if confirmed_kp_id is None and confirmed_targets is None:
+        mentions = _explicit_node_mentions(message, nodes)
+        matches = list({item[4].id: item[4] for item in mentions}.values())
+        matched_ids = {node.id for node in matches}
+        matches.extend(node for node in nodes if node.code in message and node.id not in matched_ids)
+    else:
+        mentions = []
+        matches = []
     if not matches:
         from backend.services.question_generation import FAMILY_NODES
         terms = {t for values in FAMILY_NODES.values() for t in values if t in message}

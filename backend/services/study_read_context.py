@@ -87,7 +87,9 @@ def load_policy_read_context(db, kp_ids) -> PolicyReadContext:
     versions = {(row.kp_id, row.set_version): row for row in db.scalars(
         select(KpGraduationQuestionSetVersion).where(KpGraduationQuestionSetVersion.kp_id.in_(ids)))}
     activity = select(QuestionAttempt.kp_id).where(QuestionAttempt.kp_id.in_(ids)).union(
-        select(LearningEvent.kp_id).where(LearningEvent.kp_id.in_(ids)),
+        select(LearningEvent.kp_id).where(
+            LearningEvent.kp_id.in_(ids),
+            LearningEvent.payload["changes_mastery"].as_boolean().is_not(False)),
         # An unstarted item in a materialized DailyPlan is not a learning
         # action and cannot require a historical graduation-set binding.
         # Completed legacy items remain visible activity evidence.

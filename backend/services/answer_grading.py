@@ -62,8 +62,13 @@ def _numeric_value(text: str | None) -> Fraction | None:
 
 def _generated_range_value(text: str | None):
     """Parse only a bounded, explicit two-endpoint interval for personal practice."""
-    from backend.services.phase45i_quality_verifiers import _range_pair
-    return _range_pair(text or "")
+    from backend.services.phase45i_quality_verifiers import _range_pair, _symbolic_twos_complement_range
+    interval = _range_pair(text or "")
+    if interval is not None:
+        return interval
+    if _symbolic_twos_complement_range(text):
+        return ("symbolic_twos_complement_n_bit",)
+    return None
 
 
 def grade_numeric_final_answer(

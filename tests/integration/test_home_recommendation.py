@@ -125,6 +125,7 @@ def test_exact_bank_revision_api_persists_and_formally_confirms_same_identities(
         frozen=db.get(KpMasteryPolicy,UUID(home['linear']))
         assert str(q.id) not in frozen.graduation_question_ids
     changed=post(client,home,goal,expected_version=original['draft_version'])
+    assert changed.get('status')=='ready',changed
     b=changed['draft']['questions']
     assert len(b)==expected_count and new_id in [q['question_id'] for q in b]
     if expected_count==4:
@@ -215,6 +216,23 @@ def test_home_request_key_cannot_replay_a_different_payload(client,home):
     current=read_home_domain(client,home['session_id'])
     from backend.services.home_public_view import public_paper
     assert public_paper(current['draft'])==first.json()['draft']
+
+
+def test_home_get_translates_missing_graduation_binding_and_preserves_preview(client,home,session_factory,monkeypatch):
+    import backend.api.routes.study as study_route
+
+    base=post(client,home,action='default',selected_kp_ids=[home['linear']])
+    before=counts(session_factory)
+    def missing_binding(*_args,**_kwargs):
+        raise ValueError('graduation_set_binding_missing_for_started_learner')
+    monkeypatch.setattr(study_route,'_recommendations',missing_binding)
+
+    response=client.get('/api/plans/today/home-recommendation')
+    assert response.status_code==409,response.text
+    assert response.json()['error']['code']=='graduation_set_binding_missing_for_started_learner'
+    assert 'internal error' not in response.text.lower()
+    assert counts(session_factory)==before
+    assert read_home_domain(client,home['session_id'])['draft']==base['draft']
 
 
 def test_yesterday_home_session_cannot_be_reused_for_new_adjustments(client,home,session_factory):

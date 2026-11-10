@@ -125,7 +125,7 @@ for (const width of viewports) {
     );
     await expect(page.locator('#paper-item-layout-q18')).toBeInViewport();
 
-    for (const number of [7, 15, 2, 18]) {
+    for (const number of [1, 7, 15, 2, questionCount]) {
       await page.getByRole('button', { name: `跳转第 ${number} 题` }).click();
       const target = page.locator(`#paper-item-layout-q${number}`);
       const targetGeometry = await target.evaluate((element) => {
@@ -136,10 +136,16 @@ for (const width of viewports) {
       });
       // The final item may be unable to align at the very top when the list
       // has no trailing blank space; its heading must still be fully visible.
-      if (number !== questionCount) expect(Math.abs(targetGeometry.top - 8)).toBeLessThan(5);
+      // The first item is at the scroll origin, so the requested 8px inset
+      // cannot be applied without scrolling before the container start.
+      if (number === 1) {
+        expect(Math.abs(targetGeometry.top)).toBeLessThan(5);
+      } else if (number !== questionCount) {
+        expect(Math.abs(targetGeometry.top - 8)).toBeLessThan(5);
+      }
       await expect(target.locator('header')).toBeInViewport();
       const regionBounds = await region.boundingBox();
-      expect(targetGeometry.top).toBeGreaterThanOrEqual(7);
+      expect(targetGeometry.top).toBeGreaterThanOrEqual(0);
       expect(targetGeometry.top).toBeLessThan(regionBounds!.height);
       expect(targetGeometry.bottom).toBeGreaterThan(0);
       expect(await page.evaluate(() => window.scrollY)).toBe(pageY);

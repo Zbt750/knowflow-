@@ -826,7 +826,7 @@ async function askLearningAction(action: AssistanceAction): Promise<void> {
 }
 async function retryLearningMessage(message: ChatMessage) {
   if (!sessionId.value || sending.value || retryChecking.value || message.retryable === false) return;
-  const original = turnRequests.get(message.message_id) ?? assistantTurnFromHistory(sessionId.value, message, messages.value);
+  const original = turnRequests.get(message.message_id) ?? assistantTurnFromHistory(sessionId.value, message, messages.value, chatPurpose());
   if (!original) { error.value = '无法恢复原提问，请重新提出问题。'; return; }
   let retry: AssistantTurn | undefined;
   retryChecking.value = true;
@@ -845,7 +845,7 @@ async function retryLearningMessage(message: ChatMessage) {
 function editFailedMessage(message: ChatMessage) {
   if (!sessionId.value || sending.value) return;
   if (question.value.trim() || quotedAnswers.value.length) { error.value = '输入框已有新的草稿，请先保留或发送该草稿，再编辑原提问。'; return; }
-  const original = turnRequests.get(message.message_id) ?? assistantTurnFromHistory(sessionId.value, message, messages.value);
+  const original = turnRequests.get(message.message_id) ?? assistantTurnFromHistory(sessionId.value, message, messages.value, chatPurpose());
   if (!original) { error.value = '无法恢复原提问，请重新输入。'; return; }
   question.value = original.question;
   requestedAction.value = 'auto';

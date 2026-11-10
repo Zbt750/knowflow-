@@ -172,7 +172,7 @@ const chatDragStyle = computed(() => {
 const conversation = ref<HTMLElement | null>(null);
 const composerInput = ref<HTMLTextAreaElement | null>(null);
 const isComposing = ref(false);
-const messages = ref<Array<{ message_id?: string; role: "user" | "assistant"; text: string; status?: AssistantStatus; planner_task_id?: string | null; personal_generation?: GenerationResult | null }>>([]);
+const messages = ref<Array<{ message_id?: string; role: "user" | "assistant"; text: string; status?: AssistantStatus; assistant_error_code?: string | null; retryable?: boolean; planner_task_id?: string | null; personal_generation?: GenerationResult | null }>>([]);
 const taskSnapshots = reactive<Record<string, LearningTask>>({});
 const currentReplyTask = computed(() => messages.value.at(-1)?.planner_task_id === task.value?.task_id ? task.value : null);
 const generated = ref<GenerationResult|null>(null);
@@ -459,7 +459,7 @@ async function cancelGeneration() {
   finally { busy.value = false; }
 }
 function restoreHistory(history: ChatMessage[]) {
-  messages.value = history.map(m => ({ message_id: m.message_id, role: m.role, text: m.content || (m.status === 'failed' ? assistantFailureMessage(m.assistant_error_code) : ''), status: m.status, planner_task_id: m.planner_task_id, personal_generation: m.personal_generation })).slice(-40);
+  messages.value = history.map(m => ({ message_id: m.message_id, role: m.role, text: m.content || (m.status === 'failed' ? assistantFailureMessage(m.assistant_error_code) : ''), status: m.status, assistant_error_code: m.assistant_error_code, retryable: m.retryable, planner_task_id: m.planner_task_id, personal_generation: m.personal_generation })).slice(-40);
   const ownerSession = assistantSessionId.value;
   const ownerEpoch = epoch;
   for (const id of new Set(history.flatMap(m => m.planner_task_id ? [m.planner_task_id] : []))) {
@@ -474,11 +474,11 @@ function restoreHistory(history: ChatMessage[]) {
   generationConfirmationMessageId.value = latest?.personal_generation_confirmation ? latest.message_id : null;
   if (latest?.status !== 'failed') { failedTurn.value = null; error.value = ''; }
   if (latest?.status === 'failed' && assistantSessionId.value) {
-    failedTurn.value = assistantTurnFromHistory(assistantSessionId.value, latest, history);
+    failedTurn.value = assistantTurnFromHistory(assistantSessionId.value, latest, history, 'study');
     retryState.value = 'failed';
-    // Persisted content belongs to the Markdown message, never the error area.
-    // Older failures may have no code; absence is not a second answer body.
-    error.value = assistantFailureMessage(latest.assistant_error_code);
+    // The persisted message already owns the failure explanation. Keep the
+    // alert area for the retained question and its available recovery action.
+    error.value = '';
   }
   if (latest?.status === 'failed') failedTurnRetryable.value = latest.retryable !== false;
 }
@@ -759,7 +759,7 @@ function draftSummary(draft: Record<string, unknown> | null | undefined) {
         <template v-for="(message, index) in messages" :key="message.message_id ?? index">
           <div class="frog-message" :class="`frog-message--${message.role}`" :data-message-id="message.message_id" :data-status="message.status" :data-testid="`frog-message-${message.role}`">
             <MarkdownContent :text="message.text" />
-            <p v-if="message.status === 'failed'" class="task-note" data-testid="frog-message-failed-status">此条回复未完成，保留在原提问位置；不代表后续回复失败。</p>
+            <p v-if="message.status === 'failed' && message.retryable !== false" class="task-note" data-testid="frog-message-failed-status">此条回复未完成，保留在原提问位置；不代表后续回复失败。</p>
           </div>
           <PersonalQuestionResult v-if="message.personal_generation?.question_ids.length" :generation="message.personal_generation" @ready="revealGeneratedQuestion(message.personal_generation.batch_id)" @added="emit('confirmed')" />
           <GenerationFailureNotice v-if="message.personal_generation" :generation="message.personal_generation" />

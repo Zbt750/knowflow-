@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from threading import RLock
 from backend.mastery.enums import QuestionType
@@ -17,6 +18,15 @@ KNOWN_QUESTION_TYPES = {kind.value for kind in QuestionType if kind is not Quest
 _ELIGIBILITY_CACHE_MAX = 16384
 _ELIGIBILITY_CACHE: OrderedDict[tuple, "QuestionEligibility"] = OrderedDict()
 _ELIGIBILITY_CACHE_LOCK = RLock()
+_CACHE_QUESTION_FIELDS = (
+    "id", "bank_scope", "generation_batch_id", "current_version_id", "updated_at", "kp_id",
+    "question_type", "question_provenance", "content_trust", "source_status", "answer_provenance",
+    "answer_reliability", "content_reviewed_by", "content_reviewed_at", "answer_reviewed_by",
+    "answer_reviewed_at", "source_attestation_key", "source_attestation_sha256",
+    "answer_attestation_key", "answer_attestation_sha256", "answer_verification_event_id",
+    "auto_review_event_id", "is_active", "is_hidden",
+)
+_CACHE_NODE_FIELDS = ("id", "code", "subject", "is_active", "is_assessable", "is_reference_only", "children")
 
 
 @dataclass(frozen=True)
@@ -91,7 +101,13 @@ def legacy_question_eligibility(question: Question, node: KnowledgePoint | None 
         and generation_record.get("version") in {"bounded-question-generation-v10","bounded-question-generation-v9","bounded-question-generation-v8"}
         and generation_record.get("generation_mode") in {"deterministic_fast","ai_enhanced"})
     if not content_human_verified and not source_attested and not auto_review_current:
-        reasons.append("content_not_verified")
+        # A bounded personal AI verifier can prove the exact answer without
+        # certifying every model-authored explanation sentence. Permit that
+        # narrow, personal-only practice path; it is still not public or
+        # graduation evidence and unsupported answers remain blocked.
+        from backend.services.personal_answer_trust import personal_answer_independently_verified
+        if not personal_answer_independently_verified(question, node):
+            reasons.append("content_not_verified")
     if provenance not in {"real_exam", "trusted_practice", "ai_generated_practice"}:
         reasons.append("question_provenance_unknown")
     if provenance == "real_exam" and not (
@@ -191,7 +207,7 @@ def legacy_question_eligibility(question: Question, node: KnowledgePoint | None 
     verified_method = (available_grading_method(question_type=question.question_type,
         config=config, expected=expected, options=options)
         if trusted_answer else None)
-    answer_ready = (
+    answer_ready = bool(
         (content_human_verified or source_attested or auto_review_current)
         and (
             trusted_answer and (content_human_verified or auto_review_current)
@@ -199,8 +215,11 @@ def legacy_question_eligibility(question: Question, node: KnowledgePoint | None 
                 content_human_verified and answer_reliability in {"model_generated", "unverified", "ai_generated_consistent"}
                 or source_attested and answer_attested
             ))
-    ) or server_generated_personal
+        ) or server_generated_personal
     )
+    if not answer_ready:
+        from backend.services.personal_answer_trust import personal_answer_independently_verified
+        answer_ready = personal_answer_independently_verified(question, node)
     comparison_method = available_practice_grading_method(question_type=question.question_type,
         config=config, expected=expected, options=options,
         answer_provenance=answer_provenance, content_trust=trust,
@@ -277,12 +296,17 @@ def _eligibility_cache_key(question: Question, node: KnowledgePoint | None,
     below. Dirty, detached, personal, and unversioned objects fail closed and
     use the original evaluator.
     """
-    if (getattr(question, "bank_scope", "public") != "public"
-            or getattr(question, "generation_batch_id", None)
-            or getattr(question, "current_version_id", None) is None):
-        return None
     question_state = getattr(question, "_sa_instance_state", None)
     if question_state is None or question_state.modified:
+        return None
+    question_values = question_state.dict
+    # Avoid mapped-attribute descriptors for the warm, fully-loaded homepage
+    # inventory. Missing/deferred fields fail closed to the full evaluator.
+    if any(name not in question_values for name in _CACHE_QUESTION_FIELDS):
+        return None
+    if (question_values["bank_scope"] != "public"
+            or question_values["generation_batch_id"]
+            or question_values["current_version_id"] is None):
         return None
     if node is None:
         node_key = None
@@ -290,8 +314,12 @@ def _eligibility_cache_key(question: Question, node: KnowledgePoint | None,
         node_state = getattr(node, "_sa_instance_state", None)
         if node_state is None or node_state.modified:
             return None
-        node_key = (node.id, node.code, node.subject, bool(node.is_active),
-            bool(node.is_assessable), bool(node.is_reference_only), bool(getattr(node, "children", None)))
+        node_values = node_state.dict
+        if any(name not in node_values for name in _CACHE_NODE_FIELDS):
+            return None
+        node_key = (node_values["id"], node_values["code"], node_values["subject"],
+            bool(node_values["is_active"]), bool(node_values["is_assessable"]),
+            bool(node_values["is_reference_only"]), bool(node_values["children"]))
 
     try:
         from sqlalchemy.orm import object_session
@@ -303,7 +331,7 @@ def _eligibility_cache_key(question: Question, node: KnowledgePoint | None,
         return None
 
     def immutable_event_key(pointer_name: str, relationship_name: str, provided=None):
-        pointer = getattr(question, pointer_name, None)
+        pointer = question_values[pointer_name]
         if pointer is None:
             return None
         event = provided
@@ -317,18 +345,25 @@ def _eligibility_cache_key(question: Question, node: KnowledgePoint | None,
         event_state = getattr(event, "_sa_instance_state", None)
         if event_state is None or event_state.modified:
             return NO_VALUE
-        if event.id != pointer:
-            return ("mismatch", event.id)
+        event_values = event_state.dict
         if relationship_name == "current_auto_review":
-            return (event.id, event.question_id, event.event_type, event.review_version,
-                event.qualification_class, event.question_snapshot_sha256,
-                event.answer_sha256, event.audit_sha256)
-        return (event.id, event.question_id, event.event_type, event.verification_type,
-            event.answer_sha256, event.verifier, event.created_at)
+            fields = ("id", "question_id", "event_type", "review_version", "qualification_class",
+                "question_snapshot_sha256", "answer_sha256", "audit_sha256")
+        else:
+            fields = ("id", "question_id", "event_type", "verification_type", "answer_sha256", "verifier", "created_at")
+        if any(name not in event_values for name in fields):
+            return NO_VALUE
+        event_id = event_values["id"]
+        if event_id != pointer:
+            return ("mismatch", event_id)
+        if relationship_name == "current_auto_review":
+            return tuple(event_values[name] for name in fields)
+        return tuple(event_values[name] for name in fields)
 
     auto_event = None
     if auto_review_events is not None:
-        auto_event = auto_review_events.get(str(getattr(question, "auto_review_event_id", None)))
+        auto_pointer = question_values["auto_review_event_id"]
+        auto_event = auto_review_events.get(str(auto_pointer))
     auto_key = immutable_event_key("auto_review_event_id", "current_auto_review", auto_event)
     if auto_key is NO_VALUE:
         return None
@@ -343,16 +378,16 @@ def _eligibility_cache_key(question: Question, node: KnowledgePoint | None,
     except Exception:
         return None
     return (
-        bind, question.id, question.current_version_id, question.updated_at,
-        question.kp_id, question.question_type, question.question_provenance,
-        question.content_trust, question.source_status, question.answer_provenance,
-        question.answer_reliability, question.content_reviewed_by, question.content_reviewed_at,
-        question.answer_reviewed_by, question.answer_reviewed_at,
-        question.source_attestation_key, question.source_attestation_sha256,
-        question.answer_attestation_key, question.answer_attestation_sha256,
-        question.answer_verification_event_id, question.auto_review_event_id,
-        question.is_active, question.is_hidden, question.bank_scope,
-        question.generation_batch_id, auto_key, answer_key, node_key, teaching_enabled,
+        bind, question_values["id"], question_values["current_version_id"], question_values["updated_at"],
+        question_values["kp_id"], question_values["question_type"], question_values["question_provenance"],
+        question_values["content_trust"], question_values["source_status"], question_values["answer_provenance"],
+        question_values["answer_reliability"], question_values["content_reviewed_by"], question_values["content_reviewed_at"],
+        question_values["answer_reviewed_by"], question_values["answer_reviewed_at"],
+        question_values["source_attestation_key"], question_values["source_attestation_sha256"],
+        question_values["answer_attestation_key"], question_values["answer_attestation_sha256"],
+        question_values["answer_verification_event_id"], question_values["auto_review_event_id"],
+        question_values["is_active"], question_values["is_hidden"], question_values["bank_scope"],
+        question_values["generation_batch_id"], auto_key, answer_key, node_key, teaching_enabled,
     )
 
 
@@ -373,6 +408,67 @@ def public_eligibility_cache_ready(bind, *, minimum_entries: int = 512) -> bool:
     """
     with _ELIGIBILITY_CACHE_LOCK:
         return sum(1 for key in _ELIGIBILITY_CACHE if key and key[0] is bind) >= minimum_entries
+
+
+def cached_public_eligibility_from_row(row: Mapping, bind, *, teaching_enabled: bool | None = None):
+    """Look up a warm public eligibility decision from a scalar SQL row.
+
+    The homepage inventory can contain thousands of immutable public questions.
+    Materializing every Question and receipt ORM object just to check this cache
+    costs measurable CPU. This path builds the same strict, version-bound key
+    from the selected scalar columns. Any absent or inconsistent receipt fails
+    closed to the ordinary full ORM evaluator in the caller.
+    """
+    def q(name):
+        return row[f"q_{name}"]
+
+    if (q("bank_scope") != "public" or q("generation_batch_id")
+            or q("current_version_id") is None):
+        return None
+
+    def event_key(pointer_name: str, prefix: str, fields: tuple[str, ...]):
+        pointer = q(pointer_name)
+        if pointer is None:
+            return None
+        try:
+            values = tuple(row[f"{prefix}_{name}"] for name in fields)
+        except KeyError:
+            return None
+        event_id = values[0]
+        if event_id is None:
+            return None
+        if event_id != pointer:
+            return ("mismatch", event_id)
+        return values
+
+    auto_key = event_key("auto_review_event_id", "auto_review", (
+        "id", "question_id", "event_type", "review_version", "qualification_class",
+        "question_snapshot_sha256", "answer_sha256", "audit_sha256"))
+    if q("auto_review_event_id") is not None and auto_key is None:
+        return None
+    answer_key = event_key("answer_verification_event_id", "answer_verification", (
+        "id", "question_id", "event_type", "verification_type", "answer_sha256", "verifier", "created_at"))
+    if q("answer_verification_event_id") is not None and answer_key is None:
+        return None
+
+    node_key = (
+        row["node_id"], row["node_code"], row["node_subject"], bool(row["node_is_active"]),
+        bool(row["node_is_assessable"]), bool(row["node_is_reference_only"]), bool(row["node_has_children"]),
+    )
+    key = (
+        bind, q("id"), q("current_version_id"), q("updated_at"), q("kp_id"), q("question_type"),
+        q("question_provenance"), q("content_trust"), q("source_status"), q("answer_provenance"),
+        q("answer_reliability"), q("content_reviewed_by"), q("content_reviewed_at"),
+        q("answer_reviewed_by"), q("answer_reviewed_at"), q("source_attestation_key"),
+        q("source_attestation_sha256"), q("answer_attestation_key"), q("answer_attestation_sha256"),
+        q("answer_verification_event_id"), q("auto_review_event_id"), q("is_active"), q("is_hidden"),
+        q("bank_scope"), q("generation_batch_id"), auto_key, answer_key, node_key, teaching_enabled,
+    )
+    with _ELIGIBILITY_CACHE_LOCK:
+        cached = _ELIGIBILITY_CACHE.get(key)
+        if cached is not None:
+            _ELIGIBILITY_CACHE.move_to_end(key)
+        return cached
 
 
 def cached_question_eligibility(question: Question, node: KnowledgePoint | None = None,

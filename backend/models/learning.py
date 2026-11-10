@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
@@ -240,6 +240,51 @@ class QuestionVersion(Base):
 
     question: Mapped[Question] = relationship(
         foreign_keys=[question_id], back_populates="versions"
+    )
+
+
+class PersonalAnswerVerificationEvent(Base):
+    """Append-only machine answer proof bound to one personal question version.
+
+    This is deliberately separate from QuestionAnswerVerificationEvent, which
+    records human/reference attestations. A machine proof never claims a human
+    review or public/graduation qualification.
+    """
+
+    __tablename__ = "personal_answer_verification_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["question_id", "question_version_id"],
+            ["question_versions.question_id", "question_versions.id"],
+            ondelete="RESTRICT", name="fk_personal_answer_proof_question_version",
+        ),
+        UniqueConstraint("idempotency_key", name="uq_personal_answer_proof_idempotency"),
+        UniqueConstraint("question_version_id", "verifier_version", "adapter",
+                         name="uq_personal_answer_proof_version_verifier"),
+        CheckConstraint("status IN ('verified','rejected','needs_review')",
+                        name="personal_answer_proof_status_valid"),
+        CheckConstraint("length(question_snapshot_sha256) = 64",
+                        name="personal_answer_proof_snapshot_hash_length"),
+        CheckConstraint("length(answer_sha256) = 64",
+                        name="personal_answer_proof_answer_hash_length"),
+        CheckConstraint("length(idempotency_key) BETWEEN 1 AND 160",
+                        name="personal_answer_proof_idempotency_length"),
+        Index("ix_personal_answer_proof_question_created", "question_id", "created_at"),
+        Index("ix_personal_answer_proof_version", "question_version_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    question_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    question_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    question_snapshot_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    answer_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    verifier_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    adapter: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    proof: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
     )
 
 

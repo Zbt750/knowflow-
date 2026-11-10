@@ -29,7 +29,9 @@ def read_projection(db, now, kp_ids):
             result if result in {'right','wrong'} else 'unknown',
             reliable=evidence.get('evidence_capability') == 'verified_objective',
             assisted=bool(evidence.get('assisted')) or evidence.get('confidence') == 'guess',
-            error_kind=evidence.get('error_kind', 'unclassified'), rating=rating))
+            error_kind=evidence.get('error_kind', 'unclassified'), rating=rating,
+            schedule_reliable=(evidence.get('evidence_capability') == 'verified_objective'
+                or evidence.get('personal_answer_independently_verified') is True)))
     skips = db.scalars(select(LearningEvent).where(LearningEvent.kp_id.in_(kp_ids),
         LearningEvent.event_type=='scheduler_activity',LearningEvent.occurred_at<=now)).all()
     for event in skips:

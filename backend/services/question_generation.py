@@ -3,6 +3,7 @@ from copy import deepcopy
 from dataclasses import dataclass,field
 from datetime import datetime,timezone
 import json
+import logging
 import re
 import time
 from hashlib import sha256
@@ -21,6 +22,8 @@ from backend.services.personal_question_families import (
     ProblemSpec, resolve_family, validate_contract, verify_problem_spec_candidate,
     render_problem_spec, teaching_module, TEACHING_FOCI,
 )
+
+logger = logging.getLogger(__name__)
 
 PROMPT_VERSION="question-generation-c1-v1"
 PERSONAL_PROMPT_VERSION="question-generation-c5-v1"
@@ -396,6 +399,12 @@ def generate(provider,request,budget,*,max_retries=0,prompt_version=None):
                         or getattr(exc,"code",None)=="answer_truncated"
                         or isinstance(exc, ValueError) and str(exc) in {"empty_or_oversize_generation"}):
                     budget.stopped=True
+                # This is the layer that sees provider and response-parser
+                # exceptions before they are reduced to a safe batch result.
+                # Keep the private traceback here so an SSE error can be
+                # diagnosed without leaking it into the learner-facing reply.
+                logger.exception("personal_question_generation_attempt_failed attempt=%s exception_type=%s failure_reason=%s",
+                    attempt + 1, type(exc).__name__, row.get("failure_reason"))
                 raise
         finally:
             ACTIVE_ATTEMPT.reset(observation_token)
@@ -447,7 +456,7 @@ def current_generation_binding(q,node):
             and q.question_provenance=="ai_generated_practice"
             and current_codex_independent_review(q,node) is not None)
     supported_versions={GENERATION_VERSION,"bounded-question-generation-v9","bounded-question-generation-v8","bounded-question-generation-v7","bounded-question-generation-v5","bounded-question-generation-v4"}
-    supported_verifiers={VERIFIER_VERSION,"bounded-problem-verifiers-v16","bounded-problem-verifiers-v15","bounded-problem-verifiers-v14","bounded-problem-verifiers-v13","bounded-problem-verifiers-v12","bounded-problem-verifiers-v11","bounded-problem-verifiers-v10","bounded-problem-verifiers-v9","bounded-problem-verifiers-v8","bounded-problem-verifiers-v7"}
+    supported_verifiers={VERIFIER_VERSION,"bounded-problem-verifiers-v18","bounded-problem-verifiers-v17","bounded-problem-verifiers-v16","bounded-problem-verifiers-v15","bounded-problem-verifiers-v14","bounded-problem-verifiers-v13","bounded-problem-verifiers-v12","bounded-problem-verifiers-v11","bounded-problem-verifiers-v10","bounded-problem-verifiers-v9","bounded-problem-verifiers-v8","bounded-problem-verifiers-v7"}
     identity_ok = bool(record.get("version") in supported_versions and record.get("verified_content_hash")==generation_hash(q)
         and record.get("verifier_version") in supported_verifiers and record.get("family") in FAMILY_NODES)
     if record.get("family_registry_version") == FAMILY_REGISTRY_VERSION:
@@ -460,7 +469,7 @@ def current_generation_binding(q,node):
         if family_ok and record.get("prompt_version") == PERSONAL_C7_PROMPT_VERSION:
             family_ok=bool(record.get("generation_mode")=="ai_generated"
                 and record.get("version") in {GENERATION_VERSION,"bounded-question-generation-v9"}
-                and record.get("verifier_version") in {VERIFIER_VERSION,"bounded-problem-verifiers-v16","bounded-problem-verifiers-v15","bounded-problem-verifiers-v14","bounded-problem-verifiers-v13","bounded-problem-verifiers-v12","bounded-problem-verifiers-v11","bounded-problem-verifiers-v10"}
+                and record.get("verifier_version") in {VERIFIER_VERSION,"bounded-problem-verifiers-v18","bounded-problem-verifiers-v17","bounded-problem-verifiers-v16","bounded-problem-verifiers-v15","bounded-problem-verifiers-v14","bounded-problem-verifiers-v13","bounded-problem-verifiers-v12","bounded-problem-verifiers-v11","bounded-problem-verifiers-v10"}
                 and "problem_spec" not in record and "problem_spec_hash" not in record
                 and q.question_provenance=="ai_generated_practice"
                 and q.answer_provenance=="ai_generated" and q.answer_reliability=="model_generated"
@@ -668,7 +677,8 @@ def family_matches(family,result,*,node_code=None,registry_version=None):
     adapters={"power_derivative":{"teaching_family_v1","phase45i_polynomial_derivative_v1"},
         "power_integral":{"teaching_family_v1","phase45i_polynomial_definite_integral_v1"},
         "exp_limit":{"teaching_family_v1","phase45i_exp_second_order_limit_v1"},
-        "complete_tree":{"complete_tree_index_v1","phase45i_complete_tree_leaf_count_v1"},
+        "complete_tree":{"complete_tree_index_v1","phase45i_complete_tree_leaf_count_v1",
+                         "phase45i_complete_tree_symbolic_leaf_count_v1"},
         # Exact IEEE-754 binary32 decoding/encoding adapters are valid
         # independent evidence for the binary-float family too; they remain
         # bounded to the explicitly parsed whole-statement forms.
@@ -725,7 +735,9 @@ def assess_output(output,node,*,request_id,mode,family,parent=None,trace=None,di
         method="numeric_final"
     else:
         from backend.services.phase45i_quality_verifiers import _range_pair
-        method="range_final" if _range_pair(output.correct_answer) is not None else "constant_final"
+        from backend.services.phase45i_quality_verifiers import _symbolic_twos_complement_range
+        method="range_final" if (_range_pair(output.correct_answer) is not None or
+            _symbolic_twos_complement_range(output.correct_answer)) else "constant_final"
     content=dict(source_id="candidate-"+digest(request_id)[:16],kp_code=node.code,**output.model_dump(exclude={"final_value","steps"}),
         question_role="variant" if mode=="adapted" else "basic",difficulty=difficulty,skill_tags=skill_tags or [node.name],estimated_minutes=5,is_variant=mode=="adapted",grading_method=None)
     # Shared syntax/schema, no separate question database.
@@ -809,7 +821,27 @@ def assess_output(output,node,*,request_id,mode,family,parent=None,trace=None,di
     errors.extend(i for i in validate_question_content(q).detected_issues if i!="human_content_review_required")
     from backend.services.question_quality import audit_teaching_question
     quality=audit_teaching_question(q,node)
-    status="REJECTED" if errors else "AUTO_PASS" if independent and independent["status"]=="PASS" and quality["objective_grading_eligible"] and not uncertainties else "NEEDS_EVIDENCE"
+    # A bounded C4 adaptation can also be useful as a personal practice item
+    # when its answer is independently proven but a model-authored explanation
+    # step is outside the local verifier's scope. This is not an AUTO_PASS:
+    # it remains explicitly explanation-reference-only, personal-scope, and
+    # excluded from public admission/graduation. Proven conflicts still reject.
+    reference_only = bool(
+        not errors
+        and (trace or {}).get("prompt_version") in {
+            PERSONAL_C7_PROMPT_VERSION, "question-generation-c4-v1"}
+        and family_spec is not None
+        and independent and independent.get("status") == "PASS"
+        and quality.get("objective_grading_eligible")
+        and uncertainties
+        and set(uncertainties).issubset({
+            "explanation_step_not_independently_verified",
+            "explanation_key_claim_not_independently_verified",
+        })
+    )
+    status=("REJECTED" if errors else
+        "AUTO_PASS" if independent and independent["status"]=="PASS" and quality["objective_grading_eligible"] and not uncertainties else
+        "REFERENCE_SAVED" if reference_only else "NEEDS_EVIDENCE")
     if any(e in errors for e in {"candidate_structure_invalid","completion_changed_original_content","explanation_step_format_invalid"}):
         review_status="FORMAT_ERROR"
     elif errors:
@@ -825,6 +857,24 @@ def assess_output(output,node,*,request_id,mode,family,parent=None,trace=None,di
         review_status="AUTO_PASS" if status=="AUTO_PASS" else "INSUFFICIENT_EVIDENCE"
     record["review_status"]=review_status
     record["quality_status"]="AUTO_VERIFIED" if status=="AUTO_PASS" else review_status
+    if reference_only:
+        # The registered solver proved the answer but cannot prove every
+        # model-authored reasoning sentence. Keep it personal and explicit;
+        # it is never formal or graduation evidence.
+        record["review_status"] = "ANSWER_VERIFIED_EXPLANATION_REFERENCE_ONLY"
+        record["quality_status"] = "ANSWER_VERIFIED_EXPLANATION_REFERENCE_ONLY"
+        record["answer_independently_verified"] = True
+        record["explanation_independently_verified"] = False
+        record["reference_only_reason"] = sorted(set(uncertainties))
+        record["explanation_scope"] = "answer independently verified; explanation remains reference-only"
+        review_status = record["review_status"]
+    elif status == "AUTO_PASS" and independent and independent.get("status") == "PASS":
+        # AUTO_PASS is issued only after the bounded independent solver agrees
+        # with the answer and the quality/explanation checks have no unresolved
+        # uncertainty. Persist the answer-only trust bit so the second,
+        # version-bound verification event can confirm the same proof instead
+        # of falling back to needs_review for otherwise accepted AI practice.
+        record["answer_independently_verified"] = True
     record["verified_content_hash"]=generation_hash(q)
     return {"candidate_id":str(q.id),"request_id":request_id,"status":status,"review_status":review_status,
         "mode":mode,"errors":sorted(set(errors)),"uncertainties":sorted(set(uncertainties)),

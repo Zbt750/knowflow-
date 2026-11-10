@@ -229,7 +229,12 @@ def test_public_eligibility_cache_is_version_bound_and_fails_closed_while_dirty(
             question = BoundQuestion(id="q-cache", current_version_id="v1", updated_at=None,
                 kp_id="node-cache", question_type="single_choice", question_provenance="real_exam",
                 content_trust="auto_verified", source_status="verified", answer_provenance="auto_verified",
-                answer_reliability="verified", is_active=True, is_hidden=False, bank_scope="public")
+                answer_reliability="verified", is_active=True, is_hidden=False, bank_scope="public",
+                generation_batch_id=None, content_reviewed_by=None, content_reviewed_at=None,
+                answer_reviewed_by=None, answer_reviewed_at=None, source_attestation_key=None,
+                source_attestation_sha256=None, answer_attestation_key=None,
+                answer_attestation_sha256=None, answer_verification_event_id=None,
+                auto_review_event_id=None)
             node = BoundNode(id="node-cache", code="cache.leaf", subject="math2",
                 is_active=True, is_assessable=True, is_reference_only=False)
             node.children = []
@@ -242,9 +247,19 @@ def test_public_eligibility_cache_is_version_bound_and_fails_closed_while_dirty(
             assert eligibility.cached_question_eligibility(question, node) is marker
             assert len(calls) == 1, "warm lookup must not run the content validator again"
 
+            scalar_row = {f"q_{name}": getattr(question, name)
+                for name in eligibility._CACHE_QUESTION_FIELDS}
+            scalar_row.update(node_id=node.id, node_code=node.code, node_subject=node.subject,
+                node_is_active=node.is_active, node_is_assessable=node.is_assessable,
+                node_is_reference_only=node.is_reference_only, node_has_children=False)
+            assert eligibility.cached_public_eligibility_from_row(scalar_row, session.get_bind()) is marker
+            assert len(calls) == 1, "scalar warm lookup must hit the exact same immutable decision"
+
             question.current_version_id = "v2"
             assert eligibility._eligibility_cache_key(question, node, None, None) is None
             assert eligibility.cached_question_eligibility(question, node) is None
+            scalar_row["q_current_version_id"] = "v2"
+            assert eligibility.cached_public_eligibility_from_row(scalar_row, session.get_bind()) is None
             session.flush()
             second = eligibility.question_eligibility(question, node)
             assert second is marker and len(calls) == 2

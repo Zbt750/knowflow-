@@ -324,6 +324,13 @@ def submit_answer(db: Session, *, item_id: UUID, raw_answer: str | None,
         "teaching_use": eligibility.teaching_use,
         "reference_result": reference_result, "feedback_notice": feedback_notice,
     }
+    # Independently proven personal answers can schedule the exact immutable
+    # question version in FSRS. Personal-scope evidence remains non-graduating
+    # and cannot update the reliable BKT mastery estimate.
+    from backend.services.personal_answer_trust import personal_answer_independently_verified
+    evidence["personal_answer_independently_verified"] = bool(
+        eligibility.bank_scope == "personal"
+        and personal_answer_independently_verified(question, db.get(KnowledgePoint, item.kp_id)))
     category = classify_attempt_sequence(result=verdict.result,
         # Sequence describes observed completion/assistance, not graduation
         # authority. Only verified_objective below can create strong evidence.

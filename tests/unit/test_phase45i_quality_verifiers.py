@@ -26,7 +26,7 @@ def q(stem, answer, *, kind="fill_blank", options=None):
 ])
 def test_real_phase45i_families_are_independently_supported(question, expected_adapter):
     result = verify_problem(question)
-    assert VERSION == "bounded-problem-verifiers-v17"
+    assert VERSION == "bounded-problem-verifiers-v19"
     assert result["status"] == "PASS", result
     assert result["adapter"] == expected_adapter
 
@@ -110,6 +110,164 @@ def test_final_value_can_use_correct_option_label_but_not_another_label():
     assert final_value_matches(question, "C", independent) == "wrong"
 
 
+def test_symbolic_complete_tree_provider_response_is_independently_verified_end_to_end():
+    """Regression for the real DeepSeek output captured in R50 tree-r2."""
+    from backend.models.learning import KnowledgePoint
+    from backend.services.personal_question_families import resolve_family
+    from backend.services.question_generation import Output, PERSONAL_C7_PROMPT_VERSION, assess_output
+    from uuid import uuid4
+
+    node = KnowledgePoint(id=uuid4(), code="cs408.ds.topic.1efaf3d00b50",
+        name="二叉树", subject="408", is_active=True, is_assessable=True,
+        is_reference_only=True)
+    output = Output(
+        stem="一棵完全二叉树共有n个结点，则其叶子结点数为（ ）。",
+        question_type="single_choice",
+        options={"A": "⌊n/2⌋", "B": "n−⌊n/2⌋", "C": "⌈n/2⌉−1", "D": "n−⌈n/2⌉"},
+        correct_answer="B",
+        explanation="完全二叉树按层序从1编号，编号大于⌊n/2⌋的结点都是叶子。"
+                    "因此叶子结点数为 n−⌊n/2⌋，也等于⌈n/2⌉。其余选项与这一计数不符。",
+        final_value="n−⌊n/2⌋",
+        steps=[{"expression": "n−floor(n/2)", "value": "n−⌊n/2⌋"}],
+    )
+    result = assess_output(output, node, request_id="R50:real-provider-tree-response-regression",
+        mode="original", family="complete_tree",
+        family_spec=resolve_family(node.code, output.question_type),
+        trace={"mode": "real_model", "model": "deepseek-flash", "model_calls": 1,
+               "prompt_version": PERSONAL_C7_PROMPT_VERSION})
+
+    assert result["status"] == "AUTO_PASS", result
+    assert result["record"]["independent_verification"]["status"] == "PASS"
+    assert result["record"]["independent_verification"]["adapter"] == "phase45i_complete_tree_symbolic_leaf_count_v1"
+    assert result["record"]["narrative_verification"]["status"] == "PASS"
+    assert result["record"]["review_status"] == "AUTO_PASS"
+
+
+def test_symbolic_complete_tree_final_value_accepts_answer_key_and_rejects_wrong_key():
+    question = q("一棵完全二叉树共有n个结点，则其叶子结点数为（ ）。", "B", kind="single_choice",
+        options={"A": "⌊n/2⌋", "B": "n−⌊n/2⌋", "C": "⌈n/2⌉−1", "D": "n−⌈n/2⌉"})
+    independent = verify_problem(question)
+    assert independent["status"] == "PASS"
+    assert final_value_matches(question, "B", independent) == "right"
+    assert final_value_matches(question, "C", independent) == "wrong"
+    assert final_value_matches(question, "n-floor(n/2)", independent) == "right"
+    assert final_value_matches(question, "floor(n/2)", independent) == "wrong"
+
+
+def test_symbolic_complete_tree_rejects_ambiguous_options_and_does_not_guess_unknown_forms():
+    ambiguous = q("一棵完全二叉树共有n个结点，则其叶子结点数为（ ）。", "B", kind="single_choice",
+        options={"A": "⌊(n+1)/2⌋", "B": "n−⌊n/2⌋", "C": "⌈n/2⌉−1", "D": "n−⌈n/2⌉"})
+    unsupported = q("一棵完全二叉树共有n个结点，则其叶子结点数为（ ）。", "B", kind="single_choice",
+        options={"A": "floor(n/2)+1", "B": "n−⌊n/2⌋", "C": "ceil(n/2)-1", "D": "n-ceil(n/2)"})
+    assert verify_problem(ambiguous)["status"] == "FAIL"
+    assert verify_problem(ambiguous)["reason"] == "non_unique_correct_option"
+    # Every option must parse under the bounded allowlist before the item can
+    # pass; an unsupported expression cannot be assumed to be a distractor.
+    assert verify_problem(unsupported)["status"] == "UNKNOWN"
+    assert verify_problem(unsupported)["reason"] == "option_outside_exact_scope"
+
+
+def test_real_provider_numeric_complete_tree_wording_and_explanation_are_bounded_and_exact():
+    from backend.services.phase45i_quality_verifiers import verify_narrative_claims
+
+    question = q("一棵完全二叉树共有n=1000个结点，则其叶子结点数为（ ）。", "B",
+        kind="single_choice", options={"A": "499", "B": "500", "C": "501", "D": "512"})
+    independent = verify_problem(question)
+    assert independent and independent["status"] == "PASS", independent
+    assert independent["adapter"] == "phase45i_complete_tree_leaf_count_v1"
+    assert final_value_matches(question, "500", independent) == "right"
+    assert final_value_matches(question, "501", independent) == "wrong"
+    assert verify_explanation_step("1000-floor(1000/2)", "500") == "right"
+    assert verify_explanation_step("ceil(1000/2)", "500") == "right"
+    assert verify_explanation_step("⌈1000/2⌉", "500") == "right"
+    assert verify_explanation_step("⌈1000/2⌉", "501") == "wrong"
+
+    question.explanation = (
+        "完全二叉树按层序从1开始编号，编号大于⌊n/2⌋的结点为叶结点。"
+        "取n=1000，⌊1000/2⌋=500，因此叶子结点数为1000−500=500，也等于⌈1000/2⌉。"
+    )
+    narrative = verify_narrative_claims(question, independent)
+    assert narrative["status"] == "PASS", narrative
+    assert narrative["checked_claim_count"] == 4
+
+    question.explanation = question.explanation.replace("1000−500=500", "1000−500=501")
+    assert verify_narrative_claims(question, independent)["status"] == "FAIL"
+
+
+def test_real_provider_numeric_complete_tree_response_can_pass_generation_quality_gate():
+    from uuid import uuid4
+    from backend.models.learning import KnowledgePoint
+    from backend.services.personal_question_families import resolve_family
+    from backend.services.question_generation import Output, PERSONAL_C7_PROMPT_VERSION, assess_output
+
+    node = KnowledgePoint(id=uuid4(), code="cs408.ds.topic.1efaf3d00b50",
+        name="二叉树", subject="408", is_active=True, is_assessable=True,
+        is_reference_only=True)
+    output = Output(
+        stem="一棵完全二叉树共有n=1000个结点，则其叶子结点数为（ ）。",
+        question_type="single_choice", options={"A": "499", "B": "500", "C": "501", "D": "512"},
+        correct_answer="B",
+        explanation=("完全二叉树按层序从1编号，编号大于⌊n/2⌋的结点均为叶子结点。"
+            "n=1000时⌊n/2⌋=500，故叶子结点数为1000−500=500。也可由公式⌈n/2⌉得到500。"),
+        final_value="500", steps=[{"expression": "floor(1000/2)", "value": "500"},
+            {"expression": "1000-500", "value": "500"}],
+    )
+    result = assess_output(output, node, request_id="R50:real-provider-tree-numeric-regression",
+        mode="original", family="complete_tree", family_spec=resolve_family(node.code, output.question_type),
+        trace={"mode": "real_model", "model": "deepseek-flash", "model_calls": 1,
+               "prompt_version": PERSONAL_C7_PROMPT_VERSION})
+    assert result["status"] == "AUTO_PASS", result
+    assert result["record"]["independent_verification"]["status"] == "PASS"
+    assert result["record"]["narrative_verification"]["status"] == "PASS"
+    assert result["record"]["narrative_verification"]["checked_claim_count"] == 4
+
+
+def test_real_provider_ascii_floor_complete_tree_wording_has_checked_narrative_claims():
+    from backend.services.phase45i_quality_verifiers import verify_narrative_claims
+
+    question = q("一棵完全二叉树共有999个结点，则其叶子结点数为（ ）。", "C",
+        kind="single_choice", options={"A": "498", "B": "499", "C": "500", "D": "501"})
+    independent = verify_problem(question)
+    assert independent and independent["status"] == "PASS", independent
+    assert independent["adapter"] == "phase45i_complete_tree_leaf_count_v1"
+    question.explanation = (
+        "完全二叉树中编号大于floor(n/2)的结点均为叶子结点，因此叶子数为n−floor(n/2)。"
+        "当n=999时，floor(999/2)=499，所以叶子数为999−499=500。"
+    )
+    narrative = verify_narrative_claims(question, independent)
+    assert narrative["status"] == "PASS", narrative
+    assert narrative["checked_claim_count"] == 4
+    question.explanation = question.explanation.replace("floor(999/2)=499", "floor(999/2)=500")
+    assert verify_narrative_claims(question, independent)["status"] == "FAIL"
+
+
+def test_real_provider_ascii_floor_complete_tree_output_passes_assessment():
+    from uuid import uuid4
+    from backend.models.learning import KnowledgePoint
+    from backend.services.personal_question_families import resolve_family
+    from backend.services.question_generation import Output, PERSONAL_C7_PROMPT_VERSION, assess_output
+
+    node = KnowledgePoint(id=uuid4(), code="cs408.ds.topic.1efaf3d00b50",
+        name="二叉树", subject="408", is_active=True, is_assessable=True,
+        is_reference_only=True)
+    output = Output(
+        stem="一棵完全二叉树共有999个结点，则其叶子结点数为（ ）。",
+        question_type="single_choice", options={"A": "498", "B": "499", "C": "500", "D": "501"},
+        correct_answer="C",
+        explanation=("完全二叉树中编号大于floor(n/2)的结点均为叶子结点，因此叶子数为n−floor(n/2)。"
+            "当n=999时，floor(999/2)=499，所以叶子数为999−499=500。"),
+        final_value="500", steps=[{"expression": "floor(999/2)", "value": "499"},
+            {"expression": "999-499", "value": "500"}],
+    )
+    result = assess_output(output, node, request_id="R50:real-provider-tree-ascii-floor-regression",
+        mode="original", family="complete_tree", family_spec=resolve_family(node.code, output.question_type),
+        trace={"mode": "real_model", "model": "deepseek-flash", "model_calls": 1,
+               "prompt_version": PERSONAL_C7_PROMPT_VERSION})
+    assert result["status"] == "AUTO_PASS", result
+    assert result["record"]["independent_verification"]["status"] == "PASS"
+    assert result["record"]["narrative_verification"]["checked_claim_count"] == 4
+
+
 def test_generation_audit_has_explicit_wrong_unsupported_and_insufficient_states():
     from uuid import uuid4
     from backend.models.learning import KnowledgePoint
@@ -154,6 +312,51 @@ def test_ai_personal_interval_answer_is_practice_gradable_but_never_verified_gra
     grade = lambda answer: grade_practice_final_answer(**common,answer=answer,selected_option=None)
     assert grade("[-128.0, 127]").result == "right"
     assert grade("[-127,127]").result == "wrong"
+    assert grade("").result == "unknown"
+
+
+@pytest.mark.parametrize("answer", [
+    "[-2^(n-1), 2^(n-1)-1]",
+    r"\left[-2^{n-1},\ 2^{n-1}-1\right]",
+    r"$[-2^{n-1},2^{n-1}-1]$",
+])
+def test_generic_twos_complement_range_is_independently_verified_only_in_registered_stem(answer):
+    question = q("设机器字长为n位，采用补码表示定点整数，则可表示的十进制整数范围是____（用闭区间表示）。", answer)
+    result = verify_problem(question)
+    assert VERSION == "bounded-problem-verifiers-v19"
+    assert result and result["status"] == "PASS", result
+    assert result["adapter"] == "phase45i_twos_complement_symbolic_range_v1"
+    assert final_value_matches(question, r"\left[-2^{n-1}, 2^{n-1}-1\right]", result) == "right"
+    assert final_value_matches(question, "[-2^(n-1),2^(n-1)]", result) == "unknown"
+
+
+@pytest.mark.parametrize("answer", [
+    "[-2^(n-1),2^(n-1)]",
+    "[-2^n-1,2^(n-1)-1]",
+    "[-2^(n-1),2^n-1]",
+])
+def test_wrong_or_ambiguous_symbolic_twos_complement_range_is_not_accepted(answer):
+    result = verify_problem(q("设机器字长为n位，采用补码表示定点整数，则可表示的十进制整数范围是____（用闭区间表示）。", answer))
+    assert result and result["status"] == "FAIL", result
+
+
+def test_symbolic_range_verification_requires_the_exact_registered_problem_statement():
+    result = verify_problem(q("设机器字长为n位，采用原码表示定点整数，则可表示的十进制整数范围是____（用闭区间表示）。",
+        "[-2^(n-1),2^(n-1)-1]"))
+    assert result is None or result["status"] != "PASS"
+
+
+def test_ai_personal_symbolic_range_answer_is_exactly_practice_gradable():
+    from backend.services.answer_grading import available_practice_grading_method, grade_practice_final_answer
+    config = {"verified": False, "method": None, "generated_practice_method": "range_final",
+        "generation": {"version": "bounded-question-generation-v10"}}
+    common = dict(question_type="fill_blank", config=config,
+        expected="[-2^(n-1),2^(n-1)-1]", options=None, answer_provenance="ai_generated",
+        content_trust="unreviewed", answer_reliability="model_generated")
+    assert available_practice_grading_method(**common) == "ai_generated_range_final"
+    grade = lambda answer: grade_practice_final_answer(**common, answer=answer, selected_option=None)
+    assert grade(r"\left[-2^{n-1},2^{n-1}-1\right]").result == "right"
+    assert grade("[-2^(n-1),2^(n-1)]").result == "unknown"
     assert grade("").result == "unknown"
 
 
@@ -202,6 +405,25 @@ def test_numeric_determinant_template_uses_unseen_values_and_checks_choice_uniqu
     assert verify_problem(q(stem,"B",kind="single_choice",options=opts))["status"]=="FAIL"
     duplicate=dict(opts,B="75")
     assert verify_problem(q(stem,"A",kind="single_choice",options=duplicate))["reason"]=="non_unique_correct_option"
+
+
+def test_numeric_determinant_accepts_matching_explicit_latex_matrix_and_row_text():
+    stem = r"计算二阶行列式 \begin{vmatrix} 3 & -2 \\ 5 & 4 \end{vmatrix}，其中第一行是 3、-2，第二行是 5、4。"
+    result = verify_problem(q(stem, "B", kind="single_choice", options={
+        "A": "2", "B": "22", "C": "-22", "D": "-2",
+    }))
+    assert result["status"] == "PASS", result
+    assert result["adapter"] == "phase45i_determinant_2x2_numeric_v1"
+    assert result["proof"]["matrix"] == [[3, -2], [5, 4]]
+
+
+def test_numeric_determinant_rejects_conflicting_latex_matrix_and_row_text():
+    stem = r"计算二阶行列式 \begin{vmatrix} 3 & -2 \\ 5 & 4 \end{vmatrix}，其中第一行是 3、-2，第二行是 5、3。"
+    result = verify_problem(q(stem, "B", kind="single_choice", options={
+        "A": "2", "B": "22", "C": "-22", "D": "-2",
+    }))
+    assert result["status"] == "UNKNOWN", result
+    assert result["reason"] == "determinant_rendering_conflicts_with_row_statement"
 
 
 def test_derivative_at_point_family_has_parameterized_exact_solution():

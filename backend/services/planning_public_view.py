@@ -2,6 +2,7 @@
 from collections import Counter
 from datetime import datetime, timezone
 from uuid import UUID
+from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import object_session
 from sqlalchemy.orm.exc import UnmappedInstanceError
@@ -180,9 +181,25 @@ def public_task(factory,result,*,now=None):
     now=now or datetime.now(timezone.utc)
     with factory() as db:
         row=db.get(LearningTask,result.task_id)
-        if row is None or not before_generation(db,row,now):return result
+        if row is None:return result
         context=row.context if isinstance(row.context,dict) else {}
         handoff=context.get('planner_handoff') if isinstance(context.get('planner_handoff'),dict) else {}
+        # A post-generation append is already bound to a real active paper.
+        # Keep its candidate visible on the confirmation card so the learner
+        # can inspect exactly what will be added. The count-only projection
+        # below belongs to pre-generation planning; applying it to an append
+        # turns the card into a new-paper preview and hides its confirm action.
+        operation=context.get('daily_plan_operation') or (handoff.get('constraints') or {}).get('daily_plan_operation')
+        plan_id=context.get('current_plan_id') or (context.get('current_plan') or {}).get('plan_id')
+        if operation=='append' and plan_id:
+            try:
+                plan=db.get(DailyPlan,UUID(str(plan_id)))
+                local_day=now.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat()
+                if plan is not None and plan.status=='active' and plan.study_date==local_day:
+                    return result
+            except (TypeError,ValueError):
+                pass
+        if not before_generation(db,row,now):return result
         paper=row.draft if isinstance(row.draft,dict) else context.get('baseline')
         safe=paper_summary(db,paper,scope_ids=handoff.get('target_knowledge_node_ids',[]),
             budget=row.budget_minutes,now=now,ready=row.status=='ready')

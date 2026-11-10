@@ -1,5 +1,5 @@
 from backend.services.personal_training_chat import _parse_preserved_training_command as parse_training_command
-from backend.services.personal_generation_intent import _named_multi_targets
+from backend.services.personal_generation_intent import _named_multi_targets, _explicit_node_mentions, _preferences
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -45,6 +45,19 @@ def test_compound_personal_training_generation_keeps_each_node_count_and_type():
         lhopital.id: (3, "single_choice"),
         implicit.id: (2, "fill_blank"),
     }
+
+
+def test_possessive_topic_phrase_does_not_expand_one_generation_to_related_nodes():
+    determinant = SimpleNamespace(id=uuid4(), name="行列式", code="math.exam.determinant")
+    properties = SimpleNamespace(id=uuid4(), name="行列式的性质", code="math.exam.determinant.properties")
+    text = "给我生成一道行列式的单选题，考查二阶行列式计算。请给出四个选项、正确答案和解析。"
+
+    mentions = _explicit_node_mentions(text, [determinant, properties])
+    assert [(text[start:end], node.id) for start, end, _, _, node in mentions] == [
+        ("行列式", determinant.id), ("行列式", determinant.id),
+    ]
+    assert _named_multi_targets(text, [determinant, properties], "single_choice", "basic") is None
+    assert _preferences(text)[1] == [("single_choice", 1)]
 
 
 def test_chat_ai_request_uses_resolved_nodes_and_shared_generation_schema():

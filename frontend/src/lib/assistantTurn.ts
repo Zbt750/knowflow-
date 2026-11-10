@@ -1,4 +1,4 @@
-import type { AssistantOptions, ChatMessage } from "../api/chat";
+import type { AssistantOptions, ChatMessage, ChatPurpose } from "../api/chat";
 
 /** A retry is a continuation of an accepted turn, never a new composer draft. */
 export type AssistantTurn = {
@@ -42,7 +42,7 @@ export function retryAssistantTurn(turn: AssistantTurn, saved?: ChatMessage): As
 }
 
 /** Recover a failed turn after refresh using the server's persisted request facts. */
-export function assistantTurnFromHistory(sessionId: string, message: ChatMessage, history: ChatMessage[]): AssistantTurn | null {
+export function assistantTurnFromHistory(sessionId: string, message: ChatMessage, history: ChatMessage[], purpose: ChatPurpose = "qa"): AssistantTurn | null {
   const index = history.findIndex(item => item.message_id === message.message_id);
   if(index < 0 || message.role !== 'assistant') return null;
   const confirmation = history.find(item => item.message_id === message.personal_generation_confirmation_message_id);
@@ -50,7 +50,7 @@ export function assistantTurnFromHistory(sessionId: string, message: ChatMessage
   const question = confirmation?.personal_generation_confirmation?.question ?? source?.content;
   if (!question) return null;
   const turn = createAssistantTurn(sessionId, question, {
-    assistant: true, request_key: message.request_key ?? undefined, study_context: message.study_context ?? undefined,
+    assistant: true, purpose, request_key: message.request_key ?? undefined, study_context: message.study_context ?? undefined,
     qa_action: message.qa_action ?? "auto",
     current_work: message.current_work ?? undefined,
     personal_generation_mode: message.personal_generation_mode ?? "ai_generated",
@@ -64,6 +64,7 @@ export function assistantTurnFromHistory(sessionId: string, message: ChatMessage
 export function assistantFailureMessage(code?: string | null, message?: string): string {
   if (code === 'generation_failed') return '本条回答生成未完成，原提问已保留；可以读取状态后重试。';
   if (code === 'answer_truncated') return '本条回答达到输出上限，已保留未完成内容；请缩小问题范围后重试。';
+  if (code === 'personal_generation_daily_limit') return '今天的个人出题次数已达到上限；没有调用模型或保存题目，请明天再试。';
   if (code === "personal_generation_storage_forbidden") return "当前应用账号缺少出题保存权限，尚未调用模型；请联系管理员修复权限后重试。";
   if (code === "internal_error" || message === "internal error") return "本次处理未完成，已保存这条提问。请重试这条回复；无需重新输入。";
   return message || "本次回复未完成，已保留原提问，可重试这条回复。";

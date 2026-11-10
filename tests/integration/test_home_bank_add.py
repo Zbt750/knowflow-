@@ -506,7 +506,11 @@ def test_manual_scope_save_has_no_dialogue_and_next_chat_uses_saved_scope_not_or
     assert history.status_code==200 and history.json()==[]
     chatted=post(client,home,'再帮我加入一道洛必达法则的题目。',expected_version=saved['draft_version'])
     assert chatted['status']=='ready' and chatted['context']['request_origin']=='chat'
-    assert chatted['context']['bank_scope']['base_scope_ids']==[home['lh']]
+    changes=chatted['context']['topic_count_changes']
+    assert len(changes)==1 and changes[0]['kp_id']==home['lh']
+    before_count=sum(q['kp_id']==home['lh'] for q in saved['draft']['questions'])
+    assert changes[0]['before_count']==before_count and changes[0]['count']==before_count+1
+    assert changes[0]['delta']==1 and len(changes[0]['added_question_ids'])==1
     assert {q['question_id'] for q in saved['draft']['questions']}.issubset(q['question_id'] for q in chatted['draft']['questions'])
     assert home['linear'] not in chatted['draft']['selected_kp_ids']  # Explicit manual removal stays removed.
     assert messages_count()==before_messages+2 and counts(session_factory)==before_business

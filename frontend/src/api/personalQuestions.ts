@@ -16,10 +16,15 @@ export type DifficultySummary = {
   constraint_check?:{status:string;issues:string[]};
 };
 export type PersonalQuestion = { id:string;kp_id:string;bank_scope:'public'|'personal';hidden:boolean;
+  verification?:'verified'|'auto_verified'|'rejected'|'needs_review'|'unverified';
   difficulty_summary?:DifficultySummary|null;
   question_type:string;difficulty:string;stem:string;options:Record<string,string>|null;practice_eligible:boolean };
 export type GenerationResult = {batch_id:string;status:string;question_ids:string[];message:string;
   append_results?:TodayAppendResult[];
+  answer_verification_events?:Array<{event_id:string;question_id:string;question_version_id:string;
+    status:'verified'|'rejected'|'needs_review';verifier_version:string;adapter:string}>;
+  answer_verified_explanation_reference_question_ids?:string[];
+  unverified_reference_question_ids?:string[];
   outcome_summary?:{requested_count:number;saved_count:number;failed_count:number;attempted_count:number|null;
     not_attempted_count:number|null;not_executed_count?:number|null;network_failed_count?:number;
     unresolved_count:number;provider_calls:number;quality_rejected_count:number;

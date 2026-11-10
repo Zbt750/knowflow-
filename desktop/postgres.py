@@ -303,10 +303,11 @@ class DataDirectoryLock:
 
 
 class ManagedPostgres:
-    def __init__(self, paths: RuntimePaths, binary_dir: Path, *, port=18760):
+    def __init__(self, paths: RuntimePaths, binary_dir: Path, *, port=18760, startup_wait_s=30):
         self.paths = paths
         self.binary_dir = binary_dir
         self.port = port
+        self.startup_wait_s = startup_wait_s
         self.cluster = paths.data / "postgres" / "cluster"
         self.marker = paths.data / "config" / "postgres-owner.json"
         self.credentials = paths.data / "config" / "postgres-credentials.bin"
@@ -321,6 +322,9 @@ class ManagedPostgres:
     def preflight(self):
         if not isinstance(self.port, int) or isinstance(self.port, bool) or not 18000 <= self.port <= 65535:
             raise ValueError("desktop_postgres_port_invalid")
+        if (not isinstance(self.startup_wait_s,int) or isinstance(self.startup_wait_s,bool)
+                or not 30 <= self.startup_wait_s <= 900):
+            raise ValueError("desktop_postgres_startup_wait_invalid")
         if not self.binary_dir.is_absolute() or not self.paths.data.is_absolute():
             raise ValueError("desktop_postgres_path_invalid")
         for path in (self.cluster, self.marker, self.credentials, self.lock.path):
@@ -546,15 +550,15 @@ class ManagedPostgres:
             try:
                 command = [self.binary("pg_ctl"), "-D", str(self.cluster), "-l", str(self.paths.data / "logs/postgres.log"),
                                "-o", f"-p {self.port} -c listen_addresses=127.0.0.1 -c log_statement=none -c log_min_error_statement=panic",
-                               "-w", "-t", "30", "start"]
-                result = _run(command, timeout=45, capture=True, stage="pg_ctl_start", cwd=self.paths.data)
+                               "-w", "-t", str(self.startup_wait_s), "start"]
+                result = _run(command, timeout=self.startup_wait_s+15, capture=True, stage="pg_ctl_start", cwd=self.paths.data)
             finally:
                 identity = self._identity()
                 if identity is not None and identity[1] >= started_at - 1:
                     self._owned_identity = identity
             if result.returncode or self._owned_identity is None:
                 _failed_result("desktop_postgres_start_failed", command, result,
-                    stage="pg_ctl_start", timeout=45, cwd=self.paths.data)
+                    stage="pg_ctl_start", timeout=self.startup_wait_s+15, cwd=self.paths.data)
             self._ensure_database()
         except BaseException as startup_error:
             try:

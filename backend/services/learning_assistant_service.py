@@ -41,6 +41,90 @@ def _may_classify_data_query(route, *, qa_action, generation_requested, generati
         and (route.capability != "planner" or route.intent == "query"))
 
 
+def personal_generation_failure_retryable(generated):
+    """Allow only a definitive zero-save failure to start a fresh user retry."""
+    if not isinstance(generated, dict) or generated.get("status") != "failed":
+        return False
+    if generated.get("question_ids"):
+        return False
+    if generated.get("failure_code") == "personal_generation_storage_forbidden":
+        # Storage preflight runs before reservation/provider invocation and
+        # leaves no batch or question row behind, so retry after ACL repair is safe.
+        return True
+    retryable_reasons = {
+        "PROVIDER_TIMEOUT", "PROVIDER_NETWORK", "PROVIDER_FAILED", "FORMAT_ERROR",
+        "OUTPUT_TRUNCATED", "INSUFFICIENT_EVIDENCE", "UNSUPPORTED", "CONFIRMED_WRONG",
+        "DIFFICULTY_MISMATCH", "PROCESSING_FAILED",
+    }
+    return any(item.get("reason") in retryable_reasons
+               for item in (generated.get("failures") or []) if isinstance(item, dict))
+
+
+_RECENT_SIMILAR_APPEND_REMOVE = re.compile(
+    r"(?:把)?(?:刚才|刚刚|上次).{0,16}(?:加入|添加|加进|放进|追加).{0,12}"
+    r"(?:的)?(?:那|这)(?:一道|一题|道|题)(?:题)?(?:给我)?(?:删除|删掉|移除|去掉)"
+)
+
+
+def _recent_similar_append_item(factory, *, session_id, daily_plan_id, message):
+    """Resolve a pronoun only from the latest committed same-session similar append.
+
+    Returns ``(item_id, error, matched)``. A matched but stale/ambiguous request
+    must not fall through to a generic QA or an unrelated current-question edit.
+    """
+    if not _RECENT_SIMILAR_APPEND_REMOVE.search(message or ""):
+        return None, None, False
+    with factory() as db:
+        proposals = list(db.scalars(select(ChatMessage).where(
+            ChatMessage.session_id == session_id, ChatMessage.role == "assistant",
+            ChatMessage.status == "completed").order_by(ChatMessage.seq.desc()).limit(40)))
+        proposal_message = next((row for row in proposals
+            if isinstance(row.metadata_, dict)
+            and row.metadata_.get("answer_source") == "similar_candidate_proposal"
+            and row.metadata_.get("planner_task_id")), None)
+        if proposal_message is None:
+            return None, "没有找到本会话刚才加入的相似题记录；今日卷未改变。请指定当前题号。", True
+        metadata = proposal_message.metadata_ or {}
+        try:
+            task = db.get(LearningTask, UUID(str(metadata["planner_task_id"])))
+        except (ValueError, TypeError):
+            task = None
+        if task is None or task.session_id != session_id:
+            return None, "刚才的相似题加入记录无法与当前会话核对；今日卷未改变。请刷新后指定题号。", True
+        task_context = task.context if isinstance(task.context, dict) else {}
+        handoff = task_context.get("planner_handoff") or {}
+        constraints = handoff.get("constraints") or {}
+        if not constraints.get("similar_requested"):
+            return None, "最近一次题库方案不是相似题追加；今日卷未改变。请指定当前题号。", True
+        commit = (task.metrics or {}).get("commit") or {}
+        if not commit:
+            return None, "刚才的相似题方案尚未确认加入；今日卷未改变。", True
+        if str(commit.get("plan_id")) != str(daily_plan_id):
+            return None, "刚才加入的题目不属于当前今日卷；今日卷未改变。请刷新后核对。", True
+        refs = metadata.get("selected_question_refs") or constraints.get("selected_question_refs") or []
+        if not isinstance(refs, list) or len(refs) != 1:
+            return None, "刚才加入的相似题不止一道，无法确定删除目标；今日卷未改变。请指定题号。", True
+        ref = refs[0] if isinstance(refs[0], dict) else {}
+        try:
+            question_id = UUID(str(ref["question_id"]))
+            version_id = UUID(str(ref.get("question_version") or ref.get("question_version_id")))
+        except (KeyError, TypeError, ValueError):
+            return None, "刚才加入题目的题号或版本无法核对；今日卷未改变。请刷新后指定题号。", True
+        committed_items = {str(value) for value in commit.get("item_ids", [])}
+        rows = list(db.scalars(select(PracticeItem).where(
+            PracticeItem.plan_id == daily_plan_id,
+            PracticeItem.question_id == question_id,
+            PracticeItem.removed_at.is_(None))))
+        matching = [item for item in rows if item.question_version_id == version_id
+            and (not committed_items or str(item.id) in committed_items)]
+        if len(matching) != 1:
+            return None, "刚才加入的题目已不在当前卷，或版本无法唯一核对；今日卷未改变。请刷新后指定题号。", True
+        plan = db.get(DailyPlan, daily_plan_id)
+        if plan is None or plan.status != "active":
+            return None, "当前今日卷已变化，不能按旧的加入记录删除；请刷新后重新查看。", True
+        return matching[0].id, None, True
+
+
 def _same_generation_context(original, ctx):
     current = ctx.model_dump(mode="json")
     def value(context, field):
@@ -265,6 +349,16 @@ def begin_turn(factory,*,session_id,body,now=None):
         if body.request_key:
             old=db.scalar(select(ChatMessage).where(ChatMessage.session_id==session_id,ChatMessage.role=="assistant",
                 ChatMessage.metadata_["request_key"].as_string()==str(body.request_key)).order_by(ChatMessage.seq.desc()))
+            if old is None:
+                # A retried failed turn keeps one visible assistant row. Earlier
+                # idempotency keys are retained as aliases so a delayed network
+                # retry still resolves to that same row after the active key
+                # changes to the latest attempt.
+                candidates=db.scalars(select(ChatMessage).where(
+                    ChatMessage.session_id==session_id,ChatMessage.role=="assistant"
+                ).order_by(ChatMessage.seq.desc()).limit(100))
+                old=next((candidate for candidate in candidates
+                    if str(body.request_key) in (candidate.metadata_ or {}).get("retry_request_keys", [])),None)
             if old:
                 if (old.metadata_ or {}).get("input_sha256")!=fingerprint: raise AppError("idempotency_key_conflict",status_code=409)
                 if old.status=="generating": raise AppError("assistant_turn_busy",status_code=409)
@@ -331,8 +425,7 @@ def begin_turn(factory,*,session_id,body,now=None):
                     .order_by(ChatMessage.seq.desc()).limit(30)):
                 if (card.metadata_ or {}).get("personal_generation_confirmation"):
                     card.metadata_ = {**card.metadata_, "personal_generation_confirmation_status": "superseded"}
-        reply=ChatMessage(session_id=session_id,role="assistant",status="generating",content="",created_at=now,
-            metadata_={"study_context":ctx.model_dump(mode="json"),"source_user_message_id":str(user.id),
+        reply_metadata={"study_context":ctx.model_dump(mode="json"),"source_user_message_id":str(user.id),
                 "request_key":str(body.request_key or uuid4()),"input_sha256":fingerprint,
                 "personal_generation_mode": body.personal_generation_mode,
                 "personal_generation_confirmed_kp_id": str(body.personal_generation_confirmed_kp_id) if body.personal_generation_confirmed_kp_id else None,
@@ -343,7 +436,7 @@ def begin_turn(factory,*,session_id,body,now=None):
                 "current_work": body.current_work, "qa_action": body.qa_action,
                 "generation_context": generation_context,
                 "generation_followup_authorized": generation_followup_authorized,
-                "retry_of_message_id":str(body.retry_of_message_id) if body.retry_of_message_id else None})
+                "retry_of_message_id":str(body.retry_of_message_id) if body.retry_of_message_id else None}
         text_confirm = re.fullmatch(r'(?:确定|确认)\s+(.+)', body.question.strip())
         if text_confirm and not confirmation:
             latest = db.scalar(select(ChatMessage).where(ChatMessage.session_id == session_id,
@@ -353,10 +446,67 @@ def begin_turn(factory,*,session_id,body,now=None):
                 requested = text_confirm[1].strip()
                 options = card.get('nodes', [])
                 matches = [n for n in options if requested in {n.get('name'), n.get('code')}]
-                reply.metadata_ = {**reply.metadata_, 'generation_confirmation_notice':
+                reply_metadata = {**reply_metadata, 'generation_confirmation_notice':
                     (f'已匹配「{requested}」，请在原确认卡点击“确认知识点并生成”完成绑定确认。'
                      if len(matches) == 1 else f'未找到知识点「{requested}」。可选现有知识点：' + '、'.join(n['name'] for n in options[:16]) + '。请选择现有节点或取消；没有生成题目。')}
-        db.add(reply); db.flush()
+        if body.retry_of_message_id:
+            # A retry is another attempt at the same user-visible turn, not a
+            # new assistant answer. Reuse the failed row and retain a small,
+            # safe audit trail of the failed attempts (never model content or
+            # exception text). This keeps the retry button attached to the
+            # current result and prevents duplicate chat rows.
+            previous_metadata=dict(failed.metadata_ or {})
+            previous_generation=previous_metadata.get("personal_generation") or {}
+            history=list(previous_metadata.get("retry_history") or [])
+            failure_reasons=[]
+            for item in (previous_generation.get("failures") or [])[:16]:
+                reason=item.get("reason") if isinstance(item,dict) else None
+                if isinstance(reason,str) and re.fullmatch(r"[A-Z0-9_]{1,64}",reason):
+                    failure_reasons.append(reason)
+            diagnostic_codes=[]
+            for item in (previous_generation.get("diagnostics") or [])[:16]:
+                code=item.get("code") if isinstance(item,dict) else None
+                if isinstance(code,str) and re.fullmatch(r"[a-z0-9_]{1,80}",code):
+                    diagnostic_codes.append(code)
+            history.append({
+                "attempt": len(history)+1,
+                "status": failed.status,
+                "error_code": previous_metadata.get("assistant_error_code") or previous_metadata.get("error_code"),
+                "failure_stage": (previous_generation.get("failure_stage")
+                    or previous_metadata.get("generation_failure_stage")
+                    or (previous_metadata.get("assistant_error_details") or {}).get("stage")),
+                "failure_type": (previous_generation.get("failure_type")
+                    or previous_metadata.get("generation_failure_type")
+                    or (previous_metadata.get("assistant_error_details") or {}).get("exception_type")),
+                "failure_reason_codes": sorted(set(failure_reasons)),
+                "diagnostic_codes": sorted(set(diagnostic_codes)),
+                "batch_id": previous_generation.get("batch_id"),
+                "request_key": previous_metadata.get("request_key"),
+            })
+            prior_key=previous_metadata.get("request_key")
+            retry_key=str(body.request_key or uuid4())
+            # Include all keys from earlier failed attempts without storing a
+            # duplicate for the key that is now active.
+            aliases=list(dict.fromkeys(key for key in [*(previous_metadata.get("retry_request_keys") or []), prior_key]
+                if key and key != retry_key))
+            failed.content=""
+            failed.status="generating"
+            failed.matched_kp_id=None
+            failed.matched_kp_basis={}
+            for stale_key in ("personal_generation", "assistant_error_code", "assistant_error_details",
+                    "assistant_retryable", "generation_failure_stage", "generation_failure_type", "error_code"):
+                previous_metadata.pop(stale_key, None)
+            failed.metadata_={**previous_metadata,**reply_metadata,
+                "request_key":retry_key,
+                "retry_request_keys":aliases,
+                "retry_history":history,
+                "retry_attempt":len(history)+1}
+            reply=failed
+        else:
+            reply=ChatMessage(session_id=session_id,role="assistant",status="generating",content="",created_at=now,
+                metadata_=reply_metadata)
+            db.add(reply)
+        db.flush()
         return ctx,reply.id,user.id,False
 
 
@@ -692,6 +842,10 @@ def expire_invalid_confirmation(factory, session_id, body, *, now=None):
 def _explicit_append_consent(message: str) -> bool:
     """A reference to an append operation is not permission to execute it."""
     text = message or ""
+    # “看看哪些可以加入” asks to inspect/select candidates; it is not a
+    # present-tense instruction to append the candidate set.
+    if re.search(r"(?:看看|查看|告诉我|筛选).{0,10}哪些.{0,8}(?:可以|能|可)?(?:加入|追加|加到|放进)", text):
+        return False
     action = r"(?:加入|添加|追加|放到|放进|放入|放在|加到|加进)"
     if not re.search(action, text):
         return False
@@ -853,6 +1007,114 @@ def _bank_commit_matches_preview(factory, task_view, proposal):
     return actual == expected and all(count == 1 for count in counts.values())
 
 
+def _settle_cancelled_personal_generation(factory, *, message_id, generation):
+    """Persist the generation outcome when the SSE client disconnects mid-call.
+
+    The model worker runs in a thread and cannot be cancelled once the provider
+    request has started. The caller joins that worker, then this helper makes
+    refresh/history reflect the actual batch outcome instead of leaving a false
+    retryable turn beside a committed personal question.
+    """
+    outcome = dict(generation or {})
+    state = str(outcome.get("status") or "unknown")
+    failed = state not in {"completed", "partial"} or not outcome.get("question_ids")
+    message = str(outcome.get("message") or (
+        "个人练习题已保存，页面断线后可从本条记录查看。" if not failed else
+        "生成请求在连接中断后未完成；请先读取状态，再决定是否重试。"))
+    retryable = personal_generation_failure_retryable(outcome) if failed else False
+    code = outcome.get("failure_code") or ("personal_generation_failed" if state == "failed" else
+        "personal_generation_state_unknown" if state == "running" else None)
+    with factory.begin() as db:
+        row = db.get(ChatMessage, message_id)
+        if row is None or row.status != "generating":
+            return False
+        row.content = message
+        row.status = "failed" if failed else "completed"
+        row.metadata_ = {**(row.metadata_ or {}), "personal_generation": outcome,
+            "answer_source": "notice", "transport_disconnected": True,
+            **({"assistant_error_code": code, "assistant_retryable": retryable}
+                if failed else {"assistant_retryable": False})}
+    return True
+
+
+def _personal_generation_preflight_failure_message(failure_code: str) -> str:
+    if failure_code == "personal_generation_storage_forbidden":
+        return "个人练习题保存权限未通过检查，没有调用模型或写入题目；权限恢复后可以重新尝试。"
+    if failure_code == "personal_generation_daily_limit":
+        return "今日个人出题次数已达到本地调用上限；没有调用模型或保存题目，请明天再试。"
+    return f"个人练习题生成未开始（{failure_code}）；没有调用模型或保存题目，可修复原因后重试。"
+
+
+def _run_personal_generation_worker(factory, *, body, provider, now, message_id):
+    """Run and durably reconcile generation independently of SSE delivery.
+
+    FastAPI/Starlette may cancel the response task while it is blocked sending
+    an SSE frame without deterministically closing the underlying generator.
+    Persisting the worker result before returning means a browser refresh sees
+    the true outcome even when transport cleanup does not run promptly.
+    """
+    from backend.models.personal_generation import PersonalGenerationBatch
+    from backend.services.personal_question_service import run_generation, result_message
+
+    request_key = str(body.request_key)
+    try:
+        outcome = run_generation(factory, body, provider, now=now)
+    except Exception as exc:
+        logger.error("assistant_personal_generation_worker_failed message_id=%s request_key=%s exception_type=%s",
+            message_id, request_key, type(exc).__name__)
+        # If the worker raised after the batch committed, use the idempotency
+        # ledger as the source of truth; never call the provider again here.
+        batch_read_succeeded = False
+        try:
+            with factory() as db:
+                batch = db.scalar(select(PersonalGenerationBatch).where(
+                    PersonalGenerationBatch.request_key == request_key))
+                batch_view = ({"batch_id": str(batch.id), "status": batch.status,
+                    "result": dict(batch.result or {})} if batch else None)
+                batch_read_succeeded = True
+        except Exception:
+            logger.exception("assistant_personal_generation_worker_batch_read_failed message_id=%s request_key=%s",
+                message_id, request_key)
+            batch_view = None
+        saved = (batch_view or {}).get("result") or {}
+        if saved.get("question_ids"):
+            outcome = {**saved, "batch_id": batch_view["batch_id"],
+                "status": batch_view["status"], "reconciled_after_worker_error": True,
+                "message": result_message(saved)}
+        elif batch_view and batch_view["status"] == "failed":
+            outcome = {**saved, "batch_id": batch_view["batch_id"], "status": "failed",
+                "question_ids": [], "message": saved.get("message") or
+                    "个人练习题生成失败，未保存可用题目；可查看诊断后重试。"}
+        elif isinstance(exc, AppError) and batch_read_succeeded and batch_view is None:
+            # Known preflight errors occur before a batch or provider call.
+            # Preserve the actionable code rather than presenting them as an
+            # unknown interrupted request.
+            failure_code = exc.code
+            failure_message = _personal_generation_preflight_failure_message(failure_code)
+            outcome = {"batch_id": None, "status": "failed", "question_ids": [],
+                "failure_code": failure_code, "failure_stage": "generation_preflight",
+                "failure_type": type(exc).__name__, "diagnostics": [], "message": failure_message}
+        else:
+            outcome = {"batch_id": (batch_view or {}).get("batch_id"),
+                "status": "running", "question_ids": [],
+                "failure_code": "personal_generation_state_unknown",
+                "message": "页面连接中断后生成状态尚未确认；请刷新读取状态，不要重复提交。"}
+
+    if outcome.get("question_ids"):
+        try:
+            from backend.services.assistant_data_queries import persist_generated_question_refs
+            persist_generated_question_refs(factory, message_id=message_id, generation=outcome)
+        except Exception as exc:
+            logger.error("assistant_personal_generation_worker_reference_reconcile_failed message_id=%s exception_type=%s",
+                message_id, type(exc).__name__)
+    try:
+        _settle_cancelled_personal_generation(factory, message_id=message_id, generation=outcome)
+    except Exception as exc:
+        logger.error("assistant_personal_generation_worker_message_reconcile_failed message_id=%s exception_type=%s",
+            message_id, type(exc).__name__)
+    return outcome
+
+
 async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=None,web_search_provider=None):
     now=now or datetime.now(timezone.utc)
     phase = "begin_turn"
@@ -929,6 +1191,8 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         yield encode_sse("citations",{"citations":cards})
         yield encode_sse("done",{"message_id":str(message_id),"answer":text,"citations":cards,"status":"completed"})
         return
+    generation_worker_task = None
+    generation_worker_request_key = None
     if (ctx.task_id and body.qa_action=='auto'
             and re.search(r'少一点|多一点|减少|增加|删除|删掉|移除|替换|换一道|换成|重新规划|重新安排|确认|取消',body.question)
             and not re.search(r'不要|先不|暂不|别|为什么|为何|解释|什么|意思|原因|依据|是否|能不能|要不要|如果|稍后|等我|[？?]',body.question)):
@@ -952,6 +1216,146 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         metadata = db.get(ChatMessage, message_id).metadata_ or {}
         generation_context = metadata.get("generation_context")
         confirmation_notice = metadata.get('generation_confirmation_notice')
+    # A version-pinned similar-bank result is a same-session business object.
+    # Load it before the generic paper-adjustment handler, which otherwise
+    # consumes short follow-ups such as “add two” as an unrelated plan edit.
+    _recent_similar_context = None
+    if mode == "builtin":
+        with factory() as _db:
+            _recent_assistant = list(_db.scalars(select(ChatMessage).where(
+                ChatMessage.session_id == session_id, ChatMessage.role == "assistant",
+                ChatMessage.status == "completed").order_by(ChatMessage.seq.desc()).limit(8)))
+        _recent_similar_context = next((row for row in _recent_assistant
+            if (row.metadata_ or {}).get("answer_source") in {
+                "similar_questions", "similar_questions_continue", "similar_questions_clarification"}
+            and ((row.metadata_ or {}).get("similar_items")
+                or isinstance((row.metadata_ or {}).get("similar_candidate_pool"), list))), None)
+    _recent_similar_meta = (_recent_similar_context.metadata_ or {}) if _recent_similar_context else {}
+    _recent_similar_items = list(_recent_similar_meta.get("similar_items") or [])
+    _recent_similar_pool = list(_recent_similar_meta.get("similar_candidate_pool") or _recent_similar_items)
+    _has_recent_similar_context = bool(_recent_similar_context and _recent_similar_pool)
+    _asks_which_similar_can_be_added = bool(re.search(
+        r"(?:看看|查看|告诉我|筛选).{0,10}哪些.{0,8}(?:可以|能|可)?(?:加入|追加|加到|放进)", body.question))
+    _asks_similar_difficulty = bool(re.search(
+        r"(?:比较难|较难|更难|难一点|简单一点|难度)|(?:哪些|哪几道).{0,8}(?:更难|比较难|较难|简单|难度)",
+        body.question))
+    _asks_similar_more = bool(re.fullmatch(
+        r"\s*(?:再来|再给我|再找)\s*[零〇一二两三四五六七八九十\d]+\s*(?:道|个)?\s*(?:题|练习)?\s*[。！!]*",
+        body.question))
+    _asks_similar_alternatives = bool(re.search(
+        r"(?:刚才|上次|前面).{0,8}(?:那|的)?\s*[零〇一二两三四五六七八九十\d]+\s*道.{0,10}(?:不要|不想要|换)|"
+        r"(?:不要|不想要).{0,10}(?:刚才|上次|前面).{0,8}(?:那|的)?\s*[零〇一二两三四五六七八九十\d]+\s*道.{0,10}换|"
+        r"换(?:成|为)?(?:另外|其他|别的)\s*[零〇一二两三四五六七八九十\d]+\s*道",
+        body.question))
+    _similar_candidate_followup = bool(_has_recent_similar_context and (
+        _asks_which_similar_can_be_added
+        or _asks_similar_difficulty
+        or _asks_similar_more
+        or _asks_similar_alternatives
+        or re.search(r"(?:只(?:看|展示|查看)|不要加入|先不加入|不要放进)", body.question)
+        or (re.search(r"(?:加入|添加|追加|加到|加进|放进|放入).{0,12}(?:[零〇一二两三四五六七八九十\d]+\s*道|全部|所有|第一道|第\s*[零〇一二两三四五六七八九十\d]+\s*道)", body.question)
+            and not any(item.get("knowledge_point") and item["knowledge_point"] in body.question
+                        for item in _recent_similar_items))
+        or re.search(r"(?:这批|这些题|刚才(?:那批|找到的|检索的)).{0,12}(?:换|加入|添加|追加|不要)", body.question)
+    ))
+    _similar_read_only_followup = bool(_has_recent_similar_context and (
+        _asks_which_similar_can_be_added or _asks_similar_difficulty
+        or _asks_similar_more or _asks_similar_alternatives
+        or re.search(r"(?:只(?:看|展示|查看)|不要加入|先不加入|不要放进)", body.question)
+    ) and not _explicit_append_consent(body.question))
+    if _similar_read_only_followup:
+        _active_similar_items = list(_recent_similar_items)
+        if _asks_similar_more or _asks_similar_alternatives:
+            from backend.services.bank_selection_intent import QUESTION_COUNT_PATTERN as _SIMILAR_COUNT_PATTERN, question_count as _similar_count
+            _count_match = re.search(_SIMILAR_COUNT_PATTERN, body.question)
+            _requested_count = _similar_count(_count_match.group(1)) if _count_match else None
+            if not _requested_count:
+                _requested_count = len(_active_similar_items) if _asks_similar_alternatives else 1
+            _requested_count = max(1, min(10, _requested_count))
+            _already_in_plan: set[str] = set()
+            if ctx.daily_plan_id:
+                from backend.models.learning import PracticeItem as _SimilarPlanItem
+                with factory() as _db:
+                    _live_plan = _db.get(DailyPlan, ctx.daily_plan_id)
+                    if _live_plan is not None and _live_plan.status == "active":
+                        _already_in_plan = {str(_id) for _id in _db.scalars(select(_SimilarPlanItem.question_id).where(
+                            _SimilarPlanItem.plan_id == _live_plan.id, _SimilarPlanItem.question_id.is_not(None)))}
+            _pool = []
+            _seen_pool: set[tuple[str, str]] = set()
+            for _item in _recent_similar_pool:
+                if not isinstance(_item, dict):
+                    continue
+                _key = (str(_item.get("question_id") or ""), str(_item.get("version_id") or ""))
+                if not all(_key) or _key in _seen_pool:
+                    continue
+                if _item.get("similar_evidence") is not True:
+                    continue
+                _seen_pool.add(_key)
+                _copy = {**_item, "in_today": _key[0] in _already_in_plan}
+                _pool.append(_copy)
+            _active_ids = {str(_item.get("question_id")) for _item in _active_similar_items}
+            if _asks_similar_alternatives:
+                _eligible_pool = [_item for _item in _pool
+                    if not _item.get("in_today") and str(_item.get("question_id")) not in _active_ids]
+            else:
+                # “再来N道” is a scoped selection from the persisted, version-pinned
+                # result set. It does not assert that the bank has unseen questions.
+                _eligible_pool = [_item for _item in _pool if not _item.get("in_today")]
+            _active_similar_items = _eligible_pool[:_requested_count]
+            _actual_count = len(_active_similar_items)
+            if _asks_similar_alternatives:
+                _label = "替换候选"
+                _lead = (f"已从上一轮相似题结果中换出 {_actual_count} 道不同的、当前未在今日卷的候选"
+                    if _actual_count else "上一轮候选中没有足够的其他合格题目可供替换")
+            else:
+                _label = "当前候选"
+                _lead = (f"从上一轮正式准入的相似题结果中选出 {_actual_count} 道当前未在今日卷的候选"
+                    if _actual_count else "上一轮候选中没有当前未在今日卷的合格题目")
+            _lines = [_lead + "；这是只读筛选，尚未加入今日卷。"]
+            for _idx, _item in enumerate(_active_similar_items, 1):
+                _lines.append(f"\n{_idx}. 题号 {_item.get('question_id')} · 版本 {_item.get('version_id')} · "
+                    f"知识点 {_item.get('knowledge_point')} · 来源 {_item.get('source')}\n题目：{_item.get('stem')}")
+            if _actual_count < _requested_count:
+                _lines.append(f"你要求 {_requested_count} 道，当前符合条件的候选为 {_actual_count} 道；没有扩大范围或降低准入标准。")
+            text = "".join(_lines)
+            source = "similar_questions"
+        elif _asks_similar_difficulty:
+            if _active_similar_items:
+                text = ("上一轮的相似题候选仍在，但题库没有可核验的逐题难度评估；"
+                        "我不能按题目长短或未经验证的字段判断难易。请指定题号，或说明从候选中任选几道；今日卷没有变化。")
+            else:
+                text = "当前候选批次为空，无法按难度筛选。请重新指定题目范围或先检索合格相似题；今日卷没有变化。"
+            source = "similar_questions_clarification"
+        elif _asks_which_similar_can_be_added:
+            text = "继续只读检索并筛选上一轮的相似题候选；这一步不会加入今日卷："
+            for _idx, _item in enumerate(_recent_similar_items[:10], 1):
+                _availability = "已在今日卷" if _item.get("in_today") else "符合前次检索，可进入待确认方案"
+                text += (f"\n\n{_idx}. 题号 {_item.get('question_id')} · 版本 {_item.get('version_id')} · "
+                    f"知识点 {_item.get('knowledge_point')} · 来源 {_item.get('source')} · {_availability}\n题目：{_item.get('stem')}")
+            source = "similar_questions"
+        else:
+            text = "继续只读查看上一轮的相似题候选；没有加入或修改今日卷："
+            for _idx, _item in enumerate(_recent_similar_items[:10], 1):
+                text += (f"\n\n{_idx}. 题号 {_item.get('question_id')} · 版本 {_item.get('version_id')} · "
+                    f"知识点 {_item.get('knowledge_point')} · 来源 {_item.get('source')}\n题目：{_item.get('stem')}")
+            source = "similar_questions_clarification"
+        _continued_route = CapabilityRoute("data_query", "similar", 1,
+            "same_session_similar_candidate_continuation", write_risk=False)
+        with factory.begin() as _db:
+            _saved = _db.get(ChatMessage, message_id)
+            _saved.content = text; _saved.status = "completed"
+            _saved.metadata_ = {**(_saved.metadata_ or {}), "capability_route": _continued_route.public_dict(),
+                "answer_source": source, "similar_items": _active_similar_items,
+                "similar_candidate_pool": _recent_similar_pool,
+                "similar_selection_mode": ("alternatives" if _asks_similar_alternatives else "subset")
+                    if (_asks_similar_more or _asks_similar_alternatives) else _recent_similar_meta.get("similar_selection_mode"),
+                "similar_reference_question_id": _recent_similar_meta.get("similar_reference_question_id"),
+                "similar_reference_version_id": _recent_similar_meta.get("similar_reference_version_id"),
+                "similar_source_message_id": str(_recent_similar_context.id), "writes": False, "model_called": False}
+        yield encode_sse("meta", {"message_id": str(message_id), "capability": "similar_questions", "writes": False})
+        yield encode_sse("delta", {"seq": 1, "text": text})
+        yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": [], "status": "completed"})
+        return
     skip_paper_chat_for_activity_refinement=False
     if (mode=='builtin' and purpose=='study' and body.qa_action=='auto'
             and ctx.daily_plan_id and ctx.task_id and explicit_minutes(body.question) is not None
@@ -967,12 +1371,35 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             summary=active_task(factory,ctx,now)
             skip_paper_chat_for_activity_refinement=bool(summary and not summary['committed']
                 and _route_message(body.question,ctx,task=summary).reason=='active_draft_refinement')
+    recent_similar_item_id = None
+    if (mode == "builtin" and purpose == "study" and body.qa_action == "auto"
+            and ctx.daily_plan_id and _RECENT_SIMILAR_APPEND_REMOVE.search(body.question or "")):
+        recent_similar_item_id, resolution_error, resolution_matched = _recent_similar_append_item(
+            factory, session_id=session_id, daily_plan_id=ctx.daily_plan_id, message=body.question)
+        if resolution_matched and resolution_error:
+            with factory.begin() as db:
+                saved = db.get(ChatMessage, message_id)
+                saved.content = resolution_error; saved.status = "completed"
+                saved.metadata_ = {**(saved.metadata_ or {}), "answer_source": "business_data",
+                    "capability_route": CapabilityRoute("planner", "remove", 1,
+                        "recent_committed_similar_append_reference", write_risk=False).public_dict(),
+                    "recent_similar_append_resolution": "not_resolved", "model_called": False,
+                    "writes": False}
+            yield encode_sse("meta", {"message_id": str(message_id), "capability": "paper_adjustment",
+                "model_called": False, "writes": False})
+            yield encode_sse("delta", {"seq": 1, "text": resolution_error})
+            yield encode_sse("done", {"message_id": str(message_id), "answer": resolution_error,
+                "citations": [], "status": "completed"})
+            return
     if (mode == 'builtin' and purpose == 'study' and body.qa_action == 'auto' and ctx.daily_plan_id
+            and not _similar_candidate_followup
             and not skip_paper_chat_for_activity_refinement):
         from backend.services.paper_adjustment_chat import handle_paper_chat
         try:
+            paper_adjustment_message = (_RECENT_SIMILAR_APPEND_REMOVE.sub(
+                "删除", body.question, count=1) if recent_similar_item_id is not None else body.question)
             adjustment = handle_paper_chat(factory, session_id=session_id, ctx=ctx,
-                message=body.question, now=now)
+                message=paper_adjustment_message, now=now, target_item_id=recent_similar_item_id)
         except AppError as exc:
             fail_turn(factory,message_id,exc.code)
             yield encode_sse('error',{'code':exc.code,'message':exc.message,'retryable':False})
@@ -1194,111 +1621,199 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
         bank_confirmation = None
     else:
         bank_confirmation = _bank_confirmation_kind(body.question)
-    # 相似题检索结果 → 批量加入今日学习（读取上一轮 similar_items，避免落入题库确认）。
-    from backend.services.bank_selection_intent import bank_selection_request as _bank_selection_request
+    # Keep a version-pinned similar-question result set as the conversational
+    # object. Later short append requests create the ordinary confirmable task;
+    # they never write PracticeItems directly from chat text.
+    from backend.services.bank_selection_intent import bank_selection_request as _bank_selection_request, question_count as _question_count
     _explicit_bank_selection = _bank_selection_request(body.question)
-    similar_append = bool(mode == "builtin" and _explicit_append_consent(body.question) and re.search(r'添加|加入|加到|放进|放到', body.question)
-        and re.search(r'类似|相似|其中|前\s*[一二两三四五六七八九十\d]+\s*道|第\s*[一二两三四五六七八九十\d]+\s*道|几道|两道|三道|全部|所有|剩下', body.question)
-        and not (_explicit_bank_selection and _explicit_bank_selection.get("bank_source"))
-        and not re.search(r'专项|训练|变式|生成|换一(?:道|个)', body.question))
-    if similar_append:
+    _similar_context = None
+    if mode == "builtin":
         with factory() as _db:
-            recent_refs=list(_db.scalars(select(ChatMessage).where(
-                ChatMessage.session_id==session_id,ChatMessage.role=='assistant',
-                ChatMessage.status=='completed').order_by(ChatMessage.seq.desc()).limit(6)))
-            # Ordinals also select normal bank previews. Without an actual
-            # same-session similar-result set, let the pinned preview resolver
-            # handle the request rather than stealing its operation object.
-            similar_append=any((row.metadata_ or {}).get('answer_source')=='similar_questions'
-                and (row.metadata_ or {}).get('similar_items') for row in recent_refs)
-    if similar_append:
-        with factory() as _db:
-            recent = list(_db.scalars(select(ChatMessage).where(
-                ChatMessage.session_id == session_id, ChatMessage.role == "assistant"
-            ).order_by(ChatMessage.seq.desc()).limit(6)))
-            prior = next((m for m in recent
-                          if (m.metadata_ or {}).get("answer_source") == "similar_questions"), None)
-            prior_items = ((prior.metadata_ or {}).get("similar_items") if prior else None) or []
-        if not prior_items:
-            text = '上一轮没有可用的相似题检索结果；请先问“题库有没有类似的题目”，再指定要加入的题。'
-        else:
-            from backend.models.learning import Question as _Question, PracticeItem as _PI
-            from backend.services.question_admission import formal_use_allowed as _formal_ok
-            from backend.services.practice_service import append_questions_to_plan as _append_questions
-            with factory() as _db:
-                plan = _db.get(DailyPlan, ctx.daily_plan_id) if ctx.daily_plan_id else None
-                if plan is None:
-                    plan = _db.scalar(select(DailyPlan).where(
-                        DailyPlan.study_date == now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
-                    ).order_by(DailyPlan.created_at.desc()).limit(1))
-                if plan is None:
-                    text = "当前没有今日学习计划，未添加题目。请先生成今日学习。"
-                else:
-                    existing = {str(qid) for qid in _db.scalars(select(_PI.question_id).where(_PI.plan_id == plan.id))}
-                    candidates = [item for item in prior_items if not item.get("in_today")]
-                    chinese = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-                    def _num(token: str) -> int:
-                        return chinese.get(token, int(token) if token.isdigit() else 0)
-                    ordinal_tokens = re.findall(r'第\s*([一二两三四五六七八九十\d]+)\s*道', body.question)
-                    count_token = re.search(r'(?:前|其中|随便|任意)?\s*([一二两三四五六七八九十\d]+)\s*道', body.question)
-                    if ordinal_tokens:
-                        wanted = []
-                        for token in ordinal_tokens:
-                            idx = _num(token) - 1
-                            if 0 <= idx < len(prior_items):
-                                item = prior_items[idx]
-                                if not item.get("in_today") and str(item.get("question_id")) not in existing:
-                                    wanted.append(item)
-                        chosen = wanted
-                    elif re.search(r'所有|全部|剩下|其余', body.question):
-                        chosen = candidates
-                    else:
-                        count = _num(count_token.group(1)) if count_token else 2
-                        chosen = candidates[:max(1, count)]
-                    picked = []
-                    rejected = []
-                    skipped = 0
-                    for item in chosen:
-                        if str(item.get("question_id")) in existing:
-                            skipped += 1
-                            continue
-                        question = _db.get(_Question, UUID(str(item.get("question_id"))))
-                        version_ok = bool(question and question.current_version_id)
-                        if not question or not version_ok or not _formal_ok(question):
-                            rejected.append(item.get("stem", "")[:24])
-                            continue
-                        picked.append(question.id)
-                    added = 0
-                    if picked:
-                        ordinals = list(_db.scalars(select(_PI.ordinal).where(_PI.plan_id == plan.id)))
-                        next_ordinal = (max(ordinals) if ordinals else 0) + 1
-                        for qid in picked:
-                            question = _db.get(_Question, qid)
-                            if question is None:
-                                continue
-                            _db.add(_PI(plan_id=plan.id, question_id=question.id,
-                                        question_version_id=question.current_version_id,
-                                        kp_id=question.kp_id, ordinal=next_ordinal))
-                            next_ordinal += 1
-                            added += 1
-                        _db.commit()
-                    total = len(list(_db.scalars(select(_PI.id).where(_PI.plan_id == plan.id))))
-            lines = [f"已从上一轮相似题检索结果加入 {added} 道到今日学习（当前共 {total} 道）。"]
-            if skipped:
-                lines.append(f"其中 {skipped} 道已在今日学习，无需重复添加。")
-            if rejected:
-                lines.append("未加入（版本或正式准入不满足）：" + "、".join(rejected) + "。")
-            if not candidates:
-                lines.append("上一轮候选题已全部在今日卷中，无需重复添加。")
-            text = "\n".join(lines)
+            _recent_similar = list(_db.scalars(select(ChatMessage).where(
+                ChatMessage.session_id == session_id, ChatMessage.role == "assistant",
+                ChatMessage.status == "completed").order_by(ChatMessage.seq.desc()).limit(8)))
+        _similar_context = _recent_similar_context or next((row for row in _recent_similar
+            if (row.metadata_ or {}).get("answer_source") in {
+                "similar_questions", "similar_questions_continue", "similar_questions_clarification"}
+            and ((row.metadata_ or {}).get("similar_items")
+                or isinstance((row.metadata_ or {}).get("similar_candidate_pool"), list))), None)
+    _similar_meta = (_similar_context.metadata_ or {}) if _similar_context else {}
+    _prior_similar_items = list(_similar_meta.get("similar_items") or [])
+    _has_prior_similar_context = bool(_similar_context and (_similar_meta.get("similar_candidate_pool")
+        or _prior_similar_items))
+    _append_from_similar = bool(_has_prior_similar_context and _explicit_append_consent(body.question)
+        and re.search(r"添加|加入|加到|加进|放进|放入|追加", body.question)
+        and not re.search(r"(?:生成|新编|变式|专项训练)", body.question))
+    if (_prior_similar_items and not _append_from_similar
+            and re.search(r"只(?:看|展示|查看)|不要加入|先不加入|不要放进", body.question)):
+        _lines = ["继续只读查看上一轮的相似题候选；没有加入或修改今日卷："]
+        for _idx, _item in enumerate(_prior_similar_items, 1):
+            _lines.append(f"\n{_idx}. 题号 {_item.get('question_id')} · 版本 {_item.get('version_id')} · "
+                f"知识点 {_item.get('knowledge_point')} · 来源 {_item.get('source')}\n   题目：{_item.get('stem')}")
+        text = "\n".join(_lines)
         with factory.begin() as db:
-            saved = db.get(ChatMessage, message_id)
-            saved.content = text
-            saved.status = "completed"
-            saved.metadata_ = {**saved.metadata_, "answer_source": "similar_append", "writes": True}
-        yield encode_sse("meta", {"message_id": str(message_id)})
+            saved = db.get(ChatMessage, message_id); saved.content = text; saved.status = "completed"
+            saved.metadata_ = {**(saved.metadata_ or {}), "answer_source": "similar_questions_clarification",
+                "similar_items": _prior_similar_items,
+                "similar_candidate_pool": _similar_meta.get("similar_candidate_pool") or _prior_similar_items,
+                "similar_reference_question_id": _similar_meta.get("similar_reference_question_id"),
+                "similar_reference_version_id": _similar_meta.get("similar_reference_version_id"),
+                "similar_source_message_id": str(_similar_context.id), "writes": False}
+        yield encode_sse("meta", {"message_id": str(message_id), "capability": "similar_questions", "writes": False})
         yield encode_sse("delta", {"seq": 1, "text": text})
-        yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": []})
+        yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": [], "status": "completed"})
+        return
+    if _prior_similar_items and re.search(r"(?:哪些|哪几道|比较难|较难|更难|难一点|简单一点|难度)", body.question) \
+            and not _append_from_similar:
+        text = ("上一轮的相似题候选仍在。题库没有可核验的逐题难度评估，所以我不能据题目长短或当前难度字段声称哪道更难。"
+                "你可以指定候选序号，或回复‘从这批里任选两道’让我准备待确认方案。今日卷没有变化。")
+        with factory.begin() as db:
+            saved = db.get(ChatMessage, message_id); saved.content = text; saved.status = "completed"
+            saved.metadata_ = {**(saved.metadata_ or {}), "answer_source": "similar_questions_clarification",
+                "similar_items": _prior_similar_items,
+                "similar_candidate_pool": _similar_meta.get("similar_candidate_pool") or _prior_similar_items,
+                "similar_reference_question_id": _similar_meta.get("similar_reference_question_id"),
+                "similar_reference_version_id": _similar_meta.get("similar_reference_version_id"),
+                "similar_source_message_id": str(_similar_context.id), "writes": False}
+        yield encode_sse("meta", {"message_id": str(message_id), "capability": "similar_questions", "writes": False})
+        yield encode_sse("delta", {"seq": 1, "text": text})
+        yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": [], "status": "completed"})
+        return
+    if _append_from_similar:
+        from backend.models.learning import QuestionVersion as _QV
+        from backend.models.learning import PracticeItem as _SimilarPracticeItem
+        from backend.services.question_admission import formal_use_allowed as _formal_ok
+        from backend.services.learning_task_service import _draft_version
+        from backend.services.planning_public_view import public_task
+        from backend.services.composite_bank_plan import prepare_explained_plan
+        from backend.services.assistant_router import CapabilityRoute as _Route
+        try:
+            _ref_id = UUID(str(_similar_meta.get("similar_reference_question_id")))
+            _ref_version_id = UUID(str(_similar_meta.get("similar_reference_version_id")))
+        except (ValueError, TypeError):
+            _ref_id = _ref_version_id = None
+        _hardness_requested = bool(re.search(r"比较难|较难|更难|难一点|难一些|难题", body.question)
+            and not re.search(r"(?:不要|不必|不用|别).{0,5}(?:难|困难)", body.question))
+        _ordinal_tokens = re.findall(r"第\s*([零〇一二两三四五六七八九十\d]+)\s*道", body.question)
+        _count_match = re.search(r"([零〇一二两三四五六七八九十\d]+)\s*道", body.question)
+        _want_all = bool(re.search(r"全部|所有|剩下|其余", body.question))
+        _wanted = _question_count(_count_match.group(1)) if _count_match else 1
+        _available_similar = [item for item in _prior_similar_items if not item.get("in_today")
+            and item.get("similar_evidence") is True]
+        _selected_similar = []
+        if _ordinal_tokens:
+            for _token in _ordinal_tokens:
+                _idx = _question_count(_token)
+                if _idx is not None and 1 <= _idx <= len(_prior_similar_items):
+                    _item = _prior_similar_items[_idx - 1]
+                    if not _item.get("in_today") and _item.get("similar_evidence") is True:
+                        _selected_similar.append(_item)
+            _wanted = len(_ordinal_tokens)
+        elif _want_all:
+            _selected_similar = _available_similar
+            _wanted = len(_available_similar)
+        elif _wanted:
+            _selected_similar = _available_similar[:_wanted]
+        if _hardness_requested:
+            text = (f"上一轮有 {len(_available_similar)} 道当前可追加候选仍保留，但没有可核验的逐题难度依据，不能自动挑选‘比较难’的题。"
+                "请指定题号，或回复‘从这批里任选两道’，我会先生成待确认方案；确认前不会修改今日卷。")
+        elif _ref_id is None or _ref_version_id is None:
+            text = "上一轮相似题的参照版本无法核验，请重新打开当前题并检索；今日卷没有变化。"
+        elif not _selected_similar or len(_selected_similar) < (_wanted or 1):
+            text = (f"上一轮相似题结果中有 {len(_available_similar)} 道当前未在今日卷、且满足正式准入和相似依据的候选，"
+                f"不足以满足本次要求的 {_wanted or 1} 道。没有创建方案或修改今日卷。")
+        else:
+            _selected_refs = [{"question_id": str(item["question_id"]),
+                "question_version": str(item["version_id"])} for item in _selected_similar]
+            with factory() as _db:
+                _reference = _db.get(Question, _ref_id)
+                _reference_version = _db.get(_QV, _ref_version_id)
+                _valid_reference = bool(_reference and _reference_version
+                    and _reference_version.question_id == _reference.id
+                    and _reference.kp_id == _reference_version.kp_id)
+                _reference_kp_id = _reference.kp_id if _valid_reference else None
+                _reference_node = _db.get(KnowledgePoint, _reference_kp_id) if _reference_kp_id else None
+                _reference_subject = _reference_node.subject if _reference_node else None
+                _live_plan = _db.get(DailyPlan, ctx.daily_plan_id) if ctx.daily_plan_id else None
+                _today = now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+                _valid_plan = bool(_live_plan and _live_plan.study_date == _today and _live_plan.status == "active")
+                _already = {str(value) for value in _db.scalars(select(_SimilarPracticeItem.question_id).where(
+                    _SimilarPracticeItem.plan_id == _live_plan.id))} if _valid_plan else set()
+                _checked_refs = []
+                for _ref in _selected_refs:
+                    _qid = UUID(_ref["question_id"]); _vid = UUID(_ref["question_version"])
+                    _question = _db.get(Question, _qid); _version = _db.get(_QV, _vid)
+                    if (_question and _version and _question.current_version_id == _vid
+                            and _version.question_id == _qid and _question.bank_scope == "public"
+                            and str(_qid) not in _already and _formal_ok(_question)):
+                        _checked_refs.append(_ref)
+            if not _valid_reference:
+                text = "相似题参照的题目版本不一致，请重新打开原题检索；今日卷没有变化。"
+            elif not _valid_plan:
+                text = "当前没有可追加的有效今日卷。请先打开今日卷后重试；没有写入题目。"
+            elif len(_checked_refs) != len(_selected_refs):
+                text = "候选题目版本、正式准入状态或今日卷状态已变化，请重新检索；没有创建方案或修改今日卷。"
+            else:
+                _proposal_ctx = ctx.model_copy(update={"task_id": None, "question_id": _ref_id,
+                    "question_version_id": _ref_version_id,
+                    "knowledge_node_ids": [_reference_kp_id]})
+                _proposal_route = _Route("planner", "plan", 1, "similar_candidate_append_proposal", write_risk=False)
+                _proposal_message = body.question
+                if _reference_node and _reference_node.name not in _proposal_message:
+                    _proposal_message = f"{_proposal_message}，知识点{_reference_node.name}"
+                _proposal_handoff = planner_handoff(factory, ctx=_proposal_ctx, user_id=user_id,
+                    message=_proposal_message, route=_Route("planner", "plan", 1, "explicit_bank_selection", write_risk=False), now=now)
+                _constraints = {**_proposal_handoff.constraints,
+                    "existing_bank_only": True, "include_personal_bank": False,
+                    "similar_requested": True,
+                    "similar_reference": {"question_id": str(_ref_id), "version_id": str(_ref_version_id)},
+                    "selected_question_refs": _checked_refs,
+                    "daily_plan_operation": "append", "scope_origin": "current_study_context",
+                    "similar_source_message_id": str(_similar_context.id)}
+                _proposal_handoff = _proposal_handoff.model_copy(update={
+                    "source_question_id": _ref_id, "target_knowledge_node_ids": [_reference_kp_id],
+                    "subject": _reference_subject,
+                    "requested_question_count": len(_checked_refs), "constraints": _constraints})
+                try:
+                    _task = prepare_planner(factory, ctx=_proposal_ctx, handoff=_proposal_handoff, now=now)
+                    _task_result = await asyncio.to_thread(prepare_explained_plan, factory, _task.task_id,
+                        handoff=_proposal_handoff, now=now)
+                    _public_task = public_task(factory, _task_result, now=now)
+                    text = _public_task.message
+                    with factory.begin() as db:
+                        saved = db.get(ChatMessage, message_id); saved.content = text
+                        saved.status = "failed" if _task_result.status == "failed" else "completed"
+                        saved.metadata_ = {**(saved.metadata_ or {}), "capability_route": _proposal_route.public_dict(),
+                            "planner_task_id": str(_task.task_id), "answer_source": "similar_candidate_proposal",
+                            "similar_source_message_id": str(_similar_context.id),
+                            "selected_question_refs": _checked_refs, "writes": False}
+                    _planner_payload = _public_task.model_dump(mode="json")
+                    _planner_payload["qa_handoff"] = qa_handoff(_proposal_ctx, _task.task_id,
+                        "说明相似候选方案", reason="optional_review_after_planning",
+                        scope=[_reference_kp_id]).model_dump(mode="json")
+                    yield encode_sse("meta", {"message_id": str(message_id), "capability": "planner",
+                        "task_id": str(_task.task_id), "writes": False})
+                    yield encode_sse("planner", _planner_payload)
+                    yield encode_sse("delta", {"seq": 1, "text": text})
+                    yield encode_sse("citations", {"citations": []})
+                    yield encode_sse("done", {"message_id": str(message_id), "answer": text,
+                        "status": "failed" if _task_result.status == "failed" else "completed", "citations": []})
+                    return
+                except Exception as exc:
+                    logger.exception("similar_candidate_append_proposal_failed session_id=%s message_id=%s stage=prepare_confirmable_task", session_id, message_id)
+                    text = f"相似题待确认方案生成失败（{type(exc).__name__}）；原今日卷保持不变，请先读取当前方案后重试。"
+        with factory.begin() as db:
+            saved = db.get(ChatMessage, message_id); saved.content = text; saved.status = "completed"
+            saved.metadata_ = {**(saved.metadata_ or {}), "answer_source": "similar_questions_clarification",
+                "similar_items": _prior_similar_items,
+                "similar_candidate_pool": _similar_meta.get("similar_candidate_pool") or _prior_similar_items,
+                "similar_reference_question_id": _similar_meta.get("similar_reference_question_id"),
+                "similar_reference_version_id": _similar_meta.get("similar_reference_version_id"),
+                "similar_source_message_id": str(_similar_context.id) if _similar_context else None,
+                "writes": False, "similar_proposal_failure_branch": "candidate_scope_or_task_creation"}
+        yield encode_sse("meta", {"message_id": str(message_id), "capability": "similar_questions", "writes": False})
+        yield encode_sse("delta", {"seq": 1, "text": text})
+        yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": [], "status": "completed"})
         return
     if bank_confirmation == "explicit" and not _same_session_bank_proposals(factory, session_id, now):
         # A read-only bank preview is not yet a confirmable planner task.
@@ -1585,19 +2100,27 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
     if data_query_type == "similar" and mode == "builtin":
         from backend.models.learning import KnowledgePoint as _KP, QuestionVersion as _QV, PracticeItem as _PI
         from backend.services.question_admission import formal_use_allowed
+        _similar_route = route if route.capability == "data_query" and route.intent == "similar" else CapabilityRoute(
+            "data_query", "similar", 1, "current_question_similar_bank_lookup", write_risk=False)
+        persist_route(factory, message_id, _similar_route, {"writes": False, "model_called": False})
         with factory() as _db:
             original_version = _db.get(_QV, ctx.question_version_id) if ctx.question_version_id else None
             original = _db.get(Question, ctx.question_id) if ctx.question_id else None
-            if original_version is None or original is None:
+            if (original_version is None or original is None
+                    or original_version.question_id != original.id
+                    or original_version.kp_id != original.kp_id):
                 text = ('要按“类似题”检索，需要先有参考原题。请先打开一道题，或告诉我参考哪一道；'
                         '本次没有返回库存统计，也没有创建计划。')
+                items = []
+                visible_count = 0
             else:
                 node = _db.get(_KP, original.kp_id) if original.kp_id else None
                 rows = _db.execute(
                     select(Question, _QV).join(_QV, _QV.id == Question.current_version_id)
                     .where(Question.kp_id == original.kp_id, Question.id != original.id,
-                           Question.bank_scope == original.bank_scope)
-                    .order_by(Question.updated_at.desc()).limit(60)).all()
+                           Question.bank_scope == "public", Question.is_active.is_(True),
+                           Question.is_hidden.is_(False))
+                    .order_by(Question.updated_at.desc(), Question.id).limit(500)).all()
                 today_ids = set()
                 today_plan = _db.scalar(select(DailyPlan).where(
                     DailyPlan.study_date == now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
@@ -1605,35 +2128,61 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
                 if today_plan is not None:
                     today_ids = {str(qid) for qid in _db.scalars(select(_PI.question_id).where(_PI.plan_id == today_plan.id))}
                 items = []
+                from backend.services.question_similarity import version_similarity_basis
                 for candidate, version in rows:
-                    if not formal_use_allowed(candidate):
+                    if version.question_id != candidate.id or version.kp_id != candidate.kp_id or not formal_use_allowed(candidate):
                         continue
                     reasons = []
-                    if candidate.question_type == original.question_type:
+                    similarity_basis = version_similarity_basis(original_version, version, node)
+                    if version.question_type == original_version.question_type:
                         reasons.append("题型相同")
-                    if str(candidate.difficulty) == str(original.difficulty):
-                        reasons.append("难度接近")
+                    shared_tags = (similarity_basis or {}).get("shared_skill_tags", [])
+                    same_variant_group = bool((similarity_basis or {}).get("same_variant_group"))
+                    if shared_tags:
+                        reasons.append("共享考法标签：" + "、".join(shared_tags))
+                    if same_variant_group:
+                        reasons.append("同一变式组")
                     if not reasons:
-                        reasons.append("同知识点")
+                        reasons.append("同知识点；缺少可核实的相似依据")
+                    source_labels = {"real_exam": "历年真题", "trusted_practice": "正式练习题",
+                        "ai_generated_practice": "公共题库 AI 练习题（正式准入）", "legacy_unknown": "公共题库（来源待核）"}
+                    if candidate.bank_scope == "personal":
+                        candidate_source = "个人题库 AI 练习题"
+                    else:
+                        candidate_source = source_labels.get(version.question_provenance, "公共题库练习题")
                     items.append({"question_id": str(candidate.id), "version_id": str(version.id),
-                                  "stem": (version.stem or candidate.stem or "")[:90], "reasons": reasons,
+                                  "stem": version.stem or candidate.stem or "", "options": version.options,
+                                  "question_type": version.question_type, "knowledge_point_id": str(candidate.kp_id),
+                                  "knowledge_point": node.name if node else "当前知识点",
+                                  "source": candidate_source,
+                                  "reasons": reasons,
+                                  "similar_evidence": similarity_basis is not None,
+                                  "difficulty_reliable": False,
                                   "in_today": str(candidate.id) in today_ids})
-                similar = [item for item in items if item["reasons"] and set(item["reasons"]) - {"同知识点"}]
-                same_kp_only = [item for item in items if item["reasons"] == ["同知识点"]]
-                new_items = [item for item in items if not item["in_today"]]
+                items.sort(key=lambda item: (not item["similar_evidence"],
+                    "题型相同" not in item["reasons"], item["question_id"]))
+                from backend.services.bank_selection_intent import QUESTION_COUNT_PATTERN, question_count
+                count_match = re.search(QUESTION_COUNT_PATTERN, body.question)
+                requested_count = question_count(count_match.group(1)) if count_match else 10
+                visible_count = min(10, max(1, requested_count or 10))
+                visible = items[:visible_count]
+                new_items = [item for item in visible if not item["in_today"] and item["similar_evidence"]]
                 if not items:
                     text = f"没有找到与当前题「{(node.name if node else '当前知识点')}」同知识点且通过正式准入的其他题目；本次没有返回库存统计。"
                 else:
-                    label = "相关题" if similar else "同知识点练习"
-                    lines = [f"以当前题（{node.name if node else '当前知识点'}）为参考，找到 {len(items)} 道{label}："]
-                    if similar:
-                        lines.append(f"- {len(similar)} 道在题型或难度上接近；")
-                    if same_kp_only:
-                        lines.append(f"- {len(same_kp_only)} 道仅同知识点；")
-                    lines.append(f"其中 {len(new_items)} 道可新增，{len(items) - len(new_items)} 道已在今日卷。")
-                    for item in items[:5]:
-                        lines.append(f"\n· {item['stem']}…\n  知识点：{node.name if node else '当前知识点'}；原因：{'、'.join(item['reasons'])}；"
-                                     f"今日卷：{'已在' if item['in_today'] else '可新增'}；准入：正式可用。")
+                    strong = sum(1 for item in visible if item["similar_evidence"])
+                    lines = [f"以当前题（{node.name if node else '当前知识点'}）为参照，下面是正式准入的公共题库同知识点题目；展示 {len(visible)} 道，其中 {strong} 道满足相同题型且共享非泛化考法标签或同变式组的相似依据。",
+                        f"当前可进入待确认方案的相似候选 {len(new_items)} 道；其余题目只供同知识点参考，不会作为相似题自动加入。这次是只读检索，今日卷没有改变。题目难度没有逐题可靠核验，因此不按难度排序。"]
+                    for index, item in enumerate(visible, 1):
+                        lines.append(f"\n{index}. 题号 {item['question_id']} · 版本 {item['version_id']}\n"
+                            f"   知识点：{item['knowledge_point']} · 来源：{item['source']} · 题型：{item['question_type']}\n"
+                            f"   相关依据：{'、'.join(item['reasons'])} · 今日卷：{'已在卷' if item['in_today'] else '可候选' if item['similar_evidence'] else '仅供同知识点参考，不符合相似方案准入'}\n"
+                            f"   题目：{item['stem']}")
+                        options = item.get("options")
+                        if isinstance(options, dict) and options:
+                            lines.append("   选项：" + "；".join(f"{key}. {value}" for key, value in options.items()))
+                        elif isinstance(options, list) and options:
+                            lines.append("   选项：" + "；".join(str(value) for value in options))
                     text = "\n".join(lines)
         with factory.begin() as db:
             saved = db.get(ChatMessage, message_id)
@@ -1642,8 +2191,18 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             saved.metadata_ = {**saved.metadata_, "answer_source": "similar_questions",
                                "similar_reference_question_id": str(ctx.question_id),
                                "similar_reference_version_id": str(ctx.question_version_id),
-                               "similar_items": (locals().get("items") or []), "writes": False}
-        yield encode_sse("meta", {"message_id": str(message_id)})
+                               "similar_items": (locals().get("items") or [])[:locals().get("visible_count", 0)],
+                               "similar_candidate_pool": (locals().get("items") or [])[:locals().get("visible_count", 0)],
+                               "similar_selection_mode": "search_results",
+                               "similar_remaining_refs": [{"question_id": item["question_id"],
+                                   "version_id": item["version_id"], "knowledge_point_id": item["knowledge_point_id"],
+                                   "knowledge_point": item["knowledge_point"], "source": item["source"],
+                                   "reasons": item["reasons"], "similar_evidence": item["similar_evidence"],
+                                   "difficulty_reliable": False, "in_today": item["in_today"]}
+                                   for item in (locals().get("items") or [])[locals().get("visible_count", 0):]],
+                               "similar_visible_count": len((locals().get("items") or [])[:locals().get("visible_count", 0)]),
+                               "writes": False}
+        yield encode_sse("meta", {"message_id": str(message_id), "capability": "similar_questions", "writes": False})
         yield encode_sse("delta", {"seq": 1, "text": text})
         yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": []})
         return
@@ -1935,6 +2494,28 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
                 generation_body = generation_intent(db, generation_text, ctx, user_id,
                     generation_mode=body.personal_generation_mode, confirmed_kp_id=confirmed_node,
                     confirmed_targets=confirmed_targets)
+                # A same-key replay is mandatory while a model call may still
+                # be running, and after success it prevents duplicate saves.
+                # Once the saved batch is definitively failed with zero saved
+                # personal questions, an explicit retry may reserve a fresh
+                # idempotency key and make one new attempt.
+                if body.retry_of_message_id:
+                    from backend.models.personal_generation import PersonalGenerationBatch
+                    _failed_reply = db.get(ChatMessage, body.retry_of_message_id)
+                    _failed_metadata = (_failed_reply.metadata_ or {}) if _failed_reply else {}
+                    _failed_route = (_failed_metadata.get("capability_route") or {})
+                    _old_batch = db.scalar(select(PersonalGenerationBatch).where(
+                        PersonalGenerationBatch.request_key == str(user_id)))
+                    _old_result = (_old_batch.result or {}) if _old_batch else {}
+                    if (_failed_reply and _failed_reply.session_id == session_id
+                            and _failed_reply.role == "assistant"
+                            and (_failed_reply.status == "failed"
+                                 or (_failed_reply.status == "generating"
+                                     and int(_failed_metadata.get("retry_attempt") or 0) > 0))
+                            and _failed_route.get("capability") == "generation"
+                            and _old_batch and _old_batch.status == "failed"
+                            and not (_old_result.get("question_ids") or [])):
+                        generation_body.request_key = uuid4()
                 if (generation_context or {}).get("reference_text"):
                     reference_question_id = generation_context.get("reference_question_id")
                     generation_body.reference_question_id = (
@@ -1976,16 +2557,87 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
                 except ValueError as exc: raise AppError("llm_not_configured") from exc
             yield encode_sse("meta", {"message_id": str(message_id), "capability": "generation"})
             phase = "generation_service"
-            pending = asyncio.create_task(asyncio.to_thread(run_generation, factory, generation_body, gen_provider, now=now))
-            while not pending.done():
-                await asyncio.wait({pending}, timeout=.5)
-                if not pending.done(): yield encode_sse("status", {"message": "正在出题并检查题面、答案格式和可核验内容…"})
-            generated = await pending
-            if generated.get("question_ids"):
-                persist_generated_question_refs(factory, message_id=message_id, generation=generated)
+            try:
+                pending = asyncio.create_task(asyncio.to_thread(_run_personal_generation_worker, factory,
+                    body=generation_body, provider=gen_provider, now=now, message_id=message_id))
+                generation_worker_task = pending
+                generation_worker_request_key = str(generation_body.request_key)
+                while not pending.done():
+                    await asyncio.wait({pending}, timeout=.5)
+                    if not pending.done(): yield encode_sse("status", {"message": "正在出题并检查题面、答案格式和可核验内容…"})
+                generated = await pending
+                if generated.get("question_ids"):
+                    persist_generated_question_refs(factory, message_id=message_id, generation=generated)
+            except Exception as exc:
+                # The generic outer SSE handler used to turn every bridge or
+                # persistence exception into the same invisible retry notice.
+                # First reconcile against the idempotency ledger: a committed
+                # personal question is a success even if its chat reference
+                # write failed; a running/unknown batch is never re-fired.
+                logger.exception("assistant_personal_generation_bridge_failed session_id=%s message_id=%s request_key=%s stage=%s exception_type=%s",
+                    session_id, message_id, generation_body.request_key, phase, type(exc).__name__)
+                _batch_view = None
+                _batch_read_succeeded = False
+                try:
+                    from backend.models.personal_generation import PersonalGenerationBatch
+                    with factory() as _db:
+                        _batch = _db.scalar(select(PersonalGenerationBatch).where(
+                            PersonalGenerationBatch.request_key == str(generation_body.request_key)))
+                        _batch_read_succeeded = True
+                        if _batch is not None:
+                            _batch_view = {"batch_id": str(_batch.id), "status": _batch.status,
+                                "result": dict(_batch.result or {})}
+                except Exception:
+                    logger.exception("assistant_personal_generation_batch_reconcile_failed session_id=%s message_id=%s request_key=%s",
+                        session_id, message_id, generation_body.request_key)
+                _saved_result = (_batch_view or {}).get("result") or {}
+                if _batch_view and _saved_result.get("question_ids"):
+                    from backend.services.personal_question_service import result_message as _result_message
+                    generated = {**_saved_result, "batch_id": _batch_view["batch_id"],
+                        "status": _batch_view["status"], "reconciled_after_chat_error": True,
+                        "message": _result_message(_saved_result)}
+                else:
+                    _unknown = (bool(_batch_view and _batch_view.get("status") == "running")
+                                or not _batch_read_succeeded)
+                    known_failure_code = (
+                        exc.code if isinstance(exc, AppError) and _batch_read_succeeded and _batch_view is None
+                        else "personal_generation_bridge_failed")
+                    safe_diagnostic = _safe_failure_details(exc, phase)
+                    failure_message = (
+                        "个人练习题保存权限未通过检查，没有调用模型或写入题目；权限恢复后可以重新尝试。"
+                        if known_failure_code == "personal_generation_storage_forbidden" else
+                        f"个人练习题在{phase}阶段未完成（{type(exc).__name__}）。没有报告题目已保存；可读取失败详情后重试。")
+                    failure_retryable = not _unknown and (
+                        exc.retryable is not False if isinstance(exc, AppError) else True)
+                    generated = {"batch_id": (_batch_view or {}).get("batch_id"),
+                        "status": "running" if _unknown else "failed", "question_ids": [],
+                        "failure_stage": phase, "failure_type": type(exc).__name__,
+                        "failure_code": "personal_generation_state_unknown" if _unknown else known_failure_code,
+                        "diagnostics": [safe_diagnostic], "message": (
+                            "个人练习题状态尚未确认，系统不会重复调用模型；请读取这条请求状态。"
+                            if _unknown else failure_message)}
+                    with factory.begin() as db:
+                        row = db.get(ChatMessage, message_id); row.content = generated["message"]
+                        row.status = "failed"
+                        row.metadata_ = {**(row.metadata_ or {}), "personal_generation": generated,
+                            "answer_source": "notice", "assistant_error_code": generated["failure_code"],
+                            "assistant_retryable": failure_retryable,
+                            "generation_failure_stage": phase,
+                            "generation_failure_type": type(exc).__name__,
+                            "assistant_error_details": safe_diagnostic}
+                    yield encode_sse("personal_generation", generated)
+                    yield encode_sse("delta", {"seq": 1, "text": generated["message"]})
+                    yield encode_sse("error", {"code": generated["failure_code"],
+                        "message": generated["message"],
+                        "retryable": failure_retryable,
+                        "message_id": str(message_id), "failure_stage": phase,
+                        "failure_type": type(exc).__name__, "diagnostics": [safe_diagnostic]})
+                    return
             phase = "generation_result_persist"
             text = generated["message"]
             generation_failed = generated.get("status") in {"failed", "running"}
+            retryable_generation_failure = personal_generation_failure_retryable(generated)
+            generation_error_code = generated.get("failure_code") or "personal_generation_failed"
             # 用户明确“生成并加入今日学习”：生成成功后走个人练习入口自动追加。
             # 排除否定/疑问（先不加、不要加入、要不要加入、加不加 等），避免推断成入卷授权。
             if (not generation_failed and generated.get("question_ids")
@@ -2008,14 +2660,18 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
                 row = db.get(ChatMessage, message_id); row.content = text
                 row.status = "failed" if generation_failed else "completed"
                 row.metadata_ = {**row.metadata_, "personal_generation": generated, "answer_source": "notice",
-                    **({"assistant_error_code": "personal_generation_failed", "assistant_retryable": False}
+                    **({"assistant_error_code": generation_error_code, "assistant_retryable": retryable_generation_failure,
+                        "generation_failure_stage": generated.get("failure_stage"),
+                        "generation_failure_type": generated.get("failure_type")}
                        if generation_failed else {})}
             yield encode_sse("personal_generation", generated)
             yield encode_sse("delta", {"seq":1, "text": text})
             if generation_failed:
-                yield encode_sse("error", {"code": "personal_generation_failed", "message": text,
-                    "retryable": False, "message_id": str(message_id),
-                    "diagnostics": generated.get('diagnostics', [])})
+                yield encode_sse("error", {"code": generation_error_code, "message": text,
+                    "retryable": retryable_generation_failure, "message_id": str(message_id),
+                    "diagnostics": generated.get('diagnostics', []),
+                    "failure_stage": generated.get("failure_stage"),
+                    "failure_type": generated.get("failure_type")})
                 return
             yield encode_sse("citations", {"citations": []})
             yield encode_sse("done", {"message_id": str(message_id), "answer": text, "citations": [], "status": "completed"})
@@ -2512,6 +3168,46 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             with factory.begin() as db:
                 record_qa_assistance(db,context=ctx,message_id=message_id,level="solution",now=now)
     except asyncio.CancelledError:
+        if generation_worker_task is not None:
+            try:
+                # The provider call runs in a thread; joining its task prevents
+                # a late database commit from racing with a user-visible retry.
+                _generation_outcome = await asyncio.shield(generation_worker_task)
+                if _generation_outcome.get("question_ids"):
+                    from backend.services.assistant_data_queries import persist_generated_question_refs
+                    try:
+                        persist_generated_question_refs(factory, message_id=message_id, generation=_generation_outcome)
+                    except Exception:
+                        logger.exception("assistant_cancelled_generation_reference_reconcile_failed session_id=%s message_id=%s",
+                            session_id, message_id)
+                _settle_cancelled_personal_generation(factory, message_id=message_id, generation=_generation_outcome)
+            except Exception as generation_error:
+                # A worker can fail after committing its batch. Reconcile from
+                # the idempotency ledger before deciding the persisted turn.
+                logger.exception("assistant_cancelled_generation_worker_failed session_id=%s message_id=%s exception_type=%s",
+                    session_id, message_id, type(generation_error).__name__)
+                try:
+                    from backend.models.personal_generation import PersonalGenerationBatch
+                    with factory() as _db:
+                        _batch = _db.scalar(select(PersonalGenerationBatch).where(
+                            PersonalGenerationBatch.request_key == generation_worker_request_key))
+                        _view = ({"batch_id": str(_batch.id), "status": _batch.status,
+                            "result": dict(_batch.result or {})} if _batch else None)
+                    _saved = (_view or {}).get("result") or {}
+                    if _view and _saved.get("question_ids"):
+                        from backend.services.personal_question_service import result_message
+                        _reconciled = {**_saved, "batch_id": _view["batch_id"], "status": _view["status"],
+                            "reconciled_after_transport_disconnect": True,
+                            "message": result_message(_saved)}
+                    else:
+                        _reconciled = {"batch_id": (_view or {}).get("batch_id"),
+                            "status": "failed" if _view and _view.get("status") == "failed" else "running",
+                            "question_ids": [], "failure_code": "personal_generation_state_unknown",
+                            "message": "页面连接中断，生成任务状态正在核对；请刷新读取状态后再重试。"}
+                    _settle_cancelled_personal_generation(factory, message_id=message_id, generation=_reconciled)
+                except Exception:
+                    logger.exception("assistant_cancelled_generation_ledger_reconcile_failed session_id=%s message_id=%s",
+                        session_id, message_id)
         fail_turn(factory,message_id,"cancelled"); raise
     except Exception as exc:
         code=exc.code if isinstance(exc,AppError) else "internal_error"

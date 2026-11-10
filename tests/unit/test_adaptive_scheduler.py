@@ -71,6 +71,25 @@ def test_self_assessed_partial_is_observation_not_trusted_memory_or_bkt():
     assert p.skills['kp'].unknown==1
 
 
+def test_independently_verified_personal_answer_updates_fsrs_but_not_bkt():
+    event=Observation('personal','q','immutable-v1','kp',NOW,'right',
+        reliable=False,schedule_reliable=True)
+    projection=replay([event],NOW)
+    assert ('q','immutable-v1') in projection.cards
+    assert projection.skills['kp'].right==0
+    assert projection.skills['kp'].wrong==0
+    assert projection.skills['kp'].unknown==1
+
+
+def test_personal_fsrs_cards_are_isolated_by_question_version():
+    projection=replay([
+        Observation('personal-v1','q','v1','kp',NOW,'wrong',reliable=False,schedule_reliable=True),
+        Observation('personal-v2','q','v2','kp',NOW+timedelta(minutes=1),'right',reliable=False,schedule_reliable=True),
+    ],NOW+timedelta(minutes=1))
+    assert set(projection.cards)=={('q','v1'),('q','v2')}
+    assert projection.skills['kp'].right==projection.skills['kp'].wrong==0
+
+
 def test_due_review_overflow_is_explicit_not_silently_discarded():
     p=replay([obs(i,'wrong') for i in range(5)],NOW+timedelta(days=1))
     plan=allocate([Candidate(str(i),'v1','lhopital',5) for i in range(5)],p,NOW+timedelta(days=1),10)

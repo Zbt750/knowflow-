@@ -81,7 +81,8 @@ def _version_row(question, *, version_number: int) -> QuestionVersion:
             else:
                 verification = verify_question(getattr(question, "stem", ""),
                                                getattr(question, "options", None),
-                                               getattr(question, "correct_answer", None))
+                                               getattr(question, "correct_answer", None),
+                                               question_type=getattr(question, "question_type", None))
         except Exception:
             verification = {"status": "needs_review", "engine": "sympy", "reason": "verifier_error"}
         # questions.grading_config 是 questions 行列；必须在生成 snapshot 之前写入。

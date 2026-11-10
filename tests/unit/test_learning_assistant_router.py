@@ -6,7 +6,7 @@ from backend.services.assistant_router import route_message,assistance_action,an
 from backend.services.learning_qa_service import safe_hint, final_answer_disclosed
 from backend.services.learning_assistant_service import (
     present_planner_message, _requests_question_reference,
-    _may_classify_data_query, _may_continue_generation,
+    _may_classify_data_query, _may_continue_generation, personal_generation_failure_retryable,
 )
 from backend.services.personal_generation_intent import explicitly_generate
 from backend.services.assistant_data_queries import classify_read_only_data_query
@@ -74,6 +74,17 @@ def test_capability_inquiry_cannot_be_overridden_by_data_or_stale_generation_con
     assert _may_classify_data_query(explicit,qa_action="auto",generation_requested=False)
     assert not _may_continue_generation(explicit,mode="builtin",qa_action="auto",
         generation_requested=False,generation_continuation=False)
+
+
+def test_personal_generation_unsupported_output_can_be_retried_only_after_definitive_zero_save():
+    assert personal_generation_failure_retryable({"status":"failed","question_ids":[],
+        "failures":[{"reason":"UNSUPPORTED"}]}) is True
+    assert personal_generation_failure_retryable({"status":"failed","question_ids":[],
+        "failures":[{"reason":"CONFIRMED_WRONG"}]}) is True
+    assert personal_generation_failure_retryable({"status":"running","question_ids":[],
+        "failures":[{"reason":"UNSUPPORTED"}]}) is False
+    assert personal_generation_failure_retryable({"status":"failed","question_ids":["saved"],
+        "failures":[{"reason":"UNSUPPORTED"}]}) is False
 
 
 def test_active_task_changes_refinement_route_and_invalid_classifier_falls_back():

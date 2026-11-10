@@ -154,7 +154,7 @@ FAMILIES: dict[str, FamilySpec] = {
         ("phase45i_log_improper_integral_p_test_v1",),
     ),
     "exp_limit": FamilySpec(
-        "exp_limit", "数学二", ("math.exam.c5c672022b7f",),
+        "exp_limit", "数学二", ("math.exam.c5c672022b7f", "math.calculus.limit.lhopital"),
         ("single_choice", "fill_blank"),
         r"计算极限：\lim_{x\to 0}\frac{e^{a x}-1-a x}{x^2}=____。",
         "整数a∈[1,100]；不得改变趋近点、分子消去项或分母阶数。",
@@ -187,7 +187,8 @@ FAMILIES: dict[str, FamilySpec] = {
         "填空答案使用精确整数。",
         "final_value须与独立叶数一致；步骤仅写可精确计算的整数式。",
         "满/完全二叉树以外的树、不同存储/编号约定及需要拓扑图的题目不支持。",
-        ("phase45i_complete_tree_leaf_count_v1", "phase45d_complete_tree_storage_index_v1"),
+        ("phase45i_complete_tree_leaf_count_v1", "phase45i_complete_tree_symbolic_leaf_count_v1",
+         "phase45d_complete_tree_storage_index_v1"),
     ),
     "signed_range": FamilySpec(
         "signed_range", "408", ("cs408.co.topic.324b03e7b481",),
@@ -199,7 +200,7 @@ FAMILIES: dict[str, FamilySpec] = {
         "填空答案按有序闭区间精确比较。",
         "final_value须与独立边界一致；可选steps只写精确整数幂。",
         "编码解码、溢出、定点小数及其他编码规则不支持。",
-        ("phase45i_twos_complement_range_v1", "twos_complement_range_v1"),
+        ("phase45i_twos_complement_range_v1", "phase45i_twos_complement_symbolic_range_v1", "twos_complement_range_v1"),
     ),
     "binary_float": FamilySpec(
         "binary_float", "408", ("cs408.co.topic.89cfd05c8418",),
@@ -250,6 +251,46 @@ def resolve_family(node_code: str | None, question_type: str | None = None) -> F
     if not spec or question_type is not None and question_type not in spec.question_types:
         return None
     return spec
+
+
+def requirement_supported_by_family(user_requirement: str | None, spec: FamilySpec) -> bool:
+    """Fail closed when a specific requested math problem contradicts a fixed family.
+
+    A topic-only request may use the family contract to select a safe instance.
+    If the learner supplied an actual limit expression, the C7 fixed template
+    must not silently replace it with a different problem.  This guard is
+    intentionally narrow: only the currently registered exponential limit
+    family has a fixed formula that can be distinguished from arbitrary
+    requests without parsing free-form mathematics.
+    """
+    text = str(user_requirement or "").strip()
+    if not text or spec.family_id != "exp_limit":
+        return True
+    compact = re.sub(r"\s+", "", text.lower())
+    # Topic words such as “极限题” are not an expression.  Requiring an
+    # operator, a structured limit target, or an explicit fraction/power keeps
+    # broad requests routed through the family contract while still rejecting
+    # a concrete incompatible expression before reserving a generation batch.
+    has_explicit_expression = bool(
+        re.search(r"\\?lim\b|\\?frac\b", compact)
+        or re.search(r"x(?:\\?to|→|->|趋于)(?:\{?[+\-]?(?:\d+(?:\.\d+)?|∞|无穷|infty)\}?|正无穷|负无穷)", compact)
+        or re.search(r"(?:[a-z]\s*\^|[a-z][²³]|[=+*/×÷]|\d+x|\([^)]*[x0-9][^)]*\))", compact)
+    )
+    if not has_explicit_expression:
+        return True
+
+    # The supported family is lim(x->0) (e^(a*x)-1-a*x)/x^2,
+    # with integer a in [1, 100].  Match structure, not a substring such as
+    # the mere presence of "e" or "x" in an unrelated expression.
+    approaches_zero = bool(re.search(r"(?:x(?:\\?to|→|->|趋于)\{?0\}?|x趋于0)", compact))
+    exponential = bool(re.search(r"e\^\{?\d*x\}?", compact) or
+                        re.search(r"e\^\{?\d+\\?cdot?x\}?", compact))
+    second_order_denominator = bool(
+        re.search(r"/(?:x(?:\^\{?2\}?|²))", compact)
+        or re.search(r"\}\{x(?:\^\{?2\}?|²)\}", compact))
+    cancellation_terms = bool(re.search(r"-1-\d*x", compact) or
+                              re.search(r"-1-\d+\\?cdot?x", compact))
+    return approaches_zero and exponential and second_order_denominator and cancellation_terms
 
 
 def contract_for(spec: FamilySpec, *, node_code: str, question_type: str, difficulty: str) -> dict:

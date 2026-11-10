@@ -48,6 +48,7 @@ SAFE_MESSAGES: dict[str, str] = {
     'practice_retry_nested_not_allowed': '本次重练已保留，不再创建下一层重练。请返回今日卷回看解析，或选择其他知识点。',
     "personal_generation_daily_limit": "今日出题已达到本地调用上限，请明天再试。",
     "personal_generation_unsupported": "所选知识点或题型尚未覆盖可靠的新题核验范围，本次未生成题目。请重新选择支持的范围。",
+    "personal_generation_requirement_unsupported": "你指定的具体题面超出该题族当前可独立校验的范围。本次没有调用模型或保存题目；请调整为已支持的题型，或删去具体表达式后让奶蛙按该知识点生成。",
     "personal_generation_question_type_unsupported": "目前新题生成支持已可可靠核验的选择题和填空题，暂不支持证明、程序或综合大题。可以从知识节点题库选择已有大题练习。",
     "personal_generation_unsupported_difficulty": "该题族暂不支持所选复杂度，请改用当前支持的难度。",
     "personal_generation_scope_mismatch": "参考题与出题知识范围不一致，请明确要练习的知识点。",

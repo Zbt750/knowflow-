@@ -476,25 +476,21 @@ class TaskTools:
             version=db.get(QuestionVersion,version_id)
             if not version or version.question_id!=ref_id:
                 return {'error':'similar_reference_invalid','hint':'参照题版本不可核实，请重新选择参照题。'}
-            snapshot=version.snapshot_json or {}
-            reference_node=db.get(KnowledgePoint, UUID(str(snapshot['kp_id'])))
-            generic_tags={reference_node.name,reference_node.code,'基础','中等','较难','练习题',
-                '同知识点','同一知识点','同考点','同一考点'} if reference_node else set()
-            tags=set(snapshot.get('skill_tags') or [])-generic_tags
-            group=snapshot.get('variant_group')
-            if not tags and not group:
+            reference_node=db.get(KnowledgePoint, version.kp_id)
+            from backend.services.question_similarity import version_similarity_basis
+            if reference_node is None:
                 return {'error':'similar_evidence_missing','hint':'参照题缺少可核实的解题标签或变式组；请补充条件，或明确同意放宽范围。'}
+            candidate_versions={row.id:row for row in db.scalars(select(QuestionVersion).where(
+                QuestionVersion.id.in_([q.current_version_id for q in candidate_pool if q.current_version_id]))) }
             matched=[]
             for candidate in candidate_pool:
-                if candidate.id==ref_id or str(candidate.kp_id)!=str(snapshot.get('kp_id')) or candidate.question_type!=snapshot.get('question_type'):
+                if candidate.id==ref_id:
                     continue
-                shared=sorted(tags.intersection(candidate.skill_tags or []))
-                same_group=bool(group and candidate.variant_group==group)
-                if not shared and not same_group:
+                candidate_version=candidate_versions.get(candidate.current_version_id)
+                basis=version_similarity_basis(version,candidate_version,reference_node)
+                if not basis:
                     continue
-                similarity_basis[str(candidate.id)]={'same_knowledge_point':True,'same_question_type':True,
-                    'shared_skill_tags':shared,'same_variant_group':same_group,
-                    'reference_question_id':str(ref_id),'reference_version_id':str(version_id)}
+                similarity_basis[str(candidate.id)]=basis
                 matched.append(candidate)
             if not matched:
                 return {'error':'similar_evidence_missing',

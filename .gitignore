@@ -90,6 +90,7 @@ Thumbs.db
 /docs/*eval*
 /docs/*evaluation*
 /docs/*acceptance*
+!/docs/NAIWA-REAL-USER-ACCEPTANCE.md
 /docs/*golden*
 /docs/*question*
 /docs/*exam*

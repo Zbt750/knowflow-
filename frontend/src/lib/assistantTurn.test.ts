@@ -39,14 +39,15 @@ describe("assistant turn identity and recovery", () => {
   it("a history reload restores confirmed-generation request facts rather than the current composer", () => {
     const confirmation = { ...message("confirmation", "assistant", "确认知识点"), personal_generation_confirmation: { question: "生成一道类似的题", message: "请选择", selected_kp_id: "node", question_count: 1, difficulty: "medium", nodes: [] } };
     const failed = { ...message("failed", "assistant", "", "failed"), personal_generation_confirmation_message_id: "confirmation", personal_generation_confirmed_kp_id: "node", personal_generation_mode: "ai_generated" as const, current_work: "旧步骤", study_context: { question_id: "question" } };
-    const restored = assistantTurnFromHistory("session", failed, [message("source", "user", "生成一道类似的题"), confirmation, failed]);
+    const restored = assistantTurnFromHistory("session", failed, [message("source", "user", "生成一道类似的题"), confirmation, failed], "study");
     expect(restored?.question).toBe("生成一道类似的题");
-    expect(restored?.options).toMatchObject({ retry_of_message_id: "failed", personal_generation_confirmation_message_id: "confirmation", personal_generation_confirmed_kp_id: "node", current_work: "旧步骤", study_context: { question_id: "question" } });
+    expect(restored?.options).toMatchObject({ purpose: "study", retry_of_message_id: "failed", personal_generation_confirmation_message_id: "confirmation", personal_generation_confirmed_kp_id: "node", current_work: "旧步骤", study_context: { question_id: "question" } });
     expect(assistantTurnFromHistory("s", failed, [failed])).toBeNull();
   });
 
   it("permission and internal errors give actionable status without treating a saved message as an unsent draft", () => {
     expect(assistantFailureMessage("personal_generation_storage_forbidden")).toContain("尚未调用模型");
+    expect(assistantFailureMessage("personal_generation_daily_limit")).toContain("请明天再试");
     expect(assistantFailureMessage("internal_error", "internal error")).toContain("已保存这条提问");
     expect(assistantFailureMessage("llm_not_configured", "请先配置模型")).toBe("请先配置模型");
   });

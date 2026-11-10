@@ -32,6 +32,36 @@ def _planner_intent(message: str, default: str) -> str:
     return "recommend" if _advice_only_request(message) else default
 
 
+def _similar_question_lookup(message: str, context) -> bool:
+    """Recognize a read-only lookup of questions related to the active item.
+
+    This is a compound intent: a question reference plus a similarity relation
+    plus a retrieval verb.  It deliberately does not treat a later append verb
+    as write authorization; proposal/confirmation is handled separately.
+    """
+    text = (message or "").strip()
+    if (not text or re.search(r"(?:生成|新编|出一道|出题|变式)", text)
+            or re.search(r"(?:不要|别|先不|暂不|不必|不用).{0,8}(?:找|查|检索|看题库)", text)):
+        return False
+    # A direct affirmative append belongs to the proposal flow, even when it
+    # also says “similar”. A question about which results could be added is
+    # still a read-only lookup.
+    asks_which_can_be_added = bool(re.search(r"(?:看看|查看|告诉我|筛选).{0,10}哪些.{0,8}(?:可以|能|可)?加入", text))
+    direct_append = bool(re.search(r"(?:加入|添加|追加|加到|加进|放进|放入).{0,18}(?:今日|今天).{0,4}(?:学习)?卷", text))
+    if direct_append and not asks_which_can_be_added:
+        return False
+    relation = bool(re.search(r"类似|相似|相关|同类|同类型|同题型|同解法", text))
+    question = bool(re.search(r"题目?|练习", text))
+    retrieval = bool(re.search(r"题库|找|检索|查询|查找|搜|有没有|有无|看看|看一下|哪些", text))
+    active_question = bool(getattr(context, "question_id", None)
+        and getattr(context, "question_version_id", None))
+    explicit_current = bool(re.search(r"当前(?:这道|这题|题目)?|这道题|这题|这道练习|刚才这道", text))
+    # “帮我找 10 道相关题，看看哪些可以加入今日卷” is a lookup when the
+    # study surface supplied a pinned current question.  The conditional
+    # wording remains read-only until the user asks for a proposal explicitly.
+    return relation and question and retrieval and (active_question or explicit_current)
+
+
 @dataclass(frozen=True)
 class CapabilityRoute:
     capability: str
@@ -69,6 +99,9 @@ def route_message(message, context, *, action="auto", task=None, classifier=None
     )
     if capability_inquiry:
         return CapabilityRoute("qa", "qa", 1, "assistant_capability_inquiry")
+    if _similar_question_lookup(text, context):
+        return CapabilityRoute("data_query", "similar", 1,
+            "current_question_similar_bank_lookup", write_risk=False)
     if (getattr(context, 'task_id', None)
             and re.match(r'^(?:为什么|为何|解释(?:一下)?)', text)
             and re.search(r'方案|计划|安排', text)

@@ -25,6 +25,15 @@ def test_typed_groups_keep_total_without_adding_a_default_group():
     assert _preferences('生成两道选择题和一道填空题')[1]==[('single_choice',2),('fill_blank',1)]
 
 
+def test_option_count_and_math_parameters_do_not_become_generated_question_count():
+    prompts = [
+        '给我生成一道行列式的单选题，考查二阶行列式计算。请给出四个选项、正确答案和解析。',
+        '给我生成一道二叉树基础（性质+存储）的单选题，明确使用n=999，考查完全二叉树有999个结点时的叶结点数。请给出四个互不重复选项、正确答案和解析，并确保内容与已有的n=1000题不同。',
+    ]
+    for prompt in prompts:
+        assert _preferences(prompt)[1] == [('single_choice', 1)]
+
+
 def test_api_and_parser_share_single_question_default():
     from uuid import uuid4
     from backend.schemas.personal_questions import GenerationTarget

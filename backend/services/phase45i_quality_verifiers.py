@@ -51,6 +51,40 @@ def compare_exact_answer_values(left: str, right: str) -> str:
     return "right" if a == b else "wrong"
 
 
+def _complete_tree_symbolic_leaf_formula_status(value: str) -> str:
+    """Classify a short allowlist of complete-tree leaf-count identities.
+
+    The result applies only to integer n >= 1 for a complete binary tree.
+    This intentionally avoids evaluating model-authored symbolic expressions.
+    """
+    raw = _norm(value).strip("$").lower()
+    raw = raw.replace(r"\dfrac{n+1}{2}", "(n+1)/2").replace(r"\frac{n+1}{2}", "(n+1)/2")
+    raw = raw.replace(r"\dfrac{n}{2}", "n/2").replace(r"\frac{n}{2}", "n/2")
+    raw = raw.replace(r"\operatorname{floor}", "floor").replace(r"\operatorname{ceil}", "ceil")
+    raw = raw.replace(r"\lfloor", "floor(").replace(r"\rfloor", ")")
+    raw = raw.replace(r"\lceil", "ceil(").replace(r"\rceil", ")")
+    raw = raw.replace("⌊", "floor(").replace("⌋", ")")
+    raw = raw.replace("⌈", "ceil(").replace("⌉", ")")
+    # Braced forms are accepted only for the fixed n/2 or (n+1)/2 templates.
+    raw = raw.replace("{n+1}", "(n+1)").replace("{n}", "n").replace("{2}", "2")
+    if raw in {
+        "n-floor(n/2)",
+        "ceil(n/2)",
+        "floor((n+1)/2)",
+        "(n+1)//2",
+    }:
+        return "right"
+    if raw in {
+        "floor(n/2)",
+        "n-ceil(n/2)",
+        "ceil(n/2)-1",
+        "(n+1)/2",
+        "n/2",
+    }:
+        return "wrong"
+    return "unknown"
+
+
 def _parse_poly(text: str):
     """Parse a bounded rational polynomial without eval/parse_expr.
 
@@ -146,6 +180,28 @@ def _range_stem_bits(compact: str):
         compact,
     )
     return int(m.group(1)) if m else None
+
+
+def _symbolic_twos_complement_range(value: str | None):
+    """Accept only the exact generic n-bit two's-complement closed interval.
+
+    This deliberately avoids a general symbolic algebra parser: unsupported or
+    merely similar formulas stay unknown and can never be independently passed.
+    """
+    raw = _norm(str(value or "").replace(r"\ ", "").replace(r"\,", "")).strip("$").replace("**", "^")
+    raw = raw.replace(r"\[", "[").replace(r"\]", "]")
+    raw = raw.replace("^{", "^(").replace("{", "").replace("}", ")")
+    raw = raw.replace(r"\,", "").replace(r"\!", "")
+    canonical = {"[-2^(n-1),2^(n-1)-1]"}
+    return raw in canonical
+
+
+def _symbolic_range_stem(stem: str):
+    compact = _norm(stem)
+    return bool(re.fullmatch(
+        r"设机器字长为n位，采用补码表示定点整数，则可表示的十进制整数范围是(?:_{2,}(?:（用闭区间表示）)?|（用闭区间表示）|（(?:)）)[。.]?",
+        compact,
+    ))
 
 
 def _interval_set(value: str):
@@ -321,6 +377,38 @@ def verify_explanation_step(expression: str, value: str) -> str:
     expected = _norm(value).strip("$")
     if not raw or not expected or len(raw) > 160:
         return "unknown"
+    tree_expression = _complete_tree_symbolic_leaf_formula_status(expression)
+    tree_value = _complete_tree_symbolic_leaf_formula_status(value)
+    if tree_expression != "unknown" or tree_value != "unknown":
+        if tree_expression == tree_value == "right":
+            return "right"
+        if "wrong" in {tree_expression, tree_value}:
+            return "wrong"
+        return "unknown"
+    # Numeric complete-tree identities are accepted only in these short,
+    # bounded forms.  Do not evaluate arbitrary model-authored expressions.
+    numeric_leaf_count = re.fullmatch(r"(\d{1,7})-floor\(\1/2\)", raw.lower())
+    if numeric_leaf_count:
+        n = int(numeric_leaf_count.group(1))
+        if not 1 <= n <= 1_000_000:
+            return "unknown"
+        return compare_constant_expressions(str(n - n // 2), expected)
+    numeric_round = re.fullmatch(r"(floor|ceil)\((-?\d{1,9})/([1-9]\d{0,8})\)", raw.lower())
+    unicode_floor = re.fullmatch(r"⌊(-?\d{1,9})/([1-9]\d{0,8})⌋", raw)
+    unicode_ceil = re.fullmatch(r"⌈(-?\d{1,9})/([1-9]\d{0,8})⌉", raw)
+    if numeric_round or unicode_floor or unicode_ceil:
+        if numeric_round:
+            operation, numerator_text, denominator_text = numeric_round.groups()
+            is_ceil = operation == "ceil"
+        else:
+            match = unicode_ceil or unicode_floor
+            numerator_text, denominator_text = match.groups()
+            is_ceil = unicode_ceil is not None
+        numerator, denominator = int(numerator_text), int(denominator_text)
+        if abs(numerator) > 1_000_000_000 or denominator > 1_000_000_000:
+            return "unknown"
+        quotient = -((-numerator) // denominator) if is_ceil else numerator // denominator
+        return compare_constant_expressions(str(quotient), expected)
     if raw in {"lne", "ln(e)"}:
         return compare_constant_expressions("1", expected)
     m = re.fullmatch(r"floor\((-?\d{1,9})/(-?\d{1,9})\)", raw)
@@ -413,6 +501,10 @@ def _answer_final_consistent(final_value: str, selected_value: str, independent:
         if left is None or right is None:
             return "unknown"
         return "right" if left == right else "wrong"
+    if adapter == "phase45i_twos_complement_symbolic_range_v1":
+        if _symbolic_twos_complement_range(final_value):
+            return "right" if _symbolic_twos_complement_range(selected_value) else "wrong"
+        return "unknown"
     if adapter == "phase45i_polynomial_derivative_v1":
         return _poly_compare(final_value, selected_value)
     if independent.get("derived_answer") is not None:
@@ -421,6 +513,21 @@ def _answer_final_consistent(final_value: str, selected_value: str, independent:
 
 
 def final_value_matches(q, final_value: str, independent: dict) -> str:
+    if (independent or {}).get("adapter") == "phase45i_complete_tree_symbolic_leaf_count_v1":
+        if q.question_type == "single_choice":
+            label = str(final_value or "").strip().upper()
+            correct_key = str(q.correct_answer or "").strip().upper()
+            if label in (q.options or {}):
+                return "right" if label == correct_key else "wrong"
+        selected = ((q.options or {}).get(str(q.correct_answer or "").strip().upper())
+                    if q.question_type == "single_choice" else q.correct_answer)
+        left = _complete_tree_symbolic_leaf_formula_status(final_value)
+        right = _complete_tree_symbolic_leaf_formula_status(str(selected or ""))
+        if left == right == "right":
+            return "right"
+        if "wrong" in {left, right}:
+            return "wrong"
+        return "unknown"
     if q.question_type == "single_choice":
         label = str(final_value or "").strip().upper()
         correct_key = str(q.correct_answer or "").strip().upper()
@@ -434,6 +541,12 @@ def final_value_matches(q, final_value: str, independent: dict) -> str:
     if adapter == "phase45i_twos_complement_range_v1":
         left, right = _range_pair(final_value), _range_pair(str(q.correct_answer or ""))
         return "right" if left is not None and left == right else "wrong" if left is not None and right is not None else "unknown"
+    if adapter == "phase45i_twos_complement_symbolic_range_v1":
+        if not _symbolic_range_stem(q.stem):
+            return "unknown"
+        if _symbolic_twos_complement_range(final_value):
+            return "right" if _symbolic_twos_complement_range(q.correct_answer) else "wrong"
+        return "unknown"
     if adapter in {"phase45i_polynomial_derivative_v1"}:
         return _poly_compare(final_value, q.correct_answer)
     return compare_constant_expressions(final_value, q.correct_answer)
@@ -481,6 +594,39 @@ def verify_narrative_claims(q, independent):
     if adapter=='phase45i_complete_tree_leaf_count_v1':
         formula=re.search(r'(?:n|结点数)([+-])(?:floor\(n/2\)|⌊n/2⌋)',text)
         if formula:checks.append('right' if formula[1]=='-' else 'wrong')
+        n=proof.get('nodes')
+        floor_index=proof.get('last_nonleaf_index')
+        leaf_count=proof.get('leaf_count')
+        if type(n) is int and 1 <= n <= 1_000_000 and floor_index == n // 2 and leaf_count == n - floor_index:
+            leaf_property = re.finditer(
+                r"编号大于(?:⌊n/2⌋|floor\(n/2\))的结点(?:均为|都是|为)(叶(?:子)?结点|非叶(?:子)?结点)", text)
+            for claim in leaf_property:
+                checks.append('right' if claim.group(1) in {'叶结点','叶子结点'} else 'wrong')
+            for claim in re.finditer(r"n=(\d{1,7})时(?:⌊n/2⌋|floor\(n/2\))=(\d{1,7})",text):
+                stated_n, stated_floor = map(int,claim.groups())
+                checks.append('right' if (stated_n,stated_floor)==(n,floor_index) else 'wrong')
+            for claim in re.finditer(r"公式⌈n/2⌉得到(\d{1,7})",text):
+                checks.append('right' if int(claim.group(1))==(n+1)//2 else 'wrong')
+            for claim in re.finditer(r"(?:⌊(\d{1,7})/2⌋|floor\((\d{1,7})/2\))=(\d{1,7})",text):
+                stated_n = int(claim.group(1) or claim.group(2))
+                stated_floor = int(claim.group(3))
+                checks.append('right' if stated_n == n and stated_floor == floor_index else 'wrong')
+            for claim in re.finditer(r"叶(?:子)?(?:结点|节点)?数为(\d{1,7})-(\d{1,7})=(\d{1,7})",text):
+                stated_n, stated_floor, stated_leaves = map(int,claim.groups())
+                checks.append('right' if (stated_n,stated_floor,stated_leaves)==(n,floor_index,leaf_count) else 'wrong')
+            for claim in re.finditer(r"(?:也)?等于⌈(\d{1,7})/2⌉",text):
+                stated_n=int(claim.group(1))
+                ceil_value=(n+1)//2
+                checks.append('right' if stated_n==n and ceil_value==leaf_count else 'wrong')
+    if adapter=='phase45i_complete_tree_symbolic_leaf_count_v1':
+        claims=re.findall(r'(?:叶子(?:结点|节点)?数|叶数)(?:为|是)([^，。；]+)',text)
+        for claim in claims:
+            parts=re.split(r'(?:也等于|等于)',claim)
+            states=[_complete_tree_symbolic_leaf_formula_status(part) for part in parts]
+            if "wrong" in states:
+                checks.append("wrong")
+            elif states and all(state=="right" for state in states):
+                checks.append("right")
     if adapter=='phase45i_twos_complement_range_v1':
         for pattern,key in ((r'(?:负数(?:下界|最小)(?:为)?|下界为)([^，。；]+)','minimum'),
                 (r'(?:非负数上界为|正数最大为|上界为)([^，。；]+)','maximum')):
@@ -629,7 +775,32 @@ def verify_problem(q, compact: str):
         }, {key: "right" if value == solution else "wrong" for key, value in options.items()})
 
     # Complete binary tree leaf count from its sequential-array index range.
-    m = re.fullmatch(r"一棵完全二叉树共有(\d{1,7})个结点，则其叶(?:子)?结点数为（(?:)）[。.]?", compact)
+    symbolic_tree_stem = re.fullmatch(
+        r"一棵完全二叉树共有n个结点，则其叶(?:子)?结点数为（(?:)）[。.]?", compact)
+    if symbolic_tree_stem:
+        adapter = "phase45i_complete_tree_symbolic_leaf_count_v1"
+        formula_values = ({str(key).strip().upper(): _complete_tree_symbolic_leaf_formula_status(value)
+                          for key, value in (q.options or {}).items()}
+                         if kind == "single_choice" else None)
+        proof = {
+            "domain": "integer n in [1, 1000000]",
+            "model": "complete binary tree in left-to-right level order",
+            "derived_identity": "n-floor(n/2) = ceil(n/2) = floor((n+1)/2)",
+            "reason": "1-based heap indices floor(n/2)+1..n are exactly the leaves",
+        }
+        if kind == "single_choice":
+            if not formula_values:
+                return {"status": "UNKNOWN", "adapter": adapter,
+                        "reason": "symbolic_options_missing", "proof": proof}
+            matches = [key for key, state in formula_values.items() if state == "right"]
+            return _choice_result(q, matches, adapter, proof, formula_values)
+        state = _complete_tree_symbolic_leaf_formula_status(str(q.correct_answer or ""))
+        return {"status": "PASS" if state == "right" else "FAIL" if state == "wrong" else "UNKNOWN",
+                "adapter": adapter,
+                "reason": "derived_key_matches" if state == "right" else "derived_key_conflict" if state == "wrong" else "reference_format_unsupported",
+                "derived_answer": "n-floor(n/2)", "proof": proof}
+
+    m = re.fullmatch(r"一棵完全二叉树共有(?:n=)?(\d{1,7})个结点，则其叶(?:子)?结点数为（(?:)）[。.]?", compact)
     if m:
         n = int(m.group(1))
         if not 1 <= n <= 1_000_000:
@@ -664,6 +835,34 @@ def verify_problem(q, compact: str):
                 "reason": "derived_key_matches" if state == "PASS" else "derived_key_conflict",
                 "derived_answer": f"[{low},{high}]", "proof": proof}
 
+    # Exact generic n-bit formula. This independent proof is limited to the
+    # registered stem and one canonical expression, including LaTeX braces.
+    if _symbolic_range_stem(q.stem):
+        adapter = "phase45i_twos_complement_symbolic_range_v1"
+        proof = {
+            "parameter": "n",
+            "domain": "positive integer word length",
+            "minimum_formula": "-2^(n-1)",
+            "maximum_formula": "2^(n-1)-1",
+            "formula": "[-2^(n-1), 2^(n-1)-1]",
+            "proof": "the sign bit has weight -2^(n-1); all remaining bits sum to 2^(n-1)-1",
+        }
+        correct = _symbolic_twos_complement_range(q.correct_answer)
+        if kind == "single_choice":
+            from backend.services.quality_verifiers import option_value
+            options = {str(key).strip().upper(): _symbolic_twos_complement_range(option_value(value))
+                       for key, value in (q.options or {}).items()}
+            if not options or not any(options.values()):
+                return {"status": "UNKNOWN", "adapter": adapter, "reason": "symbolic_range_option_outside_scope"}
+            matches = [key for key, value in options.items() if value]
+            return _choice_result(q, matches, adapter, proof,
+                                  {key: "right" if value else "wrong" for key, value in options.items()})
+        if not correct:
+            return {"status": "FAIL", "adapter": adapter,
+                    "reason": "derived_key_conflict", "proof": proof}
+        return {"status": "PASS", "adapter": adapter,
+                "reason": "derived_key_matches", "derived_answer": proof["formula"], "proof": proof}
+
     # Maximum successful comparisons in a binary-search decision tree. Only
     # the explicit all-successful-search statement is accepted; failed-search
     # depth and comparison conventions are deliberately out of scope.
@@ -680,13 +879,31 @@ def verify_problem(q, compact: str):
         })
 
     # Direct 2x2 determinant calculation using an explicit two-row statement.
-    # Integers are bounded and every entry is supplied in the question itself.
-    m = re.fullmatch(
+    # Some model responses render the same numeric entries a second time in a
+    # LaTeX vmatrix. Accept only this fully numeric, bounded notation and bind
+    # it to the following prose rows; a disagreement is never resolved by
+    # guessing which representation the learner intended.
+    determinant_rows = re.fullmatch(
         r"计算二阶行列式，其中第一行是(-?\d{1,3})、(-?\d{1,3})，第二行是(-?\d{1,3})、(-?\d{1,3})[。.]?",
         compact,
     )
-    if m:
-        a, b, c, d = map(int, m.groups())
+    determinant_with_matrix = re.fullmatch(
+        r"计算二阶行列式\\begin\{vmatrix\}(-?\d{1,4})&(-?\d{1,4})\\\\(-?\d{1,4})&(-?\d{1,4})\\end\{vmatrix\}，其中第一行是(-?\d{1,4})、(-?\d{1,4})，第二行是(-?\d{1,4})、(-?\d{1,4})[。.]?",
+        compact,
+    )
+    if determinant_rows or determinant_with_matrix:
+        if determinant_rows:
+            a, b, c, d = map(int, determinant_rows.groups())
+        else:
+            values = tuple(map(int, determinant_with_matrix.groups()))
+            matrix_values, prose_values = values[:4], values[4:]
+            if any(abs(value) > 1000 for value in values):
+                return {"status": "UNKNOWN", "adapter": "phase45i_determinant_2x2_numeric_v1",
+                        "reason": "determinant_entry_outside_bound"}
+            if matrix_values != prose_values:
+                return {"status": "UNKNOWN", "adapter": "phase45i_determinant_2x2_numeric_v1",
+                        "reason": "determinant_rendering_conflicts_with_row_statement"}
+            a, b, c, d = prose_values
         target = a * d - b * c
         return _numeric_option_result(q, target, "phase45i_determinant_2x2_numeric_v1", {
             "matrix": [[a, b], [c, d]], "formula": "ad-bc", "derived_value": target,

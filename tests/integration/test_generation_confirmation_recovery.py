@@ -1,6 +1,8 @@
 """Real isolated PostgreSQL; synthetic content and providers, no paid calls."""
 from contextlib import contextmanager
+import asyncio
 import os
+from threading import Event, Timer
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 import json
@@ -15,7 +17,7 @@ from backend.api.routes.chat import router
 from backend.db import create_session_factory
 from backend.errors import AppError, register_error_handlers
 from backend.models.chat import ChatMessage, ChatSession
-from backend.models.learning import KnowledgePoint, KpState, Question, QuestionVersion, DailyPlan, PracticeItem
+from backend.models.learning import KnowledgePoint, KpState, Question, QuestionVersion, DailyPlan, PracticeItem, QuestionAttempt, PersonalAnswerVerificationEvent
 from backend.models.personal_generation import PersonalGenerationBatch
 from scripts.run_question_repair_pilot import isolated_factory
 from tests.integration.test_personal_general_generation import GeneralModel
@@ -156,11 +158,16 @@ def test_provider_setup_error_is_safe_and_can_retry_without_another_user(generat
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(ChatMessage).where(ChatMessage.role == "user")) == 1
         failed_row = db.get(ChatMessage, UUID(error["message_id"]))
-        assert failed_row.metadata_["assistant_error_details"]["stage"] == "generation_provider_setup"
+        # The retry reuses the visible assistant row. Keep the prior safe
+        # diagnostic in its bounded retry history instead of exposing a stale
+        # error as the status of the now-successful answer.
+        assert failed_row.status == "completed"
+        assert failed_row.metadata_["retry_history"][-1]["failure_stage"] == "generation_provider_setup"
+        assert failed_row.metadata_["retry_history"][-1]["failure_type"] == "RuntimeError"
     assert model.calls == 1
 
 
-def test_saved_question_survives_lost_result_and_retry_does_not_regenerate(generation_fixture, monkeypatch):
+def test_saved_question_is_reconciled_after_lost_worker_result_without_regeneration(generation_fixture, monkeypatch):
     factory, _, kp, sid, model = generation_fixture
     from backend.services import personal_question_service
     original = personal_question_service.run_generation
@@ -174,12 +181,11 @@ def test_saved_question_survives_lost_result_and_retry_does_not_regenerate(gener
     monkeypatch.setattr(personal_question_service, "run_generation", lost_response)
     with TestClient(application(factory, model)) as client:
         payload, _ = setup_confirmation(client, sid, kp)
-        failed = events(client.post(f"/api/chat/sessions/{sid}/assistant:stream", json=payload))
-        error = next(data for name, data in failed if name == "error")
-        recovered = events(client.post(f"/api/chat/sessions/{sid}/assistant:stream", json={
-            **payload, "retry_of_message_id": error["message_id"]}))
+        recovered = events(client.post(f"/api/chat/sessions/{sid}/assistant:stream", json=payload))
         saved = next(data for name, data in recovered if name == "personal_generation")
-        assert saved["replayed"] and len(saved["question_ids"]) == 1
+        assert saved["reconciled_after_worker_error"] and len(saved["question_ids"]) == 1
+        assert not any(name == "error" for name, _ in recovered)
+        assert any(name == "done" and data["status"] == "completed" for name, data in recovered)
     with factory() as db:
         assert count(db, Question) == count(db, QuestionVersion) == count(db, PersonalGenerationBatch) == 1
         assert db.scalar(select(func.count()).select_from(ChatMessage).where(ChatMessage.role == "user")) == 1
@@ -189,24 +195,115 @@ def test_saved_question_survives_lost_result_and_retry_does_not_regenerate(gener
 
 def test_failed_generation_is_not_a_completed_answer_and_replay_never_charges_again(generation_fixture):
     factory, _, kp, sid, _ = generation_fixture
-    model = GeneralModel("timeout")
+    class FailOnceModel:
+        simulation = True
+        model = "TEST_FIXTURE_fail_once_then_succeed"
+        def __init__(self):
+            self.calls = 0
+            self.recovery = GeneralModel()
+        def complete(self, messages, *, attempt=1):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("TEST_FIXTURE first attempt timed out")
+            return self.recovery.complete(messages, attempt=attempt)
+    model = FailOnceModel()
     with TestClient(application(factory, model)) as client:
         payload, _ = setup_confirmation(client, sid, kp)
         failed = events(client.post(f"/api/chat/sessions/{sid}/assistant:stream", json=payload))
         result = next(data for name, data in failed if name == "personal_generation")
         error = next(data for name, data in failed if name == "error")
         assert result["status"] == "failed" and not result["question_ids"]
-        assert error["code"] == "personal_generation_failed" and error["retryable"] is False
+        assert error["code"] == "personal_generation_failed" and error["retryable"] is True
         assert not any(name == "done" for name, _ in failed)
         history = client.get(f"/api/chat/sessions/{sid}/messages").json()
-        assert history[-1]["status"] == "failed" and history[-1]["retryable"] is False
+        assert history[-1]["status"] == "failed" and history[-1]["retryable"] is True
+        retried = events(client.post(f"/api/chat/sessions/{sid}/assistant:stream", json={
+            **payload, "retry_of_message_id": error["message_id"]}))
+        recovered = next(data for name, data in retried if name == "personal_generation")
+        assert recovered["status"] == "completed" and len(recovered["question_ids"]) == 1
+        assert not any(name == "error" for name, _ in retried)
+        with factory() as db:
+            same_turn=db.get(ChatMessage,UUID(error["message_id"]))
+            retry_record=same_turn.metadata_["retry_history"][-1]
+            assert retry_record["failure_reason_codes"] == ["PROVIDER_TIMEOUT"]
         replay = events(client.post(f"/api/chat/sessions/{sid}/assistant:stream", json={
             **payload, "retry_of_message_id": error["message_id"]}))
-        assert next(data for name, data in replay if name == "personal_generation")["replayed"]
+        assert any(name == "meta" and data.get("replayed") for name, data in replay)
     with factory() as db:
-        assert count(db, Question) == count(db, QuestionVersion) == 0
+        assert count(db, Question) == count(db, QuestionVersion) == 1
         assert db.scalar(select(func.count()).select_from(ChatMessage).where(ChatMessage.role == "user")) == 1
-        assert count(db, PersonalGenerationBatch) == 1
+        assert count(db, PersonalGenerationBatch) == 2
+    assert model.calls == 2
+
+
+def test_sse_disconnect_during_provider_call_reconciles_saved_question(generation_fixture, monkeypatch):
+    factory, _, kp, sid, _ = generation_fixture
+    started = Event()
+    release = Event()
+
+    class SlowModel(GeneralModel):
+        def complete(self, messages, *, attempt=1):
+            self.calls += 1
+            self.requests.append(json.loads(messages[-1]["content"]))
+            started.set()
+            release_timer = Timer(0.5, release.set)
+            release_timer.daemon = True
+            release_timer.start()
+            if not release.wait(timeout=10):
+                raise TimeoutError("TEST_FIXTURE provider release timed out")
+            return GeneralModel().complete(messages, attempt=attempt)
+
+    model = SlowModel()
+    with TestClient(application(factory, model)) as client:
+        payload, _ = setup_confirmation(client, sid, kp)
+        # Drive the production SSE generator and cancel its consumer while the
+        # provider is outstanding, matching Starlette's disconnect task cancel.
+        from backend.schemas.learning_assistant import AssistantRequest
+        from backend.services.learning_assistant_service import assistant_stream
+        body = AssistantRequest.model_validate(payload)
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            personal_generation_provider=model)))
+        stream = assistant_stream(factory, request=request, session_id=sid, body=body,
+            stack=None, provider=None)
+        frames = []
+
+        async def consume_until_cancelled():
+            async for frame in stream:
+                frames.append(frame)
+
+        async def disconnect():
+            async def cancel_while_worker_runs(_pending, timeout=None):
+                await asyncio.to_thread(started.wait, 5)
+                assert started.is_set(), "provider worker did not start before simulated SSE disconnect"
+                raise asyncio.CancelledError()
+
+            monkeypatch.setattr("backend.services.learning_assistant_service.asyncio.wait", cancel_while_worker_runs)
+            task = asyncio.create_task(consume_until_cancelled())
+            try:
+                await task
+            except asyncio.CancelledError:
+                return
+
+        asyncio.run(disconnect())
+        assert any("event: meta" in frame.decode("utf-8") for frame in frames)
+        endpoint = f"/api/chat/sessions/{sid}/assistant:stream"
+        history = client.get(f"/api/chat/sessions/{sid}/messages").json()
+        assert sum(row["role"] == "user" for row in history) == 1
+        assistant = history[-1]
+        assert assistant["status"] == "completed", assistant
+        assert assistant["personal_generation"]["question_ids"]
+        assert assistant["retryable"] is False
+        replay = events(client.post(endpoint, json=payload))
+        assert any(name == "meta" and data.get("replayed") for name, data in replay)
+
+    with factory() as db:
+        assert count(db, Question) == count(db, QuestionVersion) == count(db, PersonalGenerationBatch) == 1
+        assert count(db, PracticeItem) == count(db, DailyPlan) == count(db, QuestionAttempt) == 0
+        question = db.scalar(select(Question))
+        assert question.bank_scope == "personal" and question.auto_review_event_id is None
+        assistant_row = db.get(ChatMessage, UUID(assistant["message_id"]))
+        assert assistant_row.status == "completed"
+        assert assistant_row.metadata_["transport_disconnected"] is True
     assert model.calls == 1
 
 
@@ -281,6 +378,7 @@ def test_select_only_runtime_role_is_blocked_before_charge_then_minimal_grants_w
                 {"table": "personal_generation_batches", "privilege": "INSERT"},
                 {"table": "personal_generation_batches", "privilege": "UPDATE"},
                 {"table": "question_versions", "privilege": "INSERT"},
+                {"table": "personal_answer_verification_events", "privilege": "INSERT"},
             ]
         with TestClient(application(factory, model)) as client:
             payload, _ = setup_confirmation(client, sid, kp)
@@ -288,12 +386,13 @@ def test_select_only_runtime_role_is_blocked_before_charge_then_minimal_grants_w
             errors = [data for name, data in failed if name == "error"]
             assert errors, failed
             error = errors[-1]
-            assert error["code"] == "personal_generation_storage_forbidden", failed
+            assert error["code"] == "personal_generation_storage_forbidden" and error["retryable"] is True, failed
             assert model.calls == 0
             with owner_factory() as db: assert count(db, PersonalGenerationBatch) == 0
             with owner_factory.kw["bind"].begin() as connection:
                 for table, privileges in (("personal_generation_batches", "INSERT, UPDATE"),
-                        ("question_versions", "INSERT")):
+                        ("question_versions", "INSERT"),
+                        ("personal_answer_verification_events", "INSERT")):
                     connection.exec_driver_sql(f'GRANT {privileges} ON "{schema}"."{table}" TO "{role}"')
             saved = events(client.post(f"/api/chat/sessions/{sid}/assistant:stream", json={
                 **payload, "retry_of_message_id": error["message_id"]}))
@@ -302,6 +401,9 @@ def test_select_only_runtime_role_is_blocked_before_charge_then_minimal_grants_w
             with factory() as db:
                 assert not db.scalar(text("SELECT has_table_privilege(current_user, 'question_versions', 'UPDATE')"))
                 assert not db.scalar(text("SELECT has_table_privilege(current_user, 'question_versions', 'DELETE')"))
+                assert db.scalar(select(func.count()).select_from(PersonalAnswerVerificationEvent)) == 1
+                assert not db.scalar(text("SELECT has_table_privilege(current_user, 'personal_answer_verification_events', 'UPDATE')"))
+                assert not db.scalar(text("SELECT has_table_privilege(current_user, 'personal_answer_verification_events', 'DELETE')"))
                 assert not db.scalar(text("SELECT has_table_privilege(current_user, 'question_auto_review_events', 'INSERT')"))
         assert model.calls == 1
     with owner_factory() as db:

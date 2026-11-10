@@ -23,6 +23,54 @@ def test_correct_limit_answer_is_verified():
     assert result["kind"] == "limit"
 
 
+def test_real_personal_lhopital_choice_with_terminal_answer_blank_is_verified():
+    # Captured from the R49 real Provider response. The stem's ``=____`` is
+    # an answer field marker; it must not make the independently solvable
+    # limit appear unparsable when the immutable personal-question version is
+    # created.
+    stem = r"计算极限：\lim_{x\to 0}\frac{e^{97 x}-1-97 x}{x^2}=____。"
+    options = {
+        "A": r"\frac{9409}{2}", "B": "97",
+        "C": r"\frac{97}{2}", "D": "9409",
+    }
+    result = verify_question(stem, options, "A")
+    assert result["status"] == "verified", result
+    assert result["computed"] == "9409/2"
+    assert result["matches"] == ["A"]
+
+
+def test_real_personal_lhopital_choice_rejects_wrong_option_with_terminal_blank():
+    stem = r"计算极限：\lim_{x\to 0}\frac{e^{97 x}-1-97 x}{x^2}=____。"
+    options = {
+        "A": r"\frac{9409}{2}", "B": "97",
+        "C": r"\frac{97}{2}", "D": "9409",
+    }
+    result = verify_question(stem, options, "B")
+    assert result["status"] == "rejected", result
+    assert result["reason"] == "answer_mismatch"
+    assert result["expected_option"] == "A"
+
+
+def test_real_personal_lhopital_answer_status_is_bound_into_immutable_version_snapshot():
+    from uuid import uuid4
+    from backend.models.learning import Question
+    from backend.services.question_versions import _version_row
+
+    question = Question(
+        id=uuid4(), kp_id=uuid4(), bank_scope="personal", question_type="single_choice",
+        stem=r"计算极限：\lim_{x\to 0}\frac{e^{97 x}-1-97 x}{x^2}=____。",
+        options={"A": r"\frac{9409}{2}", "B": "97", "C": r"\frac{97}{2}", "D": "9409"},
+        correct_answer="A", explanation="TEST_FIXTURE explanation for the captured R49 expression.",
+        question_provenance="ai_generated_practice", content_trust="unreviewed",
+        source_status="not_applicable", answer_provenance="ai_generated",
+        answer_reliability="model_generated", grading_config={"verified": False, "method": None},
+    )
+    version = _version_row(question, version_number=1)
+    assert version.snapshot_json["grading_config"]["math_verification"]["status"] == "verified"
+    assert version.snapshot_json["grading_config"]["math_verification"]["engine"] == "bounded_problem_verifiers"
+    assert version.snapshot_json["grading_config"]["math_verification"]["computed"] == "9409/2"
+
+
 def test_first_derivative():
     result = verify_question("设 f(x)=x^3+2x，求 f'(1)。", {"A": "5", "B": "3"}, "A")
     assert result["status"] == "verified"

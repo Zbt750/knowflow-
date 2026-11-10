@@ -908,6 +908,60 @@ def _subject_plan_scope(db, now, *, subject, count, unattempted_only=False):
     } for row in chosen]
 
 
+def _ensure_scope_node_names(db, paper):
+    """补齐草案中每个已选知识点的 scope_nodes 名称与题量。
+
+    历史草案存在只保存 selected_kp_ids、scope_nodes 为空的情况：前端只能
+    用品题的 kp_name 反推名称，一旦某知识点被减到 0 题，名称就变成空白
+    （用户看到“· 11道可用题 今日安排 0 道”）。这里在保存草案前用
+    knowledge_points 的真实名称统一补齐，避免名称随题量归零而丢失。
+    """
+    if not isinstance(paper, dict):
+        return paper
+    selected=[str(k) for k in paper.get('selected_kp_ids') or []]
+    if not selected:
+        return paper
+    existing={str(node.get('kp_id')):node for node in paper.get('scope_nodes') or []
+        if isinstance(node,dict) and node.get('kp_id')}
+    questions=paper.get('questions') or []
+    nodes=[]
+    for key in selected:
+        base=dict(existing.get(key) or {'kp_id':key})
+        node=db.get(KnowledgePoint,UUID(key))
+        if not base.get('name'):
+            base['name']=node.name if node else ''
+        if not base.get('parent_id'):
+            base['parent_id']=str(node.parent_id) if node is not None and node.parent_id else None
+        count=sum(str(q.get('kp_id'))==key for q in questions)
+        base['assigned_count']=count
+        base['allocation_status']='allocated' if count else 'no_eligible_questions'
+        base.setdefault('allocation_reason',None)
+        nodes.append(base)
+    paper['scope_nodes']=nodes
+    return paper
+
+
+def _mentioned_outside_topic(db, goal, paper):
+    """文本点名的知识点已不在当前方案时返回其名称，否则 None。
+
+    “我今天不学洛必达法则”会把该知识点整体移出今日范围；用户随后再说
+    “删除洛必达法则的题目”时，方案里已没有它的引用，纯规则层只能要求重新
+    指定知识点。这里用真实知识点表补一句准确状态，避免用户被反复要求重述。
+    """
+    current={str(k) for k in (paper or {}).get('selected_kp_ids') or []}
+    matched=[node for node in db.scalars(select(KnowledgePoint).where(KnowledgePoint.is_active.is_(True)))
+        if node.name and node.name in goal]
+    matched.sort(key=lambda node: len(node.name), reverse=True)
+    seen=set()
+    for node in matched:
+        if node.name in seen:
+            continue
+        seen.add(node.name)
+        if all(str(peer.id) not in current for peer in matched if peer.name==node.name):
+            return node.name
+    return None
+
+
 def _topic_count_revision(db, now, previous, intent, goal, minutes):
     """Apply named topic count deltas to a draft using formally admitted bank candidates."""
     from copy import deepcopy
@@ -938,7 +992,10 @@ def _topic_count_revision(db, now, previous, intent, goal, minutes):
             # in this topic's stable plan order and report only the count.
             remove_ids={q['question_id'] for q in current[-requested:]}
             result['questions']=[q for q in result['questions'] if q['question_id'] not in remove_ids]
-            summaries.append({'name':node.name,'delta':-requested,'count':len(current)-requested})
+            summaries.append({'kp_id':str(kp_id),'name':node.name,'delta':-requested,
+                'before_count':len(current),'count':len(current)-requested,
+                'removed_question_ids':[q['question_id'] for q in current if q['question_id'] in remove_ids],
+                'added_question_ids':[],'protected_count':0})
             continue
 
         request={'count':delta,'append':True,'scope_mode':'append','additional_count':delta,
@@ -951,14 +1008,28 @@ def _topic_count_revision(db, now, previous, intent, goal, minutes):
         if error or not wanted:
             availability=question_availability(db,now=now,kp_ids=[kp_id],limit=1)
             eligible=int(availability.get('practice_eligible_count') or 0)
-            available=int(availability.get('available_to_append_count') or 0)
+            # The inventory endpoint does not know about this pending draft.
+            # Its available_to_append_count can therefore include questions
+            # already pinned in the preview. Use the actual candidate query,
+            # which excludes both retained draft IDs and prior attempts.
+            candidate_count=len((evidence or {}).get('candidate_ids') or [])
+            complete=(evidence or {}).get('candidate_list_complete') is True
+            failure_id=uuid4().hex
+            logging.getLogger(__name__).warning(
+                'home topic count addition rejected id=%s stage=topic_count_candidate_query kp_id=%s requested=%s candidates=%s complete=%s error=%s',
+                failure_id,kp_id,delta,candidate_count,complete,(evidence or {}).get('error'))
             if eligible==0:
                 reason='没有符合正式准入条件的题目；不合格题已自动排除'
-            elif available==0:
-                reason='符合正式准入的题目均不可作为新题追加（可能已做过或已在卷中）'
+            elif candidate_count==0:
+                reason='本次查询没有找到可追加的新题；题库合格总量可能已被当前草案占用，或题目已有作答记录'
             else:
-                reason=f'符合正式准入的可追加题量不足{delta}道，当前可用{available}道'
-            return None, [], f'{node.name}未能增加{delta}道：{reason}。原方案已保留。'
+                reason=f'本次候选查询找到{candidate_count}道未在当前草案中的合格题，少于需要的{delta}道'
+            if not complete:
+                reason+='；候选列表不完整，无法据此确认全库是否还有更多可用题'
+            elif error:
+                reason+=f'；候选校验原因：{error.rstrip("。")}'
+            return None, [], (f'{node.name}未能增加{delta}道：{reason}。原方案已保留。'
+                f'服务分支 home_recommendation_service.topic_count_candidate_query，错误编号 {failure_id}。')
 
         allocation=list(dict.fromkeys(db.get(Question,UUID(str(qid))).kp_id for qid in wanted))
         next_paper=_paper(db,allocation,minutes,now,candidate_question_ids=[UUID(str(qid)) for qid in wanted],
@@ -977,8 +1048,13 @@ def _topic_count_revision(db, now, previous, intent, goal, minutes):
             'allocation_reason':None,
         } for key in selected]
         result=next_paper
-        summaries.append({'name':node.name,'delta':delta,
-            'count':sum(q.get('kp_id')==str(kp_id) for q in result['questions'])})
+        summaries.append({'kp_id':str(kp_id),'name':node.name,'delta':delta,
+            'before_count':len(current),
+            'count':sum(q.get('kp_id')==str(kp_id) for q in result['questions']),
+            'removed_question_ids':[],
+            'added_question_ids':[q['question_id'] for q in result['questions']
+                if q.get('kp_id')==str(kp_id) and q['question_id'] not in {old['question_id'] for old in current}],
+            'protected_count':0})
 
     result['total_minutes']=sum(int(q['minutes']) for q in result['questions'])
     result['question_limit']=len(result['questions'])
@@ -992,6 +1068,158 @@ def _topic_count_revision(db, now, previous, intent, goal, minutes):
         'allocation_reason':None,
     } for k in selected]
     return result,summaries,None
+
+
+def _subject_topic_revision(db, now, previous, intent, minutes):
+    """Replace only named current topics with eligible 408 questions in a draft."""
+    from copy import deepcopy
+    from backend.services.home_intent import reference_map
+
+    if not previous or not previous.get('questions'):
+        return None, None, '当前没有可调整的学习方案；原方案未改变。'
+    refs=reference_map(previous)
+    source_ids=[]
+    for ref in intent.refs:
+        target=refs.get(ref)
+        if not target or target.get('kind')!='scope':
+            return None, None, '要替换的原知识点已不在当前方案中；原方案已保留。'
+        source_ids.append(str(target['value']))
+    source_questions=[q for q in previous['questions'] if q['kp_id'] in set(source_ids)]
+    if not source_questions:
+        return None, None, '所选原知识点当前没有题目；当前方案未改变。'
+    if intent.quantity is not None and len(source_questions)!=intent.quantity:
+        return None, None, f'当前有效方案中目标范围有{len(source_questions)}道题，与读取时的{intent.quantity}道不一致；原方案已保留，请重新读取。'
+
+    topic_count=int(intent.topic_count or 1)
+    target_count=max(len(source_questions),topic_count)
+    if target_count<topic_count:
+        return None, None, '题目数量不足以覆盖请求的408知识点数量；原方案已保留。'
+    selected,selection_facts=_subject_plan_scope(db,now,subject='408',count=1000,
+        unattempted_only=bool(intent.unattempted_only))
+    if intent.destination_topic:
+        wanted=intent.destination_topic.strip()
+        explicit=[key for key in selected if (db.get(KnowledgePoint,key) and
+            (wanted in db.get(KnowledgePoint,key).name or
+             wanted in db.get(KnowledgePoint,key).code or
+             any(alias==wanted for alias in __import__('backend.services.home_intent',fromlist=['_topic_aliases'])._topic_aliases(db.get(KnowledgePoint,key).name))))]
+        if explicit:
+            selected=explicit[:topic_count]
+        else:
+            return None, None, f'408中没有找到符合正式准入及学习记录条件的“{wanted}”知识点；原方案已保留。'
+    if target_count<topic_count:
+        return None, None, f'当前需至少{topic_count}道题才能覆盖所选408知识点，原知识点仅有{target_count}道；原方案已保留。'
+
+    retained=[q for q in previous['questions'] if q['kp_id'] not in set(source_ids)]
+    seen={q['question_id'] for q in retained+source_questions}
+    pools=[]
+    diagnostics=[]
+    ranked_candidates=list(selected)
+    if not intent.destination_topic and topic_count>1:
+        ranked_candidates=ranked_candidates[:max(topic_count,topic_count*3)]
+    elif not intent.destination_topic:
+        ranked_candidates=ranked_candidates[:24]
+    elif intent.destination_topic:
+        ranked_candidates=ranked_candidates[:topic_count]
+    for kp_id in ranked_candidates:
+        node=db.get(KnowledgePoint,kp_id)
+        if node is None or not node.is_active or not node.is_assessable:
+            diagnostics.append({'kp_id':str(kp_id),'stage':'candidate_query','reason':'inactive_or_unassessable'})
+            continue
+        per_topic_need=(target_count//topic_count)+(1 if len(pools)<target_count%topic_count else 0)
+        try:
+            pool_paper=_paper(db,[kp_id],max(int(minutes),5),now,
+                question_limit=max(DEFAULT_PER_KP_LIMIT,per_topic_need),coverage_preview=True,
+                adaptive_schedule=True)
+        except Exception as exc:
+            diagnostics.append({'kp_id':str(kp_id),'stage':'candidate_query',
+                'error_type':type(exc).__name__,'reason':str(exc)[:100]})
+            return None, {'topics':selection_facts,'diagnostics':diagnostics}, f'读取408知识点“{node.name}”正式候选失败（{type(exc).__name__}）；原方案已保留。'
+        pool=[q for q in pool_paper['questions'] if q['question_id'] not in seen]
+        if not pool:
+            diagnostics.append({'kp_id':str(kp_id),'stage':'candidate_query','eligible_unseen_count':0})
+            continue
+        pools.append((kp_id,pool))
+        # With no named destination and a single replacement topic, preserve
+        # the scheduler's history ranking but skip low-stock topics until one
+        # can actually honor the source topic's full quantity. Never silently
+        # shrink the requested plan to whatever happened to be first.
+        if topic_count==1 and len(pool)>=target_count:
+            break
+        if topic_count>1 and len(pools)>=topic_count:
+            break
+
+    if len(pools)<topic_count:
+        return None, {'topics':selection_facts,'diagnostics':diagnostics}, f'当前仅有{len(pools)}个符合正式准入且有可用题的408知识点，少于请求的{topic_count}个；原方案已保留。'
+    if topic_count==1:
+        adequate=next(((key,pool) for key,pool in pools if len(pool)>=target_count),None)
+        if adequate is None:
+            available=max((len(pool) for _,pool in pools),default=0)
+            return None, {'topics':selection_facts,'diagnostics':diagnostics}, f'按学习记录顺序检查后，408单个知识点最多有{available}道未重复的正式合格题，少于原题量{target_count}道；原方案已保留。'
+        pools=[adequate]
+    selected=[key for key,_ in pools]
+    pools=[pool for _,pool in pools]
+    if sum(len(pool) for pool in pools)<target_count:
+        return None, {'topics':selection_facts,'diagnostics':diagnostics}, f'所选{topic_count}个408知识点共有{sum(len(pool) for pool in pools)}道未重复的正式合格题，少于所需{target_count}道；原方案已保留。'
+
+    chosen=[]
+    # Every requested topic gets a question before any topic gets a second one.
+    if target_count<topic_count:
+        return None, {'topics':selection_facts}, f'保持原题量时无法覆盖{topic_count}个408知识点；原方案已保留。'
+    offsets=[0]*len(pools)
+    for index,pool in enumerate(pools):
+        candidate=pool[0]
+        if candidate['question_id'] in seen:return None, {'topics':selection_facts}, '408候选出现重复题目；原方案已保留。'
+        chosen.append(candidate);seen.add(candidate['question_id']);offsets[index]=1
+    while len(chosen)<target_count:
+        progressed=False
+        for index,pool in enumerate(pools):
+            while offsets[index]<len(pool) and pool[offsets[index]]['question_id'] in seen:
+                offsets[index]+=1
+            if offsets[index]>=len(pool):continue
+            candidate=pool[offsets[index]];offsets[index]+=1
+            chosen.append(candidate);seen.add(candidate['question_id']);progressed=True
+            if len(chosen)==target_count:break
+        if not progressed:
+            return None, {'topics':selection_facts}, f'408合格且未重复的候选只有{len(chosen)}道，少于所需{target_count}道；原方案已保留。'
+
+    result=deepcopy(previous)
+    questions=retained+chosen
+    result['questions']=questions
+    replacement_ids={str(key) for key in selected}
+    result['selected_kp_ids']=[key for key in previous['selected_kp_ids'] if key not in set(source_ids)]
+    result['selected_kp_ids']=list(dict.fromkeys(result['selected_kp_ids']+[str(key) for key in selected]))
+    result['allocation_kp_ids']=list(dict.fromkeys(q['kp_id'] for q in questions))
+    result['candidate_question_ids']=[q['question_id'] for q in questions]
+    result['question_limit']=len(questions)
+    result['budget_minutes']=int(minutes)
+    result['preset']='deep' if minutes>90 else 'standard'
+    result['total_minutes']=sum(int(q['minutes']) for q in questions)
+    result['_adaptive_schedule']=False
+    names={str(key):db.get(KnowledgePoint,key).name for key in selected if db.get(KnowledgePoint,key)}
+    for key in result['selected_kp_ids']:
+        node=db.get(KnowledgePoint,UUID(key))
+        names.setdefault(key,node.name if node else '')
+    result['scope_nodes']=[{'kp_id':key,'name':names.get(key,''),
+        'parent_id':str(db.get(KnowledgePoint,UUID(key)).parent_id) if db.get(KnowledgePoint,UUID(key)) and db.get(KnowledgePoint,UUID(key)).parent_id else None,
+        'assigned_count':sum(q['kp_id']==key for q in questions),
+        'allocation_status':'allocated' if any(q['kp_id']==key for q in questions) else 'no_eligible_questions',
+        'allocation_reason':None} for key in result['selected_kp_ids']]
+    result['diff']={'added':sorted({q['question_id'] for q in chosen}),
+        'removed':sorted({q['question_id'] for q in source_questions}),
+        'retained':sorted({q['question_id'] for q in retained})}
+    topic_summary={'source_kp_ids':source_ids,
+        'source_topics':[{'kp_id':key,'name':refs[ref]['name'],
+            'before_count':sum(q['kp_id']==key for q in source_questions)} for ref,key in zip(intent.refs,source_ids)],
+        # The canonical system baseline may not contain a user-selected topic.
+        # Keep the exact pre-replacement source snapshot in server-side task
+        # context so “restore original topic” works for every editable draft.
+        'source_questions_snapshot':deepcopy(source_questions),
+        'destination_topics':[{'kp_id':str(key),'name':names.get(str(key),''),
+            'assigned_count':sum(q['kp_id']==str(key) for q in chosen)} for key in selected],
+        'removed_count':len(source_questions),'added_count':len(chosen),
+        'budget_minutes':int(minutes),'estimated_minutes':result['total_minutes'],
+        'unattempted_only':bool(intent.unattempted_only)}
+    return result,topic_summary,None
 
 
 def _bank_exact_revision(db,now,goal,previous,operation,minutes,refs):
@@ -1123,7 +1351,7 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
         raise AppError("plan_already_generated", status_code=409)
     if body.action == 'adjust':
         command = body.goal.strip()
-        if re.fullmatch(r'(?:撤销(?:刚才的)?(?:修改|操作|调整)?|再撤销(?:上一步|刚才的修改)?|撤回(?:最后一步|刚才的修改|上一步)?|回到上一步|恢复上一步|把刚才删除的题恢复)[。！!]?', command):
+        if re.fullmatch(r'(?:撤销(?:刚才(?:的)?|上一步)?(?:修改|操作|调整)?|再撤销(?:上一步|刚才的修改)?|撤回(?:最后一步|刚才的修改|上一步)?|回到上一步|恢复上一步|把刚才删除的题恢复)[。！!]?', command):
             body = body.model_copy(update={'action': 'undo'})
         elif re.search(r'撤回(?:最后一步|刚才的修改|上一步)|回到上一步|恢复上一步', command):
             body = body.model_copy(update={'action': 'undo'})
@@ -1190,6 +1418,8 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
     exact_bank_evidence=None
     topic_count_summaries=[]
     subject_plan_summary=None
+    subject_topic_summary=None
+    topic_removal_summaries=[]
     initial_undo_stack=list((old.context or {}).get('home_undo_stack') or []) if old else []
     initial_redo_stack=list((old.context or {}).get('home_redo_stack') or []) if old else []
     undo_stack=list(initial_undo_stack)
@@ -1236,7 +1466,23 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
             messages=list(db.scalars(select(ChatMessage).where(ChatMessage.session_id==session.id,
                 ChatMessage.status=='completed').order_by(ChatMessage.seq.desc()).limit(6)))
             return [{'role':m.role,'content':m.content[:500]} for m in reversed(messages)]
-        intent,intent_trace=resolve(body.goal,previous_paper or baseline,intent_provider_factory,history_factory=history)
+        continuation=dict(old.context or {}) if old else {}
+        last_edit=continuation.get('home_last_edit') or {}
+        continuation['last_topic_kp_id']=last_edit.get('last_topic_kp_id')
+        continuation['last_topic_name']=last_edit.get('last_topic_name')
+        intent,intent_trace=resolve(body.goal,previous_paper or baseline,intent_provider_factory,
+            history_factory=history,context=continuation)
+        if intent.operation=='append':
+            # A named topic in the live proposal is a scoped plan adjustment.
+            # The generic bank adapter's text matcher can miss display labels
+            # with suffixes such as “(R46)”; resolve the existing plan alias
+            # once here and use the same formally validated count revision.
+            from backend.services.home_intent import _matched_topic_refs, HomeIntent
+            named_scopes=_matched_topic_refs(body.goal,previous_paper or baseline)
+            if len(named_scopes)==1 and intent.quantity:
+                intent=HomeIntent(operation='topic_count',refs=[named_scopes[0][0]],
+                    deltas=[intent.quantity],terms=body.goal)
+                intent_trace['operation']='topic_count'
         logging.getLogger(__name__).info('home_intent request=%s source=%s operation=%s model_calls=%s elapsed_ms=%s failure=%s',
             body.request_key,intent_trace['source'],intent_trace['operation'],intent_trace['model_calls'],
             intent_trace['elapsed_ms'],intent_trace.get('failure','none'))
@@ -1260,22 +1506,153 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
             old.context={**(old.context or {}),'adjustment_constraints':constraints}
             db.flush()
             return notice(message)
+        if intent.operation=='reuse_preview':
+            state=(old.context or {}).get('subject_topic_replacement') if old else None
+            if not state or not previous_paper:
+                return notice('当前没有可沿用的跨科目替换草案；原方案未改变。')
+            topics='、'.join(row.get('name','') for row in state.get('destination_topics',[]) if row.get('name')) or '408知识点'
+            return notice(f"当前待确认草案已按原目标题量替换为{topics}，其余知识点和预算保持不变；仍未生成正式今日卷。")
+        if intent.operation=='restore_subject_source':
+            current=previous_paper or baseline
+            state=(old.context or {}).get('subject_topic_replacement') if old else None
+            source_ids=set((state or {}).get('source_kp_ids') or [])
+            destination_ids={row.get('kp_id') for row in (state or {}).get('destination_topics',[])}
+            base=(old.context or {}).get('baseline') if old else None
+            saved_source=(state or {}).get('source_questions_snapshot')
+            source_questions=([q for q in saved_source if q.get('kp_id') in source_ids]
+                if isinstance(saved_source,list) else
+                [q for q in (base or {}).get('questions',[]) if q.get('kp_id') in source_ids])
+            if not current or not source_questions:
+                return notice('原知识点题目无法从基准方案中核验；当前替换草案保持不变。')
+            restored=deepcopy(current)
+            kept=[q for q in current.get('questions',[]) if q.get('kp_id') not in destination_ids]
+            kept_ids={q.get('question_id') for q in kept}
+            if any(q.get('question_id') in kept_ids for q in source_questions):
+                return notice('原知识点题目与当前方案出现重复；当前方案未改变，请恢复系统推荐后重试。')
+            restored['questions']=kept+source_questions
+            restored['selected_kp_ids']=[key for key in current.get('selected_kp_ids',[]) if key not in destination_ids]
+            restored['selected_kp_ids']=list(dict.fromkeys(restored['selected_kp_ids']+[str(key) for key in source_ids]))
+            restored['allocation_kp_ids']=list(dict.fromkeys(q['kp_id'] for q in restored['questions']))
+            restored['candidate_question_ids']=[q['question_id'] for q in restored['questions']]
+            restored['question_limit']=len(restored['questions'])
+            restored['total_minutes']=sum(int(q['minutes']) for q in restored['questions'])
+            old_nodes={str(row.get('kp_id')):row for row in current.get('scope_nodes',[])}
+            restored['scope_nodes']=[{'kp_id':key,
+                'name':old_nodes.get(key,{}).get('name') or (db.get(KnowledgePoint,UUID(key)).name if db.get(KnowledgePoint,UUID(key)) else ''),
+                'parent_id':str(db.get(KnowledgePoint,UUID(key)).parent_id) if db.get(KnowledgePoint,UUID(key)) and db.get(KnowledgePoint,UUID(key)).parent_id else None,
+                'assigned_count':sum(q['kp_id']==key for q in restored['questions']),
+                'allocation_status':'allocated' if any(q['kp_id']==key for q in restored['questions']) else 'no_eligible_questions',
+                'allocation_reason':None} for key in restored['selected_kp_ids']]
+            exact_intent=restored;exact_edit_used=True;bank_request=None
         if intent.operation in {'clarify','generate_guidance','accept','return'}:
+            if intent.operation=='clarify' and re.search(r'删除|删掉|移除|去掉',body.goal):
+                outside=_mentioned_outside_topic(db,body.goal,previous_paper or baseline)
+                if outside:
+                    return notice(f'{outside}当前不在今日方案范围内（今日安排 0 道），不需要再删除；原方案保持不变。'
+                        f'如果想重新练它，请说“把{outside}加回来”。')
             return notice(intent.question or ('正式生成请使用首页“确定生成试卷”；接受或返回请使用当前方案卡片。'))
         if intent.operation=='topic_count':
             current=previous_paper or baseline
             try:
                 with db.begin_nested():
                     exact_intent,topic_count_summaries,error=_topic_count_revision(
-                        db,now,current,intent,body.goal,int(old.budget_minutes if old else minutes))
+                        db,now,current,intent,body.goal,int(old.budget_minutes if old else ((current or {}).get('budget_minutes') or 90)))
             except Exception as exc:
-                logging.getLogger(__name__).exception('home topic count adjustment failed type=%s',type(exc).__name__)
-                return notice('按知识点调整题量暂时失败，原方案已保留；请读取当前方案后重试。')
+                failure_id=uuid4().hex
+                logging.getLogger(__name__).exception('home topic count adjustment failed id=%s stage=topic_count_revision type=%s',failure_id,type(exc).__name__)
+                return notice(f'按知识点调整失败，服务分支 home_recommendation_service.topic_count_revision，原因类别 {type(exc).__name__}，错误编号 {failure_id}；原方案和旧预览保持有效。')
             if error:return notice(error)
             exact_edit_used=True
             # The generic bank intent sees the word “增加” and can otherwise
             # run a second, scope-wide append after this topic-scoped edit.
             bank_request=None
+        if intent.operation=='topic_target':
+            current=previous_paper or baseline
+            if not current:return notice('当前没有可调整的有效方案；原方案已保留。')
+            from backend.services.home_intent import HomeIntent
+            from backend.services.home_intent import reference_map
+            refs=reference_map(current);deltas=[]
+            for ref in intent.refs:
+                kp=refs.get(ref,{}).get('value')
+                before=sum(q.get('kp_id')==str(kp) for q in current.get('questions',[]))
+                deltas.append(int(intent.quantity)-before)
+            if all(delta==0 for delta in deltas):
+                return notice(f'当前目标知识点已经符合每个{intent.quantity}道的要求；方案保持不变，尚未生成今日卷。')
+            if any(abs(delta)>20 for delta in deltas):
+                return notice('该目标题量变化超出单次调整范围；原方案已保留，请分次调整。')
+            intent=HomeIntent(operation='topic_count',refs=intent.refs,deltas=deltas,terms=body.goal)
+            try:
+                with db.begin_nested():
+                    exact_intent,topic_count_summaries,error=_topic_count_revision(
+                        db,now,current,intent,body.goal,int(old.budget_minutes if old else ((current or {}).get('budget_minutes') or 90)))
+            except Exception as exc:
+                failure_id=uuid4().hex
+                logging.getLogger(__name__).exception('home topic target adjustment failed id=%s stage=topic_target_revision type=%s',failure_id,type(exc).__name__)
+                return notice(f'按知识点设置目标题量失败，服务分支 home_recommendation_service.topic_target_revision，原因类别 {type(exc).__name__}，错误编号 {failure_id}；原方案保持有效。')
+            if error:return notice(error)
+            exact_edit_used=True;bank_request=None
+        if intent.operation in {'topic_remove_questions','exclude_scope'}:
+            current=previous_paper or baseline
+            if not current:return notice('当前没有可调整的有效方案；原方案已保留。')
+            from backend.services.home_intent import reference_map
+            refs=reference_map(current);targets={refs[key]['value'] for key in intent.refs}
+            for key in targets:
+                node=db.get(KnowledgePoint,UUID(str(key)))
+                current_items=[q for q in current.get('questions',[]) if q.get('kp_id')==str(key)]
+                topic_removal_summaries.append({'kp_id':str(key),'name':node.name if node else '',
+                    'before_count':len(current_items),'removed_question_ids':[q['question_id'] for q in current_items],
+                    'protected_count':0,'after_count':0,'operation':intent.operation})
+            if intent.operation=='topic_remove_questions' and not any(row['before_count'] for row in topic_removal_summaries):
+                return notice('当前待确认方案中这些知识点没有题目可移除；原方案保持不变。')
+            exact_intent=exact_edit(current,intent)
+            exact_edit_used=True
+            bank_request=None
+            if not exact_intent['questions']:
+                removed=sum(row['before_count'] for row in topic_removal_summaries)
+                return notice(f'该批量移除会清空当前方案（计划移除{removed}道、受保护0道）；空方案不能生成今日卷。原预览保持有效，请先补入其他知识点或题目。')
+        if intent.operation=='subject_topic_replace':
+            current=previous_paper or baseline
+            replace_minutes=int(current.get('budget_minutes') or (old.budget_minutes if old else 90)) if current else (old.budget_minutes if old else 90)
+            diagnostic_id=uuid4().hex
+            try:
+                with db.begin_nested():
+                    exact_intent,subject_topic_summary,error=_subject_topic_revision(
+                        db,now,current,intent,replace_minutes)
+            except Exception as exc:
+                logging.getLogger(__name__).exception('home local subject replacement failed id=%s stage=subject_topic_revision type=%s',diagnostic_id,type(exc).__name__)
+                return notice(f'局部跨科目替换失败，服务分支 home_recommendation_service.subject_topic_revision，原因类别 {type(exc).__name__}，错误编号 {diagnostic_id}；原方案保持有效，未生成今日卷。')
+            if error:
+                logging.getLogger(__name__).warning('home local subject replacement rejected id=%s stage=subject_topic_revision reason=%s',diagnostic_id,error)
+                return notice(error)
+            exact_edit_used=True;bank_request=None
+        if intent.operation=='restore_recent_removed':
+            current=previous_paper or baseline
+            edit=(old.context or {}).get('home_last_edit') if old else None
+            stack=list((old.context or {}).get('home_undo_stack') or []) if old else []
+            source=_history_paper(db,session.id,stack[-1]) if stack else None
+            removed_ids={row.get('question_id') for row in (edit or {}).get('removed_questions',[])}
+            candidates=[q for q in (source or {}).get('questions',[]) if q.get('question_id') in removed_ids]
+            if not current or not candidates or len(candidates)<int(intent.quantity or 1):
+                return notice('无法从上一版有效方案核验要恢复的题目；当前预览保持不变。')
+            add=candidates[:int(intent.quantity or 1)]
+            restored=deepcopy(current)
+            current_ids={q['question_id'] for q in current['questions']}
+            add=[q for q in add if q['question_id'] not in current_ids]
+            if len(add)!=int(intent.quantity or 1):return notice('待恢复题目已在当前方案中或版本不匹配；当前预览保持不变。')
+            restored['questions']=[*current['questions'],*add]
+            restored['selected_kp_ids']=list(dict.fromkeys([*current['selected_kp_ids'],*[q['kp_id'] for q in add]]))
+            restored['allocation_kp_ids']=list(dict.fromkeys(q['kp_id'] for q in restored['questions']))
+            restored['candidate_question_ids']=[q['question_id'] for q in restored['questions']]
+            restored['question_limit']=len(restored['questions'])
+            restored['total_minutes']=sum(int(q['minutes']) for q in restored['questions'])
+            old_nodes={str(row.get('kp_id')):row for row in current.get('scope_nodes',[])}
+            restored['scope_nodes']=[{'kp_id':key,
+                'name':old_nodes.get(key,{}).get('name') or (db.get(KnowledgePoint,UUID(key)).name if db.get(KnowledgePoint,UUID(key)) else ''),
+                'parent_id':str(db.get(KnowledgePoint,UUID(key)).parent_id) if db.get(KnowledgePoint,UUID(key)) and db.get(KnowledgePoint,UUID(key)).parent_id else None,
+                'assigned_count':sum(q['kp_id']==key for q in restored['questions']),
+                'allocation_status':'allocated' if any(q['kp_id']==key for q in restored['questions']) else 'no_eligible_questions',
+                'allocation_reason':None} for key in restored['selected_kp_ids']]
+            exact_intent=restored;exact_edit_used=True;bank_request=None
         if intent.operation=='subject_plan':
             current=previous_paper or baseline
             selected,selection_facts=_subject_plan_scope(db,now,subject=intent.terms,
@@ -1444,7 +1821,18 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
     if intent_trace:context['intent_trace']=intent_trace
     if exact_edit_used:context['exact_edit']=True
     if topic_count_summaries:context['topic_count_changes']=topic_count_summaries
+    if topic_removal_summaries:context['topic_removals']=topic_removal_summaries
     if subject_plan_summary:context['subject_plan']=subject_plan_summary
+    if subject_topic_summary:
+        prior_topic_state=(old.context or {}).get('subject_topic_replacement') if old else None
+        if prior_topic_state:
+            subject_topic_summary['source_kp_ids']=prior_topic_state.get('source_kp_ids') or subject_topic_summary['source_kp_ids']
+            subject_topic_summary['source_questions_snapshot']=(
+                prior_topic_state.get('source_questions_snapshot') or subject_topic_summary['source_questions_snapshot'])
+        context['subject_topic_replacement']=subject_topic_summary
+    elif ((intent is None or intent.operation not in {'restore_subject_source','restore'}) and body.action!='restore'
+            and old and (old.context or {}).get('subject_topic_replacement')):
+        context['subject_topic_replacement']=(old.context or {})['subject_topic_replacement']
     if exact_bank_used:context['exact_bank_revision']=True
     if prior_constraints:context['adjustment_constraints']=prior_constraints
     if bank_scope_plan:
@@ -1657,12 +2045,39 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                     "mode": bank_scope_plan['scope_mode'] if bank_scope_plan else 'replace'}
                 if candidate_ids is not None:
                     paper["candidate_question_ids"] = [str(k) for k in candidate_ids]
+                prior_snapshot=previous_paper or baseline or {}
+                prior_by_id={q.get('question_id'):q for q in prior_snapshot.get('questions',[])}
+                next_by_id={q.get('question_id'):q for q in paper.get('questions',[])}
+                removed_rows=[prior_by_id[key] for key in prior_by_id.keys()-next_by_id.keys()]
+                added_rows=[next_by_id[key] for key in next_by_id.keys()-prior_by_id.keys()]
+                prior_order={q.get('question_id'):index for index,q in enumerate(prior_snapshot.get('questions',[]))}
+                removed_rows.sort(key=lambda q:prior_order.get(q.get('question_id'),0))
+                changed_topic_ids={q.get('kp_id') for q in removed_rows+added_rows if q.get('kp_id')}
+                last_topic_id=None;last_topic_name=None
+                if subject_topic_summary and len(subject_topic_summary.get('destination_topics',[]))==1:
+                    last_topic_id=subject_topic_summary['destination_topics'][0]['kp_id']
+                    last_topic_name=subject_topic_summary['destination_topics'][0]['name']
+                elif len(changed_topic_ids)==1:
+                    last_topic_id=next(iter(changed_topic_ids))
+                    last_node=db.get(KnowledgePoint,UUID(last_topic_id))
+                    last_topic_name=last_node.name if last_node else None
+                context['home_last_edit']={
+                    'removed_questions':[{'question_id':q.get('question_id'),'question_version_id':q.get('question_version_id'),
+                        'kp_id':q.get('kp_id')} for q in removed_rows],
+                    'added_questions':[{'question_id':q.get('question_id'),'question_version_id':q.get('question_version_id'),
+                        'kp_id':q.get('kp_id')} for q in added_rows],
+                    'last_topic_kp_id':last_topic_id,'last_topic_name':last_topic_name,
+                    'previous_task_id':str(old.id) if old else None,
+                }
+                paper=_ensure_scope_node_names(db,paper)
                 row.draft, row.status = paper, "ready"
                 shortage = minutes - paper["total_minutes"]
                 row.message = f'试卷预览：{len(paper["questions"])} 道，预计 {paper["total_minutes"]} 分钟，预算 {minutes} 分钟。尚未创建今日卷。'
                 if topic_count_summaries:
                     row.message+=' 知识点题量调整：'+'；'.join(
-                        f"{item['name']} {'增加' if item['delta']>0 else '减少'}{abs(item['delta'])}道，当前{item['count']}道"
+                        f"{item['name']} {item['before_count']}道→{item['count']}道，"
+                        f"{'减少'+str(abs(item['delta']))+'道' if item['delta']<0 else '增加'+str(item['delta'])+'道'}，"
+                        f"实际移除{len(item.get('removed_question_ids',[]))}道、加入{len(item.get('added_question_ids',[]))}道"
                         for item in topic_count_summaries)+'。'
                     if '[underspecified_quantities_defaulted_to_one]' in intent.terms:
                         row.message+=' 原话未给具体数量，每个“几道”先按1道拟成草案，可继续调整。'
@@ -1672,6 +2087,17 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                     row.message+=(f" 已按{selection_basis}{subject_plan_summary['subject']}知识点替换当前范围，"
                         f"安排{subject_plan_summary['topic_count']}个知识点，题目预计{paper['total_minutes']}分钟，预算{minutes}分钟；"
                         '原数学范围已从当前待确认方案移除，尚未生成正式今日卷。')
+                if topic_removal_summaries:
+                    row.message+=' 知识点批量调整：'+'；'.join(
+                        f"{item['name']}原有{item['before_count']}道，计划移除{item['before_count']}道，"
+                        f"受保护0道，调整后0道"
+                        for item in topic_removal_summaries)+'；仍是待确认方案，尚未写入正式今日卷。'
+                if subject_topic_summary:
+                    src='、'.join(item['name'] for item in subject_topic_summary['source_topics'])
+                    dest='、'.join(item['name'] for item in subject_topic_summary['destination_topics'])
+                    row.message+=(f" 已将{src}的{subject_topic_summary['removed_count']}道题局部替换为{dest}的"
+                        f"{subject_topic_summary['added_count']}道正式合格题；其他知识点题目保持原样，"
+                        f"预算沿用{minutes}分钟，当前预计{paper['total_minutes']}分钟，尚未生成正式今日卷。")
                 if context.get('workload'):
                     w=context['workload']
                     row.message+=f" 保留原题后预计{w['effective_budget_minutes']}分钟，比原预算{w['requested_budget_minutes']}分钟多{w['extra_minutes']}分钟；题量较大，生成前请确认是否继续。"

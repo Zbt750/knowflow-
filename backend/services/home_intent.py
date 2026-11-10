@@ -10,13 +10,15 @@ from backend.services.bank_selection_intent import bank_selection_request, QUEST
 
 class HomeIntent(BaseModel):
     model_config=ConfigDict(extra='forbid',strict=True)
-    operation:Literal['append','select_bank','scope_add','remove_question','remove_scope','replace','replace_question','fill_time','budget','restore','explain','summary','accept','return','clarify','generate_guidance','count','reorder','subject_preference','constraint_total','topic_count','subject_plan']
+    operation:Literal['append','select_bank','scope_add','remove_question','remove_scope','topic_remove_questions','exclude_scope','topic_target','subject_topic_replace','restore_subject_source','reuse_preview','restore_recent_removed','replace','replace_question','fill_time','budget','restore','explain','summary','accept','return','clarify','generate_guidance','count','reorder','subject_preference','constraint_total','topic_count','subject_plan']
     refs:list[str]=Field(default_factory=list)
     deltas:list[int]=Field(default_factory=list)
     quantity:int|None=Field(default=None,ge=1)
+    topic_count:int|None=Field(default=None,ge=1,le=12)
     minutes:int|None=Field(default=None,ge=5,le=240)
     order:Literal['easy_to_hard']|None=None
     terms:str=''
+    destination_topic:str|None=None
     question:str=''
     unattempted_only:bool=False
 
@@ -36,7 +38,51 @@ def clarify(message='请明确要调整的知识点、题目及操作；当前�
     return HomeIntent(operation='clarify',question=message)
 
 
-def validate(intent,text,paper):
+def validate(intent,text,paper,context=None):
+    context=context or {}
+    if intent.operation=='reuse_preview':
+        state=context.get('subject_topic_replacement') or {}
+        if not state or not re.search(r'(?:一样的题量|数量和原来一样|题量.*原来一样|时间也按照原来的|只换.{0,10}其他不动)',text):
+            return clarify('当前没有可沿用的跨科目替换预览；原方案未改变。')
+        return intent
+    if intent.operation=='restore_subject_source':
+        state=context.get('subject_topic_replacement') or {}
+        if not state.get('source_kp_ids') or not re.search(r'(?:不换了|取消替换|恢复原来的?.{0,12}(?:题目|知识点|题|方案))',text):
+            return clarify('没有可核验的原知识点替换来源；当前方案未改变。')
+        return intent
+    if intent.operation=='restore_recent_removed':
+        edit=context.get('home_last_edit') or {}
+        removed=edit.get('removed_questions') or []
+        if not removed or intent.quantity is None or intent.quantity>len(removed):
+            return clarify('上一轮没有足够的可恢复题目；当前方案未改变。')
+        return intent
+    if intent.operation in {'topic_remove_questions','exclude_scope','topic_target','subject_topic_replace'}:
+        refs=reference_map(paper)
+        if (not intent.refs or any(ref not in refs or refs[ref]['kind']!='scope' for ref in intent.refs)
+                or len(set(intent.refs))!=len(intent.refs)):
+            return clarify('目标知识点不在当前有效方案中；原方案已保留。')
+        if intent.operation=='topic_remove_questions':
+            if not re.search(r'(?:删除|删掉|移除|去掉|全部.{0,5}删除|都.{0,3}删除)',text):
+                return clarify('没有收到按知识点批量移除的明确要求；原方案未改变。')
+        elif intent.operation=='exclude_scope':
+            if not re.search(r'(?:今天|今日).{0,8}(?:不学|不安排|排除|不练)|(?:不学|不安排).{0,8}(?:今天|今日)',text):
+                return clarify('请明确这是今天的知识点排除；原方案未改变。')
+        elif intent.operation=='topic_target':
+            if intent.quantity is None or not re.search(r'(?:只留|只保留|保留|留到)',text):
+                return clarify('请明确该知识点要保留的题目数量；原方案已保留。')
+        else:
+            expected=_subject_topic_replace_request(text,paper)
+            if expected is not None:
+                if (intent.refs,intent.terms,intent.destination_topic,intent.topic_count,intent.unattempted_only)!=(expected.refs,expected.terms,expected.destination_topic,expected.topic_count,expected.unattempted_only):
+                    return clarify('无法核对跨科目替换范围；当前方案没有改变。')
+            else:
+                state=context.get('subject_topic_replacement') or {}
+                current_ids={row.get('kp_id') for row in state.get('destination_topics',[])}
+                inherited_refs=[key for key,row in refs.items() if row['kind']=='scope' and row.get('value') in current_ids]
+                if (not re.search(r'(?:408|操作系统|数据结构|计算机网络|组成原理)',text)
+                        or intent.refs!=inherited_refs or intent.terms!='408'):
+                    return clarify('无法核对跨科目替换范围；当前方案没有改变。')
+        return intent
     if intent.operation in {'constraint_total','subject_preference'}:
         return intent
     if intent.operation=='topic_count':
@@ -167,19 +213,84 @@ def _topic_quantity(text):
     return (value,False) if value is not None and value>0 else (None,False)
 
 
-def _topic_count_intent(text,paper):
+def _topic_scopes(paper):
+    refs=reference_map(paper)
+    return [(key,row,_topic_aliases(row.get('name',''))) for key,row in refs.items() if row['kind']=='scope']
+
+
+def _matched_topic_refs(text,paper):
+    matches=[]
+    for key,row,names in _topic_scopes(paper):
+        if any(alias in text for alias in names):matches.append((key,row))
+    if not matches:return []
+    longest=max(max((len(alias) for alias in _topic_aliases(row.get('name','')) if alias in text),default=0) for _,row in matches)
+    best=[(key,row) for key,row in matches if max((len(alias) for alias in _topic_aliases(row.get('name','')) if alias in text),default=0)==longest]
+    return best if len({key for key,_ in best})==len(best) else []
+
+
+def _subject_topic_replace_request(text,paper):
+    if '408' not in text or not re.search(r'(?:换成|替换成|换到|改成)',text):return None
+    if re.search(r'(?:全部|整卷|整套|所有).{0,10}(?:换|替换|改)|(?:今天|今日).{0,12}(?:数学|当前).{0,12}(?:都换|全部换)',text):return None
+    if re.search(r'(?:能不能|可不可以|是否|要不要|如果|假如|等我|以后|稍后|先不要|先不|先别|别)',text):return None
+    matches=_matched_topic_refs(text,paper)
+    if not matches:return None
+    refs=[key for key,_ in matches]
+    scoped={row['value'] for _,row in matches}
+    questions=[q for q in (paper or {}).get('questions',[]) if q['kp_id'] in scoped]
+    if not questions:return None
+    count_match=re.search(r'([一二两三四五六七八九十\d]+)\s*个\s*(?:408\s*)?知识点',text)
+    topic_count=question_count(count_match[1]) if count_match else len(refs)
+    # A named 408 leaf is resolved against the real 408 syllabus at execution.
+    destination=None
+    dest=re.search(r'408\s*([\u4e00-\u9fff]{2,16}?)(?:(?:的)?(?:题目|题|知识点)|$)',text)
+    if dest:
+        candidate=dest[1].strip().strip('的')
+        if candidate not in {'题目','知识点'}:destination=candidate
+    return HomeIntent(operation='subject_topic_replace',refs=refs,terms='408',quantity=len(questions),
+        topic_count=topic_count,destination_topic=destination,
+        unattempted_only=bool(re.search(r'(?:没(?:有)?做过|未(?:曾)?学习过?|没有(?:学习|做过)|从未(?:学习|做过)|没学过)',text)))
+
+
+def _topic_removal_intent(text,paper):
+    refs=_matched_topic_refs(text,paper)
+    if not refs:return None
+    # A singular count is a question-level delete request. Do not reinterpret
+    # “删除一道某知识点的题” as deleting the entire topic's question set.
+    # If no question identity is supplied, the legacy exact-delete validator
+    # will ask for a question number rather than broadening the operation.
+    singular=re.search(r'(?:一道|一题|一个题目|一题目)',text)
+    bulk=re.search(r'(?:全部|所有|都|全都|统统)',text)
+    if singular and not bulk:return None
+    keys=[key for key,_ in refs]
+    if re.search(r'(?:今天|今日).{0,8}(?:不学|不安排|排除|不练)',text):
+        return HomeIntent(operation='exclude_scope',refs=keys,terms=text)
+    if re.search(r'(?:删除|删掉|移除|去掉)',text) and re.search(r'(?:题目|题|全部|所有|都)',text):
+        return HomeIntent(operation='topic_remove_questions',refs=keys,terms=text)
+    return None
+
+
+def _topic_target_intent(text,paper):
+    if not re.search(r'(?:只留|只保留|保留|留到)',text):return None
+    matches=_matched_topic_refs(text,paper)
+    target=re.search(r'(?:只留|只保留|保留|留到)\s*([一二两三四五六七八九十\d]+)\s*道',text)
+    quantity=question_count(target[1]) if target else None
+    if not matches or quantity is None:return None
+    return HomeIntent(operation='topic_target',refs=[key for key,_ in matches],quantity=quantity,terms=text)
+
+
+def _topic_count_intent(text,paper,context=None):
     """Parse named per-topic count edits without routing them to generic append.
 
     A multi-clause request must resolve every action to a topic in the current
     proposal. The planner later applies all resolved deltas atomically.
     """
     refs=reference_map(paper)
-    scopes=[(key,row,_topic_aliases(row.get('name',''))) for key,row in refs.items()
-            if row['kind']=='scope']
+    scopes=_topic_scopes(paper)
     clauses=[part.strip() for part in re.split(r'[，,；;。！？?\n]',text) if part.strip()]
-    edits=[];underspecified=False;unresolved_actions=0
+    edits=[];underspecified=False;unresolved_actions=0;inherited_actions=0
     add_words=r'(?:增加|添加|追加|补充|补|再加|多安排|加上|加(?!入))'
-    remove_words=r'(?:减少|减去|减掉|少安排)'
+    remove_words=r'(?:减少|减去|减掉|少安排|少(?:掉)?)(?!有)'
+    context=context or {}
     for clause in clauses:
         aliases=[]
         for key,row,names in scopes:
@@ -188,15 +299,30 @@ def _topic_count_intent(text,paper):
                     aliases.append((key,row,alias));break
         verbs=list(re.finditer(add_words+r'\s*(?:几|一些|若干|[零〇一二两三四五六七八九十百千]+|[1-9]\d*)?\s*道?',clause))
         verbs += list(re.finditer(remove_words+r'\s*(?:几|一些|若干|[零〇一二两三四五六七八九十百千]+|[1-9]\d*)?\s*道?',clause))
-        if not verbs:continue
-        if not aliases:
+        if not verbs:
+            verbs=list(re.finditer(r'(?:再)?少\s*([几一些若干零〇一二两三四五六七八九十百千]+|[1-9]\d*)\s*道?',clause))
+        if not aliases and len(edits)==1 and edits[0][1]<0:
+            # A bare second clause such as “减少1道吧” corrects the earlier
+            # number. Do this before inheriting last-topic context, otherwise
+            # it becomes a duplicate operation on the same knowledge point.
             correction=re.fullmatch(r'(?:那就|还是|减少|减到|减为)?\s*([一二两三四五六七八九十\d]+)\s*道(?:吧|就好|即可)?',clause)
-            if correction and len(edits)==1 and edits[0][1]<0:
+            if correction:
                 quantity=question_count(correction[1])
                 if quantity is None or quantity<1:
                     return clarify('请明确要减少的题数；原方案已保留。')
                 edits[0]=(edits[0][0],-quantity)
                 continue
+        if not aliases and context.get('last_topic_name') and re.search(add_words+'|'+remove_words+r'|再少',clause):
+            last_name=context['last_topic_name']
+            aliases=[(key,row,last_name) for key,row,names in scopes if row.get('name')==last_name]
+            if not aliases and context.get('last_topic_kp_id'):
+                aliases=[(key,row,last_name) for key,row,_ in scopes if row.get('value')==context['last_topic_kp_id']]
+            if aliases and not verbs:
+                implicit=re.search(r'(?:再)?少\s*([几一些若干零〇一二两三四五六七八九十百千]+|[1-9]\d*)\s*道?',clause)
+                verbs=[implicit] if implicit else []
+            if aliases:inherited_actions+=1
+        if not verbs:continue
+        if not aliases:
             # Global question-limit and time-fill phrases belong to their
             # existing operations. Only reject an unresolved second clause
             # after a named topic edit has already been recognized.
@@ -221,14 +347,14 @@ def _topic_count_intent(text,paper):
         return None
     if len({key for key,_ in edits})!=len(edits):
         return clarify('同一个知识点出现了多次增减，请合并成一个明确的目标数量；本次没有修改方案。')
-    if len(edits)==1 and edits[0][1]>0 and not unresolved_actions:
+    if len(edits)==1 and edits[0][1]>0 and not unresolved_actions and not inherited_actions:
         # Existing-bank append already has a dedicated candidate/receipt path;
         # keep it for a single-topic addition. This branch is for per-topic
         # counts and compound edits that cannot be represented as a global append.
         return None
     # If an operation is named but its topic was not part of the displayed
     # proposal, fail closed rather than accidentally appending elsewhere.
-    named_topic_actions=sum(1 for clause in clauses if re.search(add_words+'|'+remove_words,clause)
+    named_topic_actions=inherited_actions+sum(1 for clause in clauses if re.search(add_words+'|'+remove_words,clause)
         and any(alias in clause for _,_,names in scopes for alias in names))
     if unresolved_actions or len(edits)!=named_topic_actions:
         return clarify('该知识点不在当前方案中；请先把它加入方案，再调整题量。')
@@ -261,7 +387,8 @@ def _subject_plan_request(text):
         unattempted_only=unattempted_only)
 
 
-def parse_rule(text,paper):
+def parse_rule(text,paper,context=None):
+    context=context or {}
     text=text.strip();refs=reference_map(paper)
     # 学科比例/总题量约束：在否定检测之前识别，作为可持久化约束而不是泛化否定。
     if re.search(r'(?:高数|线代|概率|数学).{0,6}(?:多一点|多一些|少一点|少一些)', text):
@@ -269,21 +396,65 @@ def parse_rule(text,paper):
     if (('总题量' in text or '题量' in text or '总题数' in text)
             and any(word in text for word in ('不要增加', '不能增加', '不增加', '不变', '不要变', '保持不变', '不增'))):
         return HomeIntent(operation='constraint_total')
-    negated=validate(HomeIntent(operation='clarify'),text,paper)
+    # Context-bound refinements resolve before generic query/confirmation text.
+    if context.get('subject_topic_replacement') and re.fullmatch(r'(?:一样的题量|数量和原来一样|题量和原来一样|时间也按照原来的|只换.{0,10}其他不动)[。！! ]*',text):
+        return validate(HomeIntent(operation='reuse_preview'),text,paper,context)
+    if context.get('subject_topic_replacement') and re.search(r'(?:不换了|取消替换|恢复原来的?.{0,12}(?:题目|知识点|题))',text):
+        return validate(HomeIntent(operation='restore_subject_source'),text,paper,context)
+    if re.fullmatch(r'(?:全部恢复|全部还原|恢复全部(?:修改|调整)?|取消(?:整个)?调整(?:方案)?)[。！! ]*',text):
+        return HomeIntent(operation='restore')
+    if re.search(r'(?:不要删了|不删除了|别删了|不要删除了).{0,20}(?:恢复|还原)',text):
+        if context.get('subject_topic_replacement'):
+            return validate(HomeIntent(operation='restore_subject_source'),text,paper,context)
+        return HomeIntent(operation='restore')
+    # A follow-up may name only the new 408 target. Keep the original local
+    # replacement scope and current quantity from the persisted draft.
+    state=context.get('subject_topic_replacement') or {}
+    if state and '408' in text and re.search(r'(?:换成|替换成|换到|改成)',text) and not re.search(r'(?:能不能|可不可以|是否|要不要|如果|假如|以后|稍后|先不要|先不|先别|别)',text):
+        current_refs=reference_map(paper)
+        target_ids={row.get('kp_id') for row in state.get('destination_topics',[])}
+        current_scope_refs=[key for key,row in current_refs.items() if row['kind']=='scope' and row['value'] in target_ids]
+        current_questions=[q for q in (paper or {}).get('questions',[]) if q.get('kp_id') in target_ids]
+        if current_scope_refs and current_questions:
+            count_match=re.search(r'([一二两三四五六七八九十\d]+)\s*个\s*(?:408\s*)?知识点',text)
+            topic_count=question_count(count_match[1]) if count_match else len(current_scope_refs)
+            destination_match=re.search(r'408\s*([\u4e00-\u9fff]{2,16}?)(?:(?:的)?(?:题目|题|知识点)|$)',text)
+            destination=destination_match[1].strip().strip('的') if destination_match else None
+            if destination in {'题目','知识点',''}:destination=None
+            intent=HomeIntent(operation='subject_topic_replace',refs=current_scope_refs,terms='408',
+                quantity=len(current_questions),topic_count=topic_count,destination_topic=destination,
+                unattempted_only=bool(re.search(r'(?:没(?:有)?做过|未(?:曾)?学习过?|没有(?:学习|做过)|从未(?:学习|做过)|没学过)',text)))
+            return validate(intent,text,paper,context)
+    if re.fullmatch(r'(?:刚才那(?:两|二|三|\d+)道再)?恢复(?:一道|一题|([二两三四五六七八九十\d]+)道)[。！! ]*',text) and context.get('home_last_edit',{}).get('removed_questions'):
+        amount=re.search(r'(?:恢复|再恢复)\s*([一二两三四五六七八九十\d]+)\s*(?:道|题)',text)
+        quantity=question_count(amount[1]) if amount else 1
+        return validate(HomeIntent(operation='restore_recent_removed',quantity=quantity),text,paper,context)
+    subject_local=_subject_topic_replace_request(text,paper)
+    if subject_local is not None:return validate(subject_local,text,paper,context)
+    topic_removal=_topic_removal_intent(text,paper)
+    if topic_removal is not None:return validate(topic_removal,text,paper,context)
+    topic_target=_topic_target_intent(text,paper)
+    if topic_target is not None:return validate(topic_target,text,paper,context)
+    # “今天不学/不安排” is an explicit scope exclusion, not a denial of a
+    # proposed mutation. Other negative forms remain read-only/clarify.
+    negated=validate(HomeIntent(operation='clarify'),text,paper,context)
     if negated.question:return negated
     subject_plan=_subject_plan_request(text)
     if subject_plan is not None:return subject_plan
     if re.search(r'(?:删除|删掉|移除|去掉|减少|减掉).{0,8}(?:简单|容易|基础)',text):
         return clarify('当前方案没有可核验的逐题难度依据，不能替你判断哪道更简单；请给出题号或知识点，原方案已保留。')
-    topic_count=_topic_count_intent(text,paper)
-    if topic_count is not None:return topic_count
-    from backend.services.exam_source_policy import requests_original_exam, ORIGINAL_EXAM_NOTICE
-    if requests_original_exam(text):return clarify(ORIGINAL_EXAM_NOTICE)
+    # Resolve explicit target-time work before the generic topic-count parser.
+    # The phrase “补足到90分钟” contains “补”, which is also a topic-add verb;
+    # running topic parsing first can misclassify it as an unscoped question add.
     target=target_time(text)
     if target is not None:
         if re.search(r'删|移除|替换|换.{0,8}道|只练|生成|(?:预算|难度).{0,4}(?:改|调)|(?:追加|再加|再来|另加).{0,16}'+QUESTION_COUNT_PATTERN,text):
             return clarify('请将补足时长和其他操作分别调整；原方案已保留。')
         return validate(HomeIntent(operation='fill_time',minutes=target,terms=text),text,paper)
+    topic_count=_topic_count_intent(text,paper,context)
+    if topic_count is not None:return topic_count
+    from backend.services.exam_source_policy import requests_original_exam, ORIGINAL_EXAM_NOTICE
+    if requests_original_exam(text):return clarify(ORIGINAL_EXAM_NOTICE)
     if re.search(r'第(?:[一二三四五六七八九十]+|\d+)道',text) and re.search(r'换|替换',text):
         ordinal=re.search(r'第([一二三四五六七八九十]+|\d+)道',text)
         index=question_count(ordinal[1])
@@ -303,15 +474,26 @@ def parse_rule(text,paper):
         ordinal=re.search(r'第([一二三四五六七八九十]|\d+)道',text)
         if ordinal:
             index=int(ordinal[1]) if ordinal[1].isdigit() else '一二三四五六七八九十'.index(ordinal[1])+1
-            return validate(HomeIntent(operation='remove_question',refs=[f'q{index}'],quantity=1),text,paper)
+            return validate(HomeIntent(operation='remove_question',refs=[f'q{index}'],quantity=1),text,paper,context)
         nodes=[k for k,v in refs.items() if v['kind']=='scope' and v['name'] and (v['name'] in text or v['name'].removesuffix('法则') in text)]
         ordinal_scope=re.search(r'第([一二三四五六七八九十]|\d+)个知识点',text)
         if ordinal_scope:
             index=int(ordinal_scope[1]) if ordinal_scope[1].isdigit() else '一二三四五六七八九十'.index(ordinal_scope[1])+1
             nodes=[f'k{index}']
-        if re.search(r'知识点|范围',text):return validate(HomeIntent(operation='remove_scope',refs=nodes),text,paper)
+        # “删除洛必达法则的题目/所有题目都删除”在点名知识点时是整知识点范围
+        # 删除；但“删除一道某知识点的题”明确只要一道，继续走单题校验并要求
+        # 题号，绝不擅自扩大成整知识点删除。
+        singular=re.search(r'(?:一道|一题|一个题目|一题目|第[一二三四五六七八九十\d]+道)',text)
+        if nodes and not singular and re.search(r'知识点|范围|所有|全部|都|题目|题',text):
+            return validate(HomeIntent(operation='remove_scope',refs=nodes),text,paper,context)
+        if not nodes:return clarify('请明确要删除的知识点或题号；原方案已保留。')
         choices=[k for k,v in refs.items() if v['kind']=='question' and any(v['value'] in [q['question_id'] for q in (paper or {}).get('questions',[]) if q['kp_id']==refs[n]['value']] for n in nodes)]
-        return validate(HomeIntent(operation='remove_question',refs=choices,quantity=1),text,paper)
+        if not choices:
+            # 明确点名了知识点，但该知识点当前已是 0 道：这是幂等结果，
+            # 应如实说明，而不是再要求用户重新指定知识点或题号。
+            names='、'.join(dict.fromkeys(refs[n]['name'] for n in nodes if refs[n].get('name'))) or '该知识点'
+            return clarify(f'当前方案里{names}已经没有题目（今日安排 0 道），不需要再删除；原方案保持不变。')
+        return validate(HomeIntent(operation='remove_question',refs=choices,quantity=1),text,paper,context)
     budget=re.search(r'(?:预算|时间)?(?:改成|改为|调整为|改到|调整到)\s*(\d{1,3})\s*分钟',text)
     if not budget:
         budget=re.fullmatch(r'(?:把)?(?:预算|时间)?\s*(\d{1,3})\s*分钟[。！! ]*',text)
@@ -354,15 +536,23 @@ def exact_edit(paper,intent):
     elif intent.operation=='count':
         result['questions']=result['questions'][:intent.quantity]
         result['question_limit']=intent.quantity
-    elif intent.operation in {'remove_scope','remove_question'}:
+    elif intent.operation in {'remove_scope','remove_question','topic_remove_questions','exclude_scope'}:
         targets={refs[k]['value'] for k in intent.refs}
-        result['questions']=[q for q in paper['questions'] if (q['kp_id'] if intent.operation=='remove_scope' else q['question_id']) not in targets]
-        if intent.operation=='remove_scope':result['selected_kp_ids']=[k for k in paper['selected_kp_ids'] if k not in targets]
+        result['questions']=[q for q in paper['questions'] if (q['question_id'] if intent.operation=='remove_question' else q['kp_id']) not in targets]
+        if intent.operation in {'remove_scope','exclude_scope'}:result['selected_kp_ids']=[k for k in paper['selected_kp_ids'] if k not in targets]
     elif intent.operation=='reorder':
         difficulty_order={'basic':0,'medium':1,'improved':1,'hard':2,'advanced':3,'comprehensive':3,'challenge':3}
         result['questions']=sorted(result['questions'],key=lambda q:difficulty_order.get(q.get('difficulty'),len(difficulty_order)))
         result['order_applied']='easy_to_hard'
     result['total_minutes']=sum(q['minutes'] for q in result['questions'])
+    result['question_limit']=len(result['questions'])
+    result['candidate_question_ids']=[q['question_id'] for q in result['questions']]
+    result['allocation_kp_ids']=list(dict.fromkeys(q['kp_id'] for q in result['questions']))
+    counts={key:sum(q['kp_id']==key for q in result['questions']) for key in result.get('selected_kp_ids',[])}
+    result['scope_nodes']=[{**node,'assigned_count':counts.get(node['kp_id'],0),
+        'allocation_status':'allocated' if counts.get(node['kp_id'],0) else 'no_eligible_questions'}
+        for node in result.get('scope_nodes',[])
+        if node['kp_id'] in result.get('selected_kp_ids',[])]
     before=[(q['question_id'],q['question_version_id']) for q in paper['questions']]
     after=[(q['question_id'],q['question_version_id']) for q in result['questions']]
     if intent.operation=='budget' and (before!=after or result['selected_kp_ids']!=paper['selected_kp_ids']):raise ValueError('budget_changed_question_identity')
@@ -373,11 +563,11 @@ def exact_edit(paper,intent):
     return result
 
 
-def resolve(text,paper,provider_factory=None,*,history_factory=None):
+def resolve(text,paper,provider_factory=None,*,history_factory=None,context=None):
     """One model proposal at most; identity/authority never come from the model."""
     started=time.monotonic();trace={'schema':'home-intent-v1','source':'rule','model_calls':0}
     try:
-        result=parse_rule(text,paper)
+        result=parse_rule(text,paper,context)
     except (ValueError,TypeError):
         result=clarify('调整参数不在允许范围内，请重新说明；原方案已保留。')
         trace['failure']='rule_schema_invalid'
@@ -406,6 +596,6 @@ def resolve(text,paper,provider_factory=None,*,history_factory=None):
             result=HomeIntent.model_validate_json(raw)
         except Exception as exc:
             trace['failure']=type(exc).__name__;result=clarify('暂时无法可靠理解这次调整，请明确操作、知识点和题量；原方案已保留。')
-    result=validate(result,text,paper)
+    result=validate(result,text,paper,context)
     trace.update(operation=result.operation,elapsed_ms=round((time.monotonic()-started)*1000))
     return result,trace

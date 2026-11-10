@@ -291,7 +291,7 @@ def test_real_home_preview_exposes_fsrs_due_question_after_wrong_answer(client,h
     assert actual==planned
 
 
-def _add_synthetic_topic(db, *, code, name, subject='考研数学'):
+def _add_synthetic_topic(db, *, code, name, subject='考研数学', question_count=5):
     node=KnowledgePoint(code=code,name=name,subject=subject,is_assessable=True,is_active=True)
     db.add(node);db.flush()
     questions=[]
@@ -301,11 +301,20 @@ def _add_synthetic_topic(db, *, code, name, subject='考研数学'):
         '计算定积分 ∫(0,1) x dx。',
         '数列满足 a₁=2 且 aₙ=2aₙ₋₁，求 a₃。',
         '矩阵 [[1,2],[3,4]] 的行列式是多少？',
+        '计算等差数列 1+2+3+...+10 的和。',
+        '方程 x²-5x+6=0 的两根分别是多少？',
+        '向量 (1,2) 与向量 (3,4) 的点积是多少？',
+        '矩阵 [[1,0],[0,2]] 的迹是多少？',
+        '函数 ln(x) 在 x=e 处的导数是多少？',
+        '袋中有3个红球、2个蓝球，不放回抽2个，两个都是红球的概率是多少？',
+        '方程 2x+5=11 的解是多少？',
     ]
-    answers=['1','6','0.5','8','-2']
-    for index in range(len(stems)):
+    answers=['1','6','0.5','8','-2','55','2,3','11','3','1/e','1/5','3']
+    for index in range(question_count):
+        template_index=index % len(stems)
+        variant=f' variant {index+1}' if index>=len(stems) else ''
         question=Question(kp_id=node.id,question_type='single_choice',
-            stem=f'SYNTHETIC {code}: {stems[index]}',options={'A':answers[index],'B':'999'},
+            stem=f'SYNTHETIC {code}: {stems[template_index]}{variant}',options={'A':answers[template_index],'B':'999'},
             correct_answer='A',explanation='Synthetic fixture only.',estimated_minutes=10,
             grading_mode='auto',grading_config={'verified':True,'method':'single_choice'},is_active=True)
         mark_isolated_question_trusted(question,db=db);questions.append(question)
@@ -588,7 +597,7 @@ def test_same_topic_quantity_correction_and_unknown_easy_level_keep_context_with
         'expected_version':current['draft_version']})
     assert corrected.status_code==200,corrected.text
     wire=corrected.json()
-    assert wire['status']=='ready',wire
+    assert wire.get('status')=='ready',wire
     assert wire['draft']['questions']==[]
     plan=read_home_domain(client,sid)
     after_counts={row['kp_id']:row['assigned_count'] for row in plan['draft']['scope_nodes']}
@@ -697,6 +706,240 @@ def test_cross_subject_replacement_uses_six_low_history_408_topics_and_keeps_mat
     assert after['daily_plans']==before['daily_plans']==0
     assert after['practice_items']==before['practice_items']==0
     assert after['learning_tasks']==before['learning_tasks']+2
+
+
+def test_r46_named_topic_decrease_restore_partial_undo_and_full_reset_are_real_draft_transitions(client,home,session_factory):
+    sid=UUID(home['session_id'])
+    with session_factory.begin() as db:
+        implicit,_=_add_synthetic_topic(db,code='synthetic.r46.implicit',name='隐函数求导（R46）',question_count=12)
+        other,_=_add_synthetic_topic(db,code='synthetic.r46.other',name='线性代数（R46）')
+        implicit_id,other_id=str(implicit.id),str(other.id)
+    initial=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,'goal':'','action':'default',
+        'selected_kp_ids':[implicit_id,other_id],'budget_minutes':90})
+    assert initial.status_code==200,initial.text
+    base=initial.json();base_domain=read_home_domain(client,sid)
+    baseline_other=next(q for q in base_domain['draft']['questions'] if q['kp_id']==other_id)
+    initial_count=next(row['assigned_count'] for row in base['draft']['scope_nodes'] if row['kp_id']==implicit_id)
+
+    easy=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'帮我减少两道比较简单的隐函数题目','action':'adjust',
+        'expected_version':base['draft_version']})
+    assert easy.status_code==200 and easy.json()['kind']=='explanation'
+    assert '没有可核验的逐题难度依据' in easy.json()['message']
+    assert read_home_domain(client,sid)['draft']==base_domain['draft']
+
+    added=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'再给我增加两道隐函数求导的题目','action':'adjust','expected_version':base['draft_version']})
+    assert added.status_code==200,added.text
+    add_view=added.json()
+    assert add_view.get('status')=='ready',add_view
+    add_domain=read_home_domain(client,sid)
+    after_add=next(row['assigned_count'] for row in add_domain['draft']['scope_nodes'] if row['kp_id']==implicit_id)
+    assert after_add==initial_count+2, {'response':add_view,'draft':add_domain['draft']}
+    assert next(q for q in add_domain['draft']['questions'] if q['kp_id']==other_id)==baseline_other
+    assert formal_rows(session_factory)['daily_plans']==0
+
+    target=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'隐函数求导保留两道','action':'adjust','expected_version':add_view['draft_version']})
+    assert target.status_code==200,target.text
+    target_view=target.json();assert target_view['status']=='ready',target_view
+    target_domain=read_home_domain(client,sid)
+    target_count=next(row['assigned_count'] for row in target_domain['draft']['scope_nodes'] if row['kp_id']==implicit_id)
+    assert target_count==2 and f'{after_add}道→2道' in target_view['message']
+
+    reduced=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'那你随便帮我减少两道隐函数的题目','action':'adjust',
+        'expected_version':target_view['draft_version']})
+    assert reduced.status_code==200,reduced.text
+    reduction=reduced.json();assert reduction['status']=='ready',reduction
+    reduction_domain=read_home_domain(client,sid)
+    reduced_count=next(row['assigned_count'] for row in reduction_domain['draft']['scope_nodes'] if row['kp_id']==implicit_id)
+    assert reduced_count==target_count-2
+    assert '隐函数求导' in reduction['message'] and '实际移除2道' in reduction['message']
+    removed_ids=[row['question_id'] for row in (reduction_domain['context'].get('home_last_edit') or {}).get('removed_questions',[])]
+    assert len(removed_ids)==2
+    assert next(q for q in reduction_domain['draft']['questions'] if q['kp_id']==other_id)==baseline_other
+
+    restored=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'刚才那两道再恢复一道','action':'adjust','expected_version':reduction['draft_version']})
+    assert restored.status_code==200,restored.text
+    restore_view=restored.json();assert restore_view['status']=='ready',restore_view
+    restored_domain=read_home_domain(client,sid)
+    restored_count=next(row['assigned_count'] for row in restored_domain['draft']['scope_nodes'] if row['kp_id']==implicit_id)
+    restored_ids={q['question_id'] for q in restored_domain['draft']['questions'] if q['kp_id']==implicit_id}
+    assert restored_count==reduced_count+1
+    assert len(restored_ids.intersection(removed_ids))==1
+    assert next(q for q in restored_domain['draft']['questions'] if q['kp_id']==other_id)==baseline_other
+    assert formal_rows(session_factory)['daily_plans']==0
+
+    undo=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,'goal':'撤销刚才修改',
+        'action':'adjust','expected_version':restore_view['draft_version']})
+    assert undo.status_code==200,undo.text
+    undo_view=undo.json();assert undo_view['status']=='ready',undo_view
+    assert undo_view['draft']==reduction['draft']
+    assert read_home_domain(client,sid)['draft']==reduction_domain['draft']
+    assert formal_rows(session_factory)['practice_items']==0
+
+    all_restore=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,'goal':'全部恢复',
+        'action':'adjust','expected_version':undo_view['draft_version']})
+    assert all_restore.status_code==200,all_restore.text
+    restore_all_view=all_restore.json();assert restore_all_view['status']=='ready',restore_all_view
+    canonical_baseline=base_domain['context']['baseline']
+    assert restore_all_view['draft']['question_count']==len(canonical_baseline['questions'])
+    restored_all=read_home_domain(client,sid)['draft']
+    assert restored_all['selected_kp_ids']==canonical_baseline['selected_kp_ids']
+    assert sorted((q['question_id'],q['question_version_id']) for q in restored_all['questions'])==sorted(
+        (q['question_id'],q['question_version_id']) for q in canonical_baseline['questions'])
+    assert restored_all['budget_minutes']==canonical_baseline['budget_minutes']
+    assert restored_all['total_minutes']==canonical_baseline['total_minutes']
+    assert formal_rows(session_factory)['daily_plans']==0
+    assert formal_rows(session_factory)['practice_items']==0
+
+
+def test_r46_topic_add_reports_only_candidates_not_already_pinned_in_the_draft(client,home,session_factory):
+    sid=UUID(home['session_id'])
+    with session_factory.begin() as db:
+        topic,_=_add_synthetic_topic(db,code='synthetic.r46.exhausted',name='隐函数求导（R46库存边界）',question_count=1)
+        topic_id=str(topic.id)
+    initial=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,'goal':'','action':'default',
+        'selected_kp_ids':[topic_id],'budget_minutes':90})
+    assert initial.status_code==200,initial.text
+    before=read_home_domain(client,sid)
+    assert len(before['draft']['questions'])==1
+    attempted=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'再给我增加一道隐函数求导的题目','action':'adjust','expected_version':initial.json()['draft_version']})
+    assert attempted.status_code==200,attempted.text
+    response=attempted.json()
+    assert response.get('kind')=='explanation' and response.get('status')!='ready',response
+    assert '没有找到可追加的新题' in response['message']
+    assert 'home_recommendation_service.topic_count_candidate_query' in response['message']
+    assert '当前可用1道' not in response['message']
+    assert read_home_domain(client,sid)['draft']==before['draft']
+    assert formal_rows(session_factory)['daily_plans']==0
+
+
+def test_r46_topic_batch_delete_and_today_exclusion_have_distinct_real_previews(client,home,session_factory):
+    sid=UUID(home['session_id'])
+    with session_factory.begin() as db:
+        topic,_=_add_synthetic_topic(db,code='synthetic.r46.bulk.remove',name='洛必达法则（R46批量）')
+        other,_=_add_synthetic_topic(db,code='synthetic.r46.bulk.keep',name='隐函数求导（R46保留）')
+        topic_id,other_id=str(topic.id),str(other.id)
+    initial=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,'goal':'','action':'default',
+        'selected_kp_ids':[topic_id,other_id],'budget_minutes':90})
+    assert initial.status_code==200,initial.text
+    before=read_home_domain(client,sid);before_topic=next(row['assigned_count'] for row in before['draft']['scope_nodes'] if row['kp_id']==topic_id)
+    assert before_topic>=1
+    remove=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'删除洛必达法则的题目','action':'adjust','expected_version':initial.json()['draft_version']})
+    assert remove.status_code==200,remove.text
+    removed=remove.json();assert removed['status']=='ready',removed
+    removed_domain=read_home_domain(client,sid)
+    assert removed_domain['draft']['selected_kp_ids']==[topic_id,other_id]
+    assert next(row['assigned_count'] for row in removed_domain['draft']['scope_nodes'] if row['kp_id']==topic_id)==0
+    assert '原有' in removed['message'] and f'计划移除{before_topic}道' in removed['message']
+    keep_questions=[q for q in before['draft']['questions'] if q['kp_id']==other_id]
+    keep_refs={(q['question_id'],q['question_version_id']) for q in keep_questions}
+    assert keep_questions
+    removed_other=[q for q in removed_domain['draft']['questions'] if q['kp_id']==other_id]
+    assert {(q['question_id'],q['question_version_id']) for q in removed_other}==keep_refs
+    assert formal_rows(session_factory)['daily_plans']==0
+
+    exclude=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'今天不学洛必达法则','action':'adjust','expected_version':removed['draft_version']})
+    assert exclude.status_code==200,exclude.text
+    excluded=exclude.json();assert excluded['status']=='ready',excluded
+    excluded_domain=read_home_domain(client,sid)
+    assert topic_id not in excluded_domain['draft']['selected_kp_ids']
+    excluded_other=[q for q in excluded_domain['draft']['questions'] if q['kp_id']==other_id]
+    assert {(q['question_id'],q['question_version_id']) for q in excluded_other}==keep_refs
+    assert all(q['kp_id']==other_id for q in excluded_domain['draft']['questions'])
+    assert formal_rows(session_factory)['practice_items']==0
+
+
+def test_r46_target_retention_and_local_408_replacement_are_confirmable_and_preserve_other_topic(client,home,session_factory):
+    sid=UUID(home['session_id'])
+    with session_factory.begin() as db:
+        source,_=_add_synthetic_topic(db,code='synthetic.r46.local.source',name='隐函数求导（R46跨科源）')
+        other,_=_add_synthetic_topic(db,code='synthetic.r46.local.keep',name='极限（R46跨科保留）')
+        first_408,first_408_questions=_add_synthetic_topic(db,code='synthetic.r46.local.408.0',
+            name='R46隔离408候选知识点1',subject='408')
+        _add_synthetic_topic(db,code='synthetic.r46.local.408.1',
+            name='R46隔离408候选知识点2',subject='408')
+        # The first unseen topic has only one formally eligible question. The
+        # replacement must follow real history rank while skipping it when
+        # that stock cannot preserve the source topic's four-question count.
+        for question in first_408_questions[1:]:question.is_active=False
+        source_id,other_id=str(source.id),str(other.id)
+    initial=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,'goal':'','action':'default',
+        'selected_kp_ids':[source_id,other_id],'budget_minutes':90})
+    assert initial.status_code==200,initial.text
+    initial_view=initial.json();initial_domain=read_home_domain(client,sid)
+    original_source=[q for q in initial_domain['draft']['questions'] if q['kp_id']==source_id]
+    original_other=[q for q in initial_domain['draft']['questions'] if q['kp_id']==other_id]
+    assert original_source and original_other
+
+    changed=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'帮我把隐函数的题目换成408的题目','action':'adjust',
+        'expected_version':initial_view['draft_version']})
+    assert changed.status_code==200,changed.text
+    proposal=changed.json();assert proposal['status']=='ready',proposal
+    domain=read_home_domain(client,sid);paper=domain['draft']
+    replacement=[q for q in paper['questions'] if q['kp_id']!=other_id]
+    assert source_id not in paper['selected_kp_ids']
+    assert len(replacement)==len(original_source)
+    assert next(q for q in paper['questions'] if q['kp_id']==other_id)==original_other[0]
+    with session_factory() as db:
+        nodes=[db.get(KnowledgePoint,UUID(kp)) for kp in {q['kp_id'] for q in replacement}]
+        assert nodes and all(node and (node.subject in {'408','cs408','计算机学科专业基础'} or node.code.startswith('cs408')) for node in nodes)
+        assert all(q['question_id'] not in {old['question_id'] for old in original_source} for q in replacement)
+        assert db.scalar(select(func.count()).select_from(DailyPlan))==0
+        assert db.scalar(select(func.count()).select_from(PracticeItem))==0
+    assert paper['budget_minutes']==90
+    assert '隐函数求导' in proposal['message'] and '其他知识点题目保持原样' in proposal['message']
+    assert proposal['draft']['questions']==[] and 'question_id' not in proposal['draft']
+
+    same_count=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'一样的题量','action':'adjust','expected_version':proposal['draft_version']})
+    assert same_count.status_code==200,same_count.text
+    assert same_count.json()['kind']=='explanation'
+    assert '按原目标题量' in same_count.json()['message']
+    assert read_home_domain(client,sid)['draft']==paper
+
+    restore_source=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'不换了，恢复原来的隐函数题目','action':'adjust',
+        'expected_version':proposal['draft_version']})
+    assert restore_source.status_code==200,restore_source.text
+    source_restored=restore_source.json();assert source_restored['status']=='ready',source_restored
+    source_restored_domain=read_home_domain(client,sid)
+    source_restored_paper=source_restored_domain['draft']
+    assert [(q['question_id'],q['question_version_id']) for q in source_restored_paper['questions']
+        if q['kp_id']==source_id]==[(q['question_id'],q['question_version_id']) for q in original_source]
+    assert [(q['question_id'],q['question_version_id']) for q in source_restored_paper['questions']
+        if q['kp_id']==other_id]==[(q['question_id'],q['question_version_id']) for q in original_other]
+    assert not any(q['kp_id'] not in {source_id,other_id} for q in source_restored_paper['questions'])
+    assert formal_rows(session_factory)['daily_plans']==0
+
+    reapplied=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':'帮我把隐函数的题目换成408的题目','action':'adjust',
+        'expected_version':source_restored['draft_version']})
+    assert reapplied.status_code==200,reapplied.text
+    proposal=reapplied.json();assert proposal['status']=='ready',proposal
+    paper=read_home_domain(client,sid)['draft']
+    assert source_id not in paper['selected_kp_ids']
+    assert [(q['question_id'],q['question_version_id']) for q in paper['questions']
+        if q['kp_id']==other_id]==[(q['question_id'],q['question_version_id']) for q in original_other]
+    assert len(paper['questions'])==len(initial_domain['draft']['questions'])
+
+    confirmed=client.post(f"{ROOT}/{proposal['task_id']}/confirm",json={
+        'session_id':str(sid),'draft_version':proposal['draft_version'],
+        'confirm_legacy_set_transition_ids':proposal['context']['required_graduation_set_transition_ids']})
+    assert confirmed.status_code==200,confirmed.text
+    receipt=confirmed.json()['receipt']
+    active=client.get('/api/plans/today')
+    assert active.status_code==200,active.text
+    assert [(row['question_id'],row['question_version_id']) for row in active.json()['items']]==[
+        (q['question_id'],q['question_version_id']) for q in paper['questions']]
+    assert receipt and len(receipt['item_ids'])==len(paper['questions'])
 
 
 def test_home_study_question_lookup_is_blindbox_and_does_not_create_a_plan(home, session_factory):

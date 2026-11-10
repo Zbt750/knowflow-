@@ -1,5 +1,5 @@
 """Real service/PG path, offline provider, new cluster only."""
-from uuid import uuid4
+from uuid import UUID,uuid4
 from sqlalchemy import select,func
 from backend.models.learning import Question,PracticeItem,DailyPlan
 from backend.models.chat import ChatSession
@@ -104,6 +104,228 @@ def test_original_phrase_finds_real_similar_candidate_and_confirms_once(client,h
             'confirmed_question_version_id':str(items[1].question_version_id),
             'repeat_request_replayed':True,'repeat_confirmation_ok':True,'sse_events':[name for name,_ in frames]}
         (Path(output)/'similar-bank-flow-evidence.json').write_text(json.dumps(evidence,ensure_ascii=False,default=str,indent=2),encoding='utf-8')
+
+
+def test_current_question_lookup_and_ellipsis_create_confirmable_append_only(client,home,session_factory):
+    """Natural current-question wording is read-only; the next short turn stages the exact candidate."""
+    sid,ctx=setup_paper(client,home,session_factory)
+    provider=QAProvider('相似题检索不得调用通用问答模型')
+    before=counts(session_factory)
+    frames=talk(session_factory,sid,AssistantRequest(
+        question='题库有类似当前这道隐函数求导的题目吗？',study_context=ctx),provider)
+    first=reply(session_factory,sid)
+    assert first.metadata_['capability_route']['intent']=='similar',first.metadata_.get('capability_route')
+    assert first.metadata_['capability_route']['reason']=='current_question_similar_bank_lookup'
+    assert first.metadata_['writes'] is False
+    assert '题号' in first.content and '版本' in first.content and '来源' in first.content
+    candidates=first.metadata_['similar_items']
+    assert candidates and candidates[0]['similar_evidence'] is True
+    assert candidates[0]['stem'] in first.content
+    assert not any(name in {'planner','personal_generation','practice_request'} for name,_ in frames)
+    assert counts(session_factory)==before
+
+    talk(session_factory,sid,AssistantRequest(
+        question='帮我找10道相关题，看看哪些可以加入今日卷。',study_context=ctx),provider)
+    second=reply(session_factory,sid)
+    assert second.metadata_['answer_source']=='similar_questions'
+    assert second.metadata_['writes'] is False
+    assert '只读检索' in second.content and len(second.metadata_['similar_items']) <= 10
+    assert counts(session_factory)==before
+
+    talk(session_factory,sid,AssistantRequest(
+        question='只看题目，不要加入今日卷。',study_context=ctx),provider)
+    readonly=reply(session_factory,sid)
+    assert readonly.metadata_['answer_source']=='similar_questions_clarification'
+    assert readonly.metadata_['writes'] is False and '没有加入或修改今日卷' in readonly.content
+    assert readonly.metadata_['similar_items']==second.metadata_['similar_items']
+
+    talk(session_factory,sid,AssistantRequest(
+        question='这些题目哪些比较难？',study_context=ctx),provider)
+    difficulty=reply(session_factory,sid)
+    assert '没有可核验的逐题难度评估' in difficulty.content
+    assert difficulty.metadata_['similar_items']==second.metadata_['similar_items']
+    assert counts(session_factory)==before
+
+    proposal_frames=talk(session_factory,sid,AssistantRequest(
+        question='帮我加入一道',study_context=ctx),provider)
+    proposal=reply(session_factory,sid)
+    assert any(name=='planner' for name,_ in proposal_frames)
+    assert proposal.metadata_['capability_route']['reason']=='similar_candidate_append_proposal'
+    public_proposal=next(payload for name,payload in proposal_frames if name=='planner')
+    assert not public_proposal.get('metrics',{}).get('pre_generation'), public_proposal
+    assert len(public_proposal.get('draft',{}).get('questions',[]))==1, public_proposal
+    assert public_proposal['draft'].get('kind') not in {'study_plan','activity_schedule'}
+    task_id=UUID(proposal.metadata_['planner_task_id'])
+    with session_factory() as db:
+        task=db.get(LearningTask,task_id)
+        assert task.status=='ready',{'message':task.message,'trace':task.trace}
+        assert task.context['daily_plan_operation']=='append'
+        assert task.context['planner_handoff']['constraints']['similar_requested'] is True
+        proposed=dict(task.draft['questions'][0])
+        first_addable=next(item for item in candidates if not item['in_today'] and item['similar_evidence'] is True)
+        assert proposed['question_id']==first_addable['question_id']
+        assert proposed['question_version']==first_addable['version_id']
+    assert counts(session_factory)==before, 'proposal must not write to the formal plan'
+
+    confirm_frames=talk(session_factory,sid,AssistantRequest(question='确认',study_context=ctx),provider)
+    confirmed=reply(session_factory,sid)
+    assert confirmed.metadata_['bank_confirmation_resolution']=='confirmed'
+    assert any(name=='planner' for name,_ in confirm_frames)
+    with session_factory() as db:
+        saved_task=db.get(LearningTask,task_id)
+        item=db.scalar(select(PracticeItem).where(PracticeItem.plan_id==ctx.daily_plan_id,
+            PracticeItem.question_id==UUID(proposed['question_id'])))
+        assert saved_task.metrics['commit']['added_count']==1
+        assert item and str(item.question_version_id)==proposed['question_version']
+    assert counts(session_factory)['practice_items']==before['practice_items']+1
+    assert provider.prompts==[]
+
+
+def test_similar_append_difficulty_without_evidence_clarifies_and_keeps_candidates(client,home,session_factory):
+    sid,ctx=setup_paper(client,home,session_factory)
+    provider=QAProvider('相似题查询不得调用通用模型')
+    before=counts(session_factory)
+    talk(session_factory,sid,AssistantRequest(
+        question='找10道当前题目的类似题',study_context=ctx),provider)
+    search=reply(session_factory,sid)
+    assert search.metadata_['similar_items']
+    response=talk(session_factory,sid,AssistantRequest(
+        question='帮我加入两道比较难的题目',study_context=ctx),provider)
+    clarified=reply(session_factory,sid)
+    assert '没有可核验的逐题难度依据' in clarified.content
+    assert clarified.metadata_['answer_source']=='similar_questions_clarification'
+    assert clarified.metadata_['writes'] is False
+    assert clarified.metadata_['similar_items']==search.metadata_['similar_items']
+    assert not clarified.metadata_.get('planner_task_id')
+    assert not any(name=='planner' for name,_ in response)
+    assert counts(session_factory)==before
+
+
+def test_omitted_similar_candidate_turns_keep_pool_and_select_alternatives(client,home,session_factory):
+    """Short follow-ups remain attached to the version-pinned similar-search object."""
+    sid,ctx=setup_paper(client,home,session_factory)
+    with session_factory.begin() as db:
+        reference=db.get(Question,ctx.question_id)
+        for index in range(4):
+            candidate=Question(kp_id=reference.kp_id,question_type=reference.question_type,
+                stem=f'SYNTHETIC similar candidate {index}: 求导并判断结果。',
+                options={'A':str(index),'B':str(index+1)},correct_answer='B',
+                explanation='独立核验的集成测试候选。',estimated_minutes=5,
+                grading_mode='auto',grading_config={'verified':True,'method':'single_choice'},
+                difficulty='hard',skill_tags=['链式求导'],is_active=True)
+            from tests.integration.test_learning_loop import mark_isolated_question_trusted
+            mark_isolated_question_trusted(candidate,db=db);db.add(candidate)
+    provider=QAProvider('相似题多轮上下文不得调用通用模型')
+    before=counts(session_factory)
+    talk(session_factory,sid,AssistantRequest(question='找10道当前题目的类似题',study_context=ctx),provider)
+    search=reply(session_factory,sid)
+    pool=search.metadata_.get('similar_candidate_pool')
+    assert len(pool)>=4
+    assert search.metadata_['writes'] is False
+
+    talk(session_factory,sid,AssistantRequest(question='再来两道',study_context=ctx),provider)
+    two=reply(session_factory,sid)
+    assert two.metadata_['answer_source']=='similar_questions'
+    assert len(two.metadata_['similar_items'])==2
+    selected_ids={item['question_id'] for item in two.metadata_['similar_items']}
+    assert selected_ids <= {item['question_id'] for item in pool}
+    assert all(item['similar_evidence'] is True for item in two.metadata_['similar_items'])
+    assert '只读筛选' in two.content and counts(session_factory)==before
+
+    talk(session_factory,sid,AssistantRequest(question='换成更难的',study_context=ctx),provider)
+    harder=reply(session_factory,sid)
+    assert '没有可核验的逐题难度评估' in harder.content
+    assert harder.metadata_['similar_items']==two.metadata_['similar_items']
+    assert harder.metadata_['similar_candidate_pool']==pool
+    assert harder.metadata_['writes'] is False and counts(session_factory)==before
+
+    talk(session_factory,sid,AssistantRequest(question='刚才那两道不要，换另外两道',study_context=ctx),provider)
+    alternatives=reply(session_factory,sid)
+    assert len(alternatives.metadata_['similar_items'])==2
+    alternative_ids={item['question_id'] for item in alternatives.metadata_['similar_items']}
+    assert alternative_ids.isdisjoint(selected_ids)
+    assert alternative_ids <= {item['question_id'] for item in pool}
+    assert all(item['similar_evidence'] is True for item in alternatives.metadata_['similar_items'])
+    assert '换出 2 道不同的' in alternatives.content
+    assert alternatives.metadata_['writes'] is False and counts(session_factory)==before
+
+    proposal_frames=talk(session_factory,sid,AssistantRequest(question='加入第一道',study_context=ctx),provider)
+    proposal=reply(session_factory,sid)
+    assert any(name=='planner' for name,_ in proposal_frames)
+    task_id=UUID(proposal.metadata_['planner_task_id'])
+    with session_factory() as db:
+        task=db.get(LearningTask,task_id)
+        assert task.status=='ready',task.message
+        assert task.draft['questions'][0]['question_id']==alternatives.metadata_['similar_items'][0]['question_id']
+        assert counts(session_factory)==before
+        from backend.services.learning_task_service import _draft_version
+        draft_version=_draft_version(task)
+    confirmation=talk(session_factory,sid,AssistantRequest(question='确认',study_context=ctx),provider)
+    assert any(name=='planner' for name,_ in confirmation)
+    with session_factory() as db:
+        added=db.scalar(select(PracticeItem).where(PracticeItem.plan_id==ctx.daily_plan_id,
+            PracticeItem.question_id==UUID(alternatives.metadata_['similar_items'][0]['question_id'])))
+        assert added is not None
+        added_item_id=str(added.id)
+        assert str(added.question_version_id)==alternatives.metadata_['similar_items'][0]['version_id']
+        assert counts(session_factory)['practice_items']==before['practice_items']+1
+
+    talk(session_factory,sid,AssistantRequest(question='再来一道',study_context=ctx),provider)
+    next_candidate=reply(session_factory,sid)
+    assert next_candidate.metadata_['answer_source']=='similar_questions'
+    assert len(next_candidate.metadata_['similar_items'])==1
+    assert next_candidate.metadata_['similar_items'][0]['question_id'] != alternatives.metadata_['similar_items'][0]['question_id']
+    with session_factory() as db:
+        current_ids={str(value) for value in db.scalars(select(PracticeItem.question_id).where(
+            PracticeItem.plan_id==ctx.daily_plan_id))}
+    assert next_candidate.metadata_['similar_items'][0]['question_id'] not in current_ids
+    assert next_candidate.metadata_['writes'] is False
+    assert counts(session_factory)['practice_items']==before['practice_items']+1
+
+    # A later pronoun may refer to the exact candidate just committed. Resolve
+    # that object from the committed same-session task and keep removal behind
+    # the existing versioned paper-adjustment preview/confirmation boundary.
+    removal_frames=talk(session_factory,sid,AssistantRequest(
+        question='把刚才加入的那道删除，预算5分钟',study_context=ctx),provider)
+    removal=reply(session_factory,sid)
+    adjustment=(removal.metadata_ or {}).get('paper_adjustment') or {}
+    removal_proposal=adjustment.get('proposal') if isinstance(adjustment,dict) else None
+    assert isinstance(removal_proposal,dict) and removal_proposal.get('task_id'), (
+        f"content={removal.content!r}; metadata={removal.metadata_!r}")
+    assert adjustment['context']['operation']=='remove'
+    assert adjustment['context']['item_ids']==[added_item_id]
+    assert removal.metadata_['writes'] is False
+    workload=removal_proposal.get('workload') or (removal_proposal.get('draft') or {}).get('workload') or {}
+    assert workload.get('budget_minutes')==5
+    assert workload.get('requires_confirmation') is True
+    assert '超出预算' in removal.content and '尚未执行' in removal.content
+    assert '回复“确认超预算调整”' in removal.content
+    generic_confirmation_frames=talk(session_factory,sid,AssistantRequest(
+        question='确认调整',study_context=ctx),provider)
+    with session_factory() as db:
+        unchanged=db.scalar(select(PracticeItem).where(PracticeItem.id==UUID(added_item_id)))
+        assert unchanged is not None and unchanged.removed_at is None
+        assert counts(session_factory)['practice_items']==before['practice_items']+1
+    assert not any(name=='paper_adjustment' for name,_ in generic_confirmation_frames)
+    with session_factory() as db:
+        assert counts(session_factory)['practice_items']==before['practice_items']+1
+        persisted_added=db.scalar(select(PracticeItem).where(
+            PracticeItem.plan_id==ctx.daily_plan_id,
+            PracticeItem.question_id==UUID(alternatives.metadata_['similar_items'][0]['question_id'])))
+        assert persisted_added is not None and persisted_added.removed_at is None
+    confirmation_frames=talk(session_factory,sid,AssistantRequest(
+        question='确认超预算调整',study_context=ctx),provider)
+    assert any(name=='paper_adjustment' for name,_ in confirmation_frames)
+    with session_factory() as db:
+        persisted_added=db.scalar(select(PracticeItem).where(
+            PracticeItem.plan_id==ctx.daily_plan_id,
+            PracticeItem.question_id==UUID(alternatives.metadata_['similar_items'][0]['question_id'])))
+        assert persisted_added is not None and persisted_added.removed_at is not None
+        assert str(persisted_added.question_version_id)==alternatives.metadata_['similar_items'][0]['version_id']
+        assert counts(session_factory)['practice_items']==before['practice_items']+1
+        assert db.scalar(select(func.count()).select_from(PracticeItem).where(
+            PracticeItem.plan_id==ctx.daily_plan_id,PracticeItem.removed_at.is_(None)))==before['practice_items']
+    assert provider.prompts==[]
 
 
 def test_chat_confirmation_commits_the_same_bank_preview_and_is_idempotent(client, home, session_factory):

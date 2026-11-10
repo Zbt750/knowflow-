@@ -19,7 +19,7 @@ def test_live_migration_and_identity(session_factory, record_property):
         identity=db.execute(text('SELECT current_database(),current_user,inet_server_port()')).one()
         assert identity[0].endswith('_test') and identity[1]=='kaoyan_app' and identity[2]!=5433
         revision=db.scalar(text('SELECT version_num FROM alembic_version'))
-        assert revision=='f59e33bc52d8'
+        assert revision=='f60a9e21c3d4'
         fk=next(f for f in inspect(db.connection()).get_foreign_keys('question_attempts') if f['constrained_columns']==['practice_item_id'])
         assert fk['options']['ondelete']=='RESTRICT'
         record_property('database_identity',str(tuple(identity)))

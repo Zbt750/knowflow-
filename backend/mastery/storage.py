@@ -191,12 +191,19 @@ def policy_for_node(
                 graduation_binding_pending=True,
             )
     if pinned is None:
+        # Administrative events may share the LearningEvent table for audit
+        # history, but an explicit changes_mastery=false must not make an
+        # otherwise unstarted learner look like a started graduation-set user.
+        mastery_events = select(LearningEvent.id).where(
+            LearningEvent.kp_id == kp_id,
+            LearningEvent.payload["changes_mastery"].as_boolean().is_not(False),
+        )
         has_history = bool(
             (state and (state.state != "unseen" or state.mastered_at is not None
                         or bool(state.evidence_window)))
             or (kp_id in _read_context.activity_ids if _read_context is not None else (
                 db.scalar(select(exists().where(QuestionAttempt.kp_id == kp_id)))
-                or db.scalar(select(exists().where(LearningEvent.kp_id == kp_id)))
+                or db.scalar(select(exists(mastery_events)))
                 # Merely materializing an unstarted question in today's paper
                 # is not a learning action and must not be treated as legacy
                 # mastery history. Completed items remain activity evidence for

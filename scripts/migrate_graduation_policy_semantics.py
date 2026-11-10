@@ -58,6 +58,11 @@ STANDALONE_RETRY_REVISION = "f56b8c9012d4"
 PERSONAL_TRAINING_REVISION = "f57c9a21d340"
 PERSONAL_TRAINING_DRAFT_REVISION = "f58d22ab41c7"
 SOFT_REMOVE_HISTORY_REVISION = "f59e33bc52d8"
+# The following schema-only migration adds immutable verification events for
+# personal questions. It does not alter kp_mastery_policies or policy-origin
+# semantics, so the audited converter remains compatible with this reviewed
+# descendant while still rejecting unknown future revisions.
+PERSONAL_ANSWER_PROOF_REVISION = "f60a9e21c3d4"
 COMPATIBLE_POLICY_REVISIONS = (
     TARGET,
     PERSONAL_BANK_REVISION,
@@ -73,6 +78,7 @@ COMPATIBLE_POLICY_REVISIONS = (
     PERSONAL_TRAINING_REVISION,
     PERSONAL_TRAINING_DRAFT_REVISION,
     SOFT_REMOVE_HISTORY_REVISION,
+    PERSONAL_ANSWER_PROOF_REVISION,
 )
 FORMAT = "policy-origin-migration-v1"
 
@@ -134,6 +140,7 @@ def schema_preflight(connection) -> dict:
         (PERSONAL_TRAINING_REVISION, STANDALONE_RETRY_REVISION),
         (PERSONAL_TRAINING_DRAFT_REVISION, PERSONAL_TRAINING_REVISION),
         (SOFT_REMOVE_HISTORY_REVISION, PERSONAL_TRAINING_DRAFT_REVISION),
+        (PERSONAL_ANSWER_PROOF_REVISION, SOFT_REMOVE_HISTORY_REVISION),
     )
     chain_ok = (len(head) == 1 and head[0] in COMPATIBLE_POLICY_REVISIONS
         and all(script.get_revision(child).down_revision == parent for child, parent in migration_edges))
