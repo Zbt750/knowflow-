@@ -8,6 +8,7 @@ import TodayAppendResult from './TodayAppendResult.vue';
 import {questionSourceLabel} from '../lib/questionSourceLabel';
 import { useRouter } from "vue-router";
 import { ApiError } from "../api/client";
+import { confirmPaperAdjustment as confirmPaperAdjustmentApi } from "../api/paperAdjustments";
 import { cancelGenerationConfirmation, createChatSession, listChatSessions, fetchChatMessages, streamChatAnswer, type ChatMessage, type StudyContext, type AssistanceAction, type PersonalGenerationMode } from "../api/chat";
 import {listPracticeRequests,planPracticeRequest,declinePracticeRequest,type PracticeRequest} from "../api/practiceRequests";
 import { saveDeepQADraft } from "../lib/deepQADraft";
@@ -180,6 +181,11 @@ const generationConfirmation = ref<GenerationConfirmation|null>(null);
 const generationConfirmationMessageId = ref<string | null>(null);
 const invalidGenerationCards = new Set<string>();
 const generationMode = ref<PersonalGenerationMode>("ai_generated");
+// 正式卷调整的待确认方案（与 task 草稿形状不同，单独保存，避免污染 task.value）
+const paperAdjustmentDraft = ref<{
+  task_id: string; draft_version: string; remove_count: number;
+  replacement_count: number; workload: Record<string, unknown> | null;
+} | null>(null);
 const launcherPose = computed<MascotPose>(() => {
   if (generated.value?.question_ids.length) return 'encourage';
   if (generationConfirmation.value) return 'pencil';
@@ -202,10 +208,33 @@ function sendOnEnter(event: KeyboardEvent) {
   event.preventDefault();
   submitComposer();
 }
+function confirmPaperAdjustment() {
+  if (busy.value || refreshing.value || !paperAdjustmentDraft.value) return;
+  const pending = paperAdjustmentDraft.value;
+  const sessionId = String(assistantSessionId.value || props.sessionId || '');
+  busy.value = true;
+  error.value = '';
+  // 必须用卡片绑定的 task_id + draft_version 调专用确认接口。
+  // 之前这里是“把输入框填成确认调整再走普通聊天”，服务端会执行会话里最新的方案，
+  // 旧卡片因此能把别的会话已经改过的卷再改一遍（R66-01）。
+  void confirmPaperAdjustmentApi(pending.task_id, sessionId, pending.draft_version, true)
+    .then(() => {
+      paperAdjustmentDraft.value = null;
+      emit('confirmed');
+      notifyPracticeRequestsChanged();
+    })
+    .catch((err: unknown) => {
+      paperAdjustmentDraft.value = null;
+      const code = (err as { code?: string })?.code || '';
+      error.value = code === 'learning_task_stale_draft'
+        ? '这份调整方案已经失效：今日卷在其他会话发生了变化，请重新预览后再调整。原方案未执行。'
+        : '这份调整方案已过期或不可用，请重新预览后再调整。原方案未执行。';
+    })
+    .finally(() => { busy.value = false; });
+}
 function submitComposer() {
   if (isComposing.value) return;
-  const draft = goal.value.trim();
-  const confirmation = generationConfirmation.value;
+  const draft = goal.value.trim();  const confirmation = generationConfirmation.value;
   if (confirmation) {
     const reply = resolveGenerationConfirmationReply(draft, confirmation);
     if (reply.kind === "confirm") {
@@ -523,8 +552,11 @@ async function arrange(fresh = false, action: AssistanceAction = "auto", confirm
   if (hydrationEpoch!==epoch || busy.value || refreshing.value) return;
   const active = ++epoch;
   busy.value = true; error.value = "";
-  if (!existingTurn && !confirmationMessageId) goal.value = '';
   if (!existingTurn && !confirmationMessageId) { generationConfirmation.value = null; generationConfirmationMessageId.value = null; }
+  // 提交后清空输入框：确认按钮的可用条件是“输入框里没有与已提交内容不同的新文字”。
+  // 复用同一轮对话（existingTurn）时若不清空，输入框会一直留着上一句原话，
+  // task.goal 与之不同，确认按钮就永久置灰，只能靠打字“确认调整”绕过。
+  goal.value = '';
   lastReplyKey = "";
   let request = existingTurn;
   const wire: {status: AssistantStatus} = {status: 'generating'};
@@ -581,7 +613,22 @@ async function arrange(fresh = false, action: AssistanceAction = "auto", confirm
       }
       if (event === "done" || event === "error") terminal = true;
       if (event === 'done') notifyPracticeRequestsChanged();
-      if (event === 'paper_adjustment' && data.plan_id === props.currentPlanId && Array.isArray(data.active_item_ids)) emit('confirmed');
+      if (event === 'paper_adjustment' && data.plan_id === props.currentPlanId && Array.isArray(data.active_item_ids)) { paperAdjustmentDraft.value = null; emit('confirmed'); }
+      if (event === 'paper_adjustment_proposal' && data.cleared) {
+        // 本次请求只返回说明（澄清/拒绝），没有形成待确认方案：清掉残留卡片。
+        paperAdjustmentDraft.value = null;
+      }
+      if (event === 'paper_adjustment_proposal' && data.task_id) {
+        // 独立状态，绝不塞进 task.value：paper_adjustment 的 draft 没有 questions，
+        // 复用普通草稿会按旧形状访问字段并让整页崩溃。
+        paperAdjustmentDraft.value = {
+          task_id: String(data.task_id),
+          draft_version: String(data.draft_version ?? ''),
+          remove_count: Number(data.remove_count ?? 0),
+          replacement_count: Number(data.replacement_count ?? 0),
+          workload: (data.workload as Record<string, unknown> | null) ?? null,
+        };
+      }
       if (event === 'done' && wire.status === 'failed') {
         failed = true;
         error.value = assistantFailureMessage(String(data.code ?? ''));
@@ -811,6 +858,13 @@ function draftSummary(draft: Record<string, unknown> | null | undefined) {
         </template>
         <p v-if="busy || task?.status === 'running'" class="frog-thinking" role="status">奶蛙正在处理<span>…</span></p>
         <PersonalGenerationConfirmation v-if="generationConfirmation" :confirmation="generationConfirmation" :busy="busy" @selection-change="onGenerationNodeSelection" @confirm="confirmGeneration" @cancel="cancelGeneration" />
+        <section v-if="paperAdjustmentDraft" class="paper-adjustment-confirm" data-testid="paper-adjustment-confirm">
+          <p class="paper-adjustment-summary">
+            待确认的正式卷调整：移除 {{ paperAdjustmentDraft.remove_count }} 道，新增 {{ paperAdjustmentDraft.replacement_count }} 道
+            <span v-if="paperAdjustmentDraft.workload">，预计剩余 {{ paperAdjustmentDraft.workload['remaining_minutes'] }} 分钟</span>。
+          </p>
+          <button type="button" data-testid="confirm-paper-adjustment" :disabled="busy || refreshing" @click="confirmPaperAdjustment">{{ busy ? '正在确认…' : '确认调整' }}</button>
+        </section>
       </div>
       <div v-if="error || failedTurn" role="alert" class="frog-chat-error" data-testid="frog-turn-error">
         <p v-if="error">{{ error }}</p>

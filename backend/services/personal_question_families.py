@@ -494,7 +494,26 @@ def _page_faults(algorithm: str, frames: int, references: list[int]) -> tuple[in
     return misses, trace
 
 
-def build_problem_spec(*, node_code: str, question_type: str, difficulty: str, seed: str) -> ProblemSpec:
+def requested_parameters(family_id: str, requirement: str | None) -> dict:
+    """从用户原话里解析家族允许的显式参数（目前支持完全二叉树的结点数 n）。
+
+    只接受家族契约允许的范围；解析不到或越界时返回空字典，回落为随机实例。
+    """
+    if not requirement:
+        return {}
+    text = requirement.replace("，", ",").replace("＝", "=")
+    if family_id == "complete_tree":
+        match = (re.search(r"n\s*=\s*(\d{1,7})", text, re.IGNORECASE)
+                 or re.search(r"(\d{1,7})\s*个(?:结)?点", text))
+        if match:
+            value = int(match.group(1))
+            if 1 <= value <= 1_000_000:
+                return {"node_count": value}
+    return {}
+
+
+def build_problem_spec(*, node_code: str, question_type: str, difficulty: str, seed: str,
+                       overrides: dict | None = None) -> ProblemSpec:
     """Build a server-owned, solvable instance; no model-authored answer is trusted."""
     spec = resolve_family(node_code, question_type)
     if not spec:
@@ -585,7 +604,8 @@ def build_problem_spec(*, node_code: str, question_type: str, difficulty: str, s
         explanation = f"二阶行列式按ad-bc计算：{a}×{d}-{b}×{c}={value}。"
         parameters = {"matrix": matrix}
     elif spec.family_id == "complete_tree":
-        n = rng.randint(1, 999)
+        n = int((overrides or {}).get("node_count") or rng.randint(1, 999))
+        n = max(1, min(1_000_000, n))
         value = (n + 1) // 2
         problem = f"一棵完全二叉树共有{n}个结点，则其叶子结点数为（ ）"
         result_value = str(value); answer = result_value

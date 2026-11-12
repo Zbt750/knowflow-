@@ -1198,8 +1198,17 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             and not re.search(r'不要|先不|暂不|别|为什么|为何|解释|什么|意思|原因|依据|是否|能不能|要不要|如果|稍后|等我|[？?]',body.question)):
         with factory() as db:
             referenced=db.get(LearningTask,ctx.task_id)
+            # 只有“今天还没有正式卷、且这份方案仍在首页待确认”时才必须回首页。
+            # 一旦今日已有 active 的正式卷，练习页的增删改就应该走 paper_adjustment，
+            # 否则任何残留的未确认 home 方案都会把用户永久挡在“请在首页调整”。
+            from backend.models.learning import DailyPlan as _DP2
+            _plan_today=db.scalar(select(_DP2).where(
+                _DP2.study_date==now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat(),
+                _DP2.status=='active'))
             needs_home=bool(referenced and referenced.session_id==session_id
-                and (referenced.context or {}).get('home_recommendation'))
+                and (referenced.context or {}).get('home_recommendation')
+                and not (referenced.metrics or {}).get('commit')
+                and _plan_today is None)
         if needs_home:
             notice=AppError('home_planning_workflow_required').message
             with factory.begin() as db:
@@ -1420,6 +1429,20 @@ async def assistant_stream(factory,*,request,session_id,body,stack,provider,now=
             yield encode_sse('delta',{'seq':1,'text':adjustment['message']})
             if adjustment['receipt']:
                 yield encode_sse('paper_adjustment',adjustment['receipt'])
+            elif adjustment.get('proposal'):
+                # 待确认方案单独下发：前端用独立状态渲染确认卡片，不再只靠打字确认。
+                proposal=adjustment['proposal']
+                yield encode_sse('paper_adjustment_proposal',{
+                    'task_id':proposal.get('task_id'),
+                    'draft_version':proposal.get('draft_version'),
+                    'remove_count':len((proposal.get('draft') or {}).get('remove_item_ids') or []),
+                    'replacement_count':len((proposal.get('draft') or {}).get('replacements') or []),
+                    'workload':proposal.get('workload'),
+                })
+            else:
+                # 只返回说明（澄清/拒绝/无操作）时，本次没有形成任何待确认方案；
+                # 必须显式清空前端卡片，否则上一份方案或刚被驳回的方案卡片会残留。
+                yield encode_sse('paper_adjustment_proposal',{'task_id':None,'cleared':True})
             yield encode_sse('done',{'message_id':str(message_id),'answer':adjustment['message'],
                 'citations':[],'status':'completed'})
             return

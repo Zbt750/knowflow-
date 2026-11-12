@@ -328,9 +328,61 @@ def view(row):
     return result
 
 
+def _weakness_scope(db, now, *, max_topics=6):
+    """按真实作答记录挑薄弱知识点：错题多的优先，其次到期复习，再次作答量大。
+
+    只读 question_attempts / kp_states，不写任何业务表；选出的 ids 交给既有组卷流程。
+    """
+    from sqlalchemy import text as _sql
+    rows = db.execute(_sql(
+        "SELECT kp_id,"
+        " count(*) FILTER (WHERE objective_result = 'wrong') AS wrongs,"
+        " count(*) FILTER (WHERE next_review_at IS NOT NULL AND next_review_at <= :now) AS due,"
+        " count(*) AS total"
+        " FROM question_attempts WHERE kp_id IS NOT NULL"
+        " GROUP BY kp_id"
+        " ORDER BY wrongs DESC, due DESC, total DESC"
+        " LIMIT :limit"
+    ), {'now': now, 'limit': max_topics}).fetchall()
+    picked = []
+    for row in rows:
+        kp_id = row[0]
+        node = db.get(KnowledgePoint, kp_id)
+        if node is not None and node.is_active:
+            picked.append(kp_id)
+    return picked
+
+
 def recover(db, session_id):
     _session(db, session_id)
-    return _result_view(db,_latest(db, session_id))
+    view=_result_view(db,_latest(db, session_id))
+    return _drop_dead_receipt(db, view)
+
+
+def _drop_dead_receipt(db, view):
+    """receipt 指向的正式卷若已被删除或归档，就不能再当作“当前已生成”。
+
+    恢复接口原先只按会话找最近任务，不看那个计划的现状；于是删掉/归档今日卷后，
+    首页仍拿到带 receipt 的旧方案，显示“已生成试卷 / 今日安排 N 道”，
+    与 /api/plans/today 的 setup 直接矛盾。
+    """
+    if not view:
+        return view
+    receipt=(view or {}).get('receipt') or {}
+    plan_id=receipt.get('plan_id')
+    if not plan_id:
+        return view
+    from backend.models.learning import DailyPlan
+    try:
+        plan=db.get(DailyPlan,UUID(str(plan_id)))
+    except (ValueError,TypeError):
+        plan=None
+    if plan is not None and plan.status=='active':
+        return view
+    dropped={**view,'receipt':None,'draft':None}
+    if dropped.get('status')=='answered':
+        dropped['status']='ready'
+    return dropped
 
 
 def _tools(db, now, goal="", budget=90):
@@ -1348,7 +1400,19 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
         if cached_notice['goal']!=body.goal:raise AppError('learning_task_conflict',status_code=409)
         return cached_notice['response']
     if old and (old.metrics or {}).get("commit"):
-        raise AppError("plan_already_generated", status_code=409)
+        # 旧任务“已确认生成”不能只看 commit 存在：它指向的每日计划可能已被删除或归档。
+        # 那种情况下用户面前没有正式卷，继续拒绝会让人永远无法调整（
+        # 前端还会把这条错误当成“冻结提示条”显示）。
+        commit_plan_id=(old.metrics.get("commit") or {}).get("plan_id")
+        commit_plan=None
+        if commit_plan_id:
+            try:
+                commit_plan=db.get(DailyPlan,UUID(str(commit_plan_id)))
+            except (ValueError,TypeError):
+                commit_plan=None
+        if commit_plan is not None and commit_plan.status=='active':
+            raise AppError("plan_already_generated", status_code=409)
+        old=None
     if body.action == 'adjust':
         command = body.goal.strip()
         if re.fullmatch(r'(?:撤销(?:刚才(?:的)?|上一步)?(?:修改|操作|调整)?|再撤销(?:上一步|刚才的修改)?|撤回(?:最后一步|刚才的修改|上一步)?|回到上一步|恢复上一步|把刚才删除的题恢复)[。！!]?', command):
@@ -1359,6 +1423,11 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
             body = body.model_copy(update={'action': 'redo'})
         elif re.fullmatch(r'(?:恢复今天最初的系统推荐|恢复今日最初系统推荐)[。！!]?', command):
             body = body.model_copy(update={'action': 'restore'})
+    # 说明：曾尝试把“按错题安排 90 分钟计划”映射成 default 组卷（_weakness_scope），
+    # 但组卷范围校验要求 ids ⊆ tools.nodes，薄弱知识点常不在系统推荐范围内，
+    # 直接抛 scope_not_observed，反而给用户一个更差的错误。
+    # 该能力需要单独实现（构造 TaskTools 时显式并入薄弱节点），暂不在本轮硬塞，
+    # 因此仍走下面的诚实说明分支。
     explain = body.action == "explain" or (bool(re.search(r"为什么|根据什么|哪些.*错题|推荐依据|推荐理由", body.goal))
         and not re.search(r'追加|增加|加入|删除|移除|替换|再.*加',body.goal))
     if explain:
@@ -1544,12 +1613,39 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                 'allocation_status':'allocated' if any(q['kp_id']==key for q in restored['questions']) else 'no_eligible_questions',
                 'allocation_reason':None} for key in restored['selected_kp_ids']]
             exact_intent=restored;exact_edit_used=True;bank_request=None
-        if intent.operation in {'clarify','generate_guidance','accept','return'}:
+        weakness_plan_ready=False
+        if (intent.operation in {'clarify','generate_guidance','accept','return'}
+                and re.search(r'错题|薄弱|掌握|复习|到期|规划|安排.{0,6}(?:学习)?计划|学习计划',body.goal)):
+            # 用真实作答记录算出薄弱节点，再走与 subject_plan 相同的组卷/校验路径。
+            # _subject_plan_paper 内部 tools.nodes.update(ids) + validate_plan，
+            # 正是 R53-03 里 scope_not_observed 的解法。
+            weak=_weakness_scope(db,now)
+            if weak:
+                diagnostics={'diagnostic_id':uuid4().hex,'stage':'weakness_plan',
+                    'topics':[str(k) for k in weak]}
+                try:
+                    with db.begin_nested():
+                        exact_intent=_subject_plan_paper(db,weak,90,now,diagnostics=diagnostics)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        'home weakness plan failed topics=%s',len(weak))
+                else:
+                    exact_edit_used=True
+                    weakness_plan_ready=True
+                    subject_plan_summary={'subject':'薄弱点','topic_count':len(weak),
+                        'topics':[],'budget_minutes':90,'unattempted_only':False}
+                    bank_request=None
+        if intent.operation in {'clarify','generate_guidance','accept','return'} and not weakness_plan_ready:
             if intent.operation=='clarify' and re.search(r'删除|删掉|移除|去掉',body.goal):
                 outside=_mentioned_outside_topic(db,body.goal,previous_paper or baseline)
                 if outside:
                     return notice(f'{outside}当前不在今日方案范围内（今日安排 0 道），不需要再删除；原方案保持不变。'
                         f'如果想重新练它，请说“把{outside}加回来”。')
+            # 组卷成功时不会进入本分支；到这里说明薄弱点方案没能成立，如实说明边界。
+            if re.search(r'错题|薄弱|掌握|复习|到期|规划|安排.{0,6}(?:学习)?计划|学习计划',body.goal):
+                return notice('目前还不能按错题和掌握度自动规划整份计划；'
+                    '可以先指定知识点和题量（例如“洛必达法则两道、隐函数求导一道”），'
+                    '我会据此更新方案，你再用首页的“确定生成试卷”生成。原方案未改变。')
             return notice(intent.question or ('正式生成请使用首页“确定生成试卷”；接受或返回请使用当前方案卡片。'))
         if intent.operation=='topic_count':
             current=previous_paper or baseline
@@ -1653,6 +1749,26 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                 'allocation_status':'allocated' if any(q['kp_id']==key for q in restored['questions']) else 'no_eligible_questions',
                 'allocation_reason':None} for key in restored['selected_kp_ids']]
             exact_intent=restored;exact_edit_used=True;bank_request=None
+        if (intent.operation not in {'subject_plan'} and not exact_edit_used
+                and re.search(r'错题|薄弱|掌握|到期|复习|规划|安排.{0,8}计划|学习计划', body.goal)):
+            # 用真实作答记录算薄弱节点，再走与 subject_plan 完全相同的组卷/校验路径。
+            # _subject_plan_paper 内部会 tools.nodes.update(ids) 并 validate_plan，
+            # 这正是 R53-03 里 scope_not_observed 的解法：节点不在默认推荐范围也能组卷。
+            weak=_weakness_scope(db,now)
+            if weak:
+                diagnostics={'diagnostic_id':uuid4().hex,'stage':'weakness_plan',
+                    'topics':[str(k) for k in weak]}
+                try:
+                    with db.begin_nested():
+                        exact_intent=_subject_plan_paper(db,weak,90,now,diagnostics=diagnostics)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        'home weakness plan failed topics=%s',len(weak))
+                    return notice('未能用符合正式准入的题目完成薄弱点方案，原方案已保留；没有生成正式卷。')
+                exact_edit_used=True
+                subject_plan_summary={'subject':'薄弱点','topic_count':len(weak),'topics':[],
+                    'budget_minutes':90,'unattempted_only':False}
+                bank_request=None
         if intent.operation=='subject_plan':
             current=previous_paper or baseline
             selected,selection_facts=_subject_plan_scope(db,now,subject=intent.terms,
@@ -1855,6 +1971,9 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
         status="needs_info", context=context, draft=None, trace=[], metrics={})
     db.add(row)
     candidate_ids, bank_error = None, None
+    import sys as _dbg_s; print('DBG-EXACT q=%s total=%s'%(
+        len((exact_intent or {}).get('questions') or []),
+        (exact_intent or {}).get('total_minutes')), file=_dbg_s.stderr)
     if exact_intent:
         if exact_bank_evidence is not None:
             context['bank_selection']=exact_bank_evidence

@@ -85,7 +85,16 @@ def session_factory():
 def clean_database(session_factory) -> Iterator[None]:
     """每个用例前清空业务表并灌入种子；清空顺序遵循外键依赖。"""
     with session_factory() as db:
+        # TRUNCATE 需要 AccessExclusiveLock。若上一个用例留下 idle in transaction 的
+        # 连接，这里会无限等待（实测挂起超过 15 分钟）。只设置锁超时，让这种情况变成
+        # 明确失败而不是挂死；不要在这里 terminate 其它连接——那会误杀同进程连接池，
+        # 造成大量与本用例无关的伪失败（实测 108 个）。
+        db.execute(text("SET lock_timeout='30s'"))
         db.execute(text("TRUNCATE TABLE " + ", ".join(BUSINESS_TABLES) + " RESTART IDENTITY CASCADE"))
+        # TRUNCATE 是裸 SQL，绕过了 ORM 的 after_flush/commit 失效钩子，知识树缓存
+        # 会带着上一个用例的数据活到下一个用例里（表现为“单跑通过、全量失败”）。
+        from backend.services.knowledge_tree_cache import invalidate_knowledge_tree_cache
+        invalidate_knowledge_tree_cache()
         seed_all(db)
         # The test session disables autoflush, so materialize the seed rows
         # before assigning fixture-only trust metadata.

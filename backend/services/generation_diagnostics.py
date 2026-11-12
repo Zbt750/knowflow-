@@ -52,7 +52,7 @@ MESSAGES = {
     "answer_conflict": ("answer_check", "答案、解析或计算步骤校验不一致，未保存；不能直接采用本次答案。"),
     "type_mismatch": ("content_check", "模型没有遵循已确认的题型，未保存。请重新确认题型后提出新请求。"),
     "scope_mismatch": ("content_check", "题目不符合已确认的知识范围，未保存。请检查原题与知识点是否匹配。"),
-    "verification_unavailable": ("answer_check", "该题的独立校验暂不能给出通过结论，未保存为合格题。可选择其他题型。"),
+    "verification_unavailable": ("answer_check", "该题的答案暂时无法被独立校验确认，未保存为合格题。可以补上具体数值条件后重试；完全二叉树、行列式、补码范围等预设基础题型也可以改用「快速练习」模式生成，这类题目由本地公式生成并可直接校验。"),
     "reference_changed": ("save_check", "参考原题或知识点已发生变化，未保存。请重新选择原题与知识点。"),
     "duplicate": ("save_check", "生成内容与已有个人题重复，未重复保存。可从对应知识节点查看已有题。"),
     "storage_forbidden": ("save_question", "题目保存权限不足，未确认保存成功。请联系管理员检查应用角色权限。"),

@@ -16,7 +16,9 @@ class PaperAdjustmentRequest(BaseModel):
     # request with neither removals nor additions, so this cannot become a no-op.
     remove_item_ids: list[UUID] = Field(default_factory=list,max_length=100)
     replacements: list[ReplacementReference] = Field(default_factory=list,max_length=100)
-    budget_minutes: int = Field(ge=5,le=240)
+    # 上限放宽到 600：调整方案要覆盖“保留题目 + 新增题目”的总用时，长卷可能
+    # 超过 240；截断会让每次确认都被判成“超出预算”，用户永远确认不了。
+    budget_minutes: int = Field(ge=5,le=600)
 
 
 class PaperAdjustmentConfirmation(BaseModel):

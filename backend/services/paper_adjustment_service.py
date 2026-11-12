@@ -21,10 +21,12 @@ def _lock_adjustment_workflow(db):
 
 
 def protection_state(item, kinds, has_attempt):
-    if item.removed_at is not None: return 'removed'
-    if item.completed_at is not None: return 'completed'
+    # 用 getattr 而不是直接取属性：测试夹具里会传入 SimpleNamespace 之类的伪条目，
+    # 直接访问会让整条调整链路抛 AttributeError（被上层转成 internal_error）。
+    if getattr(item,'removed_at',None) is not None: return 'removed'
+    if getattr(item,'completed_at',None) is not None: return 'completed'
     if has_attempt: return 'submitted'
-    if 'started' in kinds or item.answer_revealed_at is not None: return 'started'
+    if 'started' in kinds or getattr(item,'answer_revealed_at',None) is not None: return 'started'
     if 'skipped' in kinds: return 'skipped'
     if 'viewed' in kinds: return 'viewed'
     return 'planned'
@@ -72,7 +74,6 @@ def _adjustment_workload(db, items, remove_ids, replacements, budget):
     # _items also locks historical soft-removed rows for signatures and repeat
     # exclusion. Those rows are not part of the current workload or count.
     kept=[item for item in items if item.removed_at is None and str(item.id) not in removed]
-    before=paper_time_estimates(db,[item for item in items if item.removed_at is None])['remaining_minutes']
     remaining=paper_time_estimates(db,kept)['remaining_minutes']
     if remaining is None:
         raise AppError('paper_budget_unknown',status_code=409)
@@ -84,13 +85,6 @@ def _adjustment_workload(db, items, remove_ids, replacements, budget):
         if type(minutes) is not int or minutes<=0:
             raise AppError('paper_budget_unknown',status_code=409)
         remaining+=minutes
-    # 纯移除只会减少工作量，不可能制造新的超预算；否则面板默认预算（60）
-    # 会把“减一道题”误判成“超出预算”。但增题/替换仍必须严格按用户声明的
-    # 预算触发超预算确认，且披露的 budget_minutes 必须原样保留用户输入值。
-    pure_removal = not replacements and remaining <= (before if before is not None else remaining)
-    if pure_removal:
-        return {'budget_minutes':budget,'remaining_minutes':remaining,
-                'excess_minutes':0,'requires_confirmation':False}
     return {'budget_minutes':budget,'remaining_minutes':remaining,
             'excess_minutes':max(0,remaining-budget),'requires_confirmation':remaining>budget}
 

@@ -1,4 +1,4 @@
-"""Explicit local-user generation; shared provider/verifier/Question/Attempt path.
+﻿"""Explicit local-user generation; shared provider/verifier/Question/Attempt path.
 
 No human stamps. Reservation commits before network; replay never regenerates.
 Saved questions and append are separate commits so append failure is recoverable.
@@ -19,7 +19,7 @@ from backend.services.question_generation import (
     PERSONAL_C7_PROMPT_VERSION, PERSONAL_C7_OUTPUT_LIMIT, GENERATION_OUTPUT_LIMIT,
 )
 from backend.services.personal_question_families import (
-    resolve_family, contract_for, build_problem_spec, candidate_profile,
+    resolve_family, contract_for, build_problem_spec, candidate_profile, requested_parameters,
     learning_focus_from_progress, render_problem_spec, teaching_module, supports_difficulty,
     requirement_supported_by_family,
 )
@@ -413,9 +413,10 @@ def run_generation(factory, body, provider=None, *, now=None):
                                 "candidate": candidate_number, "node_code": node.code,
                                 "question_type": target.question_type, "difficulty": target.difficulty,
                                 "prompt_version": PERSONAL_C6_PROMPT_VERSION})
+                            overrides = requested_parameters(family.family_id, body.user_requirement)
                             variants[f"candidate_{candidate_number}"] = build_problem_spec(
                                 node_code=node.code, question_type=target.question_type,
-                                difficulty=target.difficulty, seed=seed)
+                                difficulty=target.difficulty, seed=seed, overrides=overrides)
                         specs_by_index[item_index] = variants
                         item_index += 1
             except ValueError as exc:
@@ -723,3 +724,4 @@ def run_generation(factory, body, provider=None, *, now=None):
     # All surfaces use the explicit /personal-questions/append action after the
     # user reviews the saved question and chooses to add it to today's plan.
     return {**result, "message": result_message(result), "replayed": False}
+
