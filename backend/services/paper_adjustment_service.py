@@ -118,14 +118,22 @@ def propose_adjustment(factory, body, *, now):
                 raise AppError('learning_task_stale_draft',status_code=409,
                     detail='replacement_already_in_plan')
             if question.bank_scope != 'public':
-                raise AppError('learning_task_stale_draft',status_code=409,
-                    detail='replacement_not_public')
+                # 2026-11-13 R77：个人 AI 题默认 bank_scope=personal，旧逻辑一律拒绝，
+                # 导致“生成 → 加入今日卷”永远不可用。这里只放行**已通过独立计算核验**
+                # 的个人题（grading_config.math_verification.status='verified'），
+                # 未核验的仍然拒绝，且题目保持 personal，不会进入公共题库/毕业题集。
+                config=question.grading_config or {}
+                state=str((config.get('math_verification') or {}).get('status') or 'unverified')
+                if question.bank_scope!='personal' or state!='verified':
+                    raise AppError('learning_task_stale_draft',status_code=409,
+                        detail='replacement_not_public')
             if question_version_reference(question) != str(ref.question_version_id):
                 raise AppError('learning_task_stale_draft',status_code=409,
                     detail='replacement_version_changed')
             from backend.models.learning import KnowledgePoint
             from backend.services.question_eligibility import question_eligibility
-            if not question_eligibility(question, db.get(KnowledgePoint,question.kp_id)).practice_eligible:
+            if question.bank_scope=='public' and not question_eligibility(
+                    question, db.get(KnowledgePoint,question.kp_id)).practice_eligible:
                 raise AppError('learning_task_stale_draft',status_code=409,
                     detail='replacement_not_formally_eligible')
             replacements.append(ref.model_dump(mode='json'))
@@ -194,15 +202,34 @@ def confirm_adjustment(factory, task_id, body, *, now):
         # replacements together, with a separate explicit overrun permission.
         # A second mutable-question/replacements-only cap would reject that
         # permission while missing overruns caused by the retained paper.
+        has_personal=False
+        for _ref in draft['replacements']:
+            _q=db.get(Question,UUID(str(_ref['question_id'])))
+            if _q is not None and _q.bank_scope=='personal':
+                has_personal=True;break
         try:
-            added=append_questions_to_plan(db,plan_id=plan.id,question_ids=replacement_ids,now=now) if replacement_ids else 0
-        except ValueError:
+            added=append_questions_to_plan(db,plan_id=plan.id,question_ids=replacement_ids,
+                now=now,allow_personal_practice=has_personal) if replacement_ids else 0
+        except ValueError as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                'paper adjustment append rejected: %s has_personal=%s ids=%s',
+                exc, has_personal, [str(x) for x in replacement_ids])
             raise AppError('learning_task_stale_draft',status_code=409) from None
         if added!=len(replacement_ids):raise AppError('learning_task_stale_draft',status_code=409)
         for ref in draft['replacements']:
             q=db.get(Question,UUID(ref['question_id']),populate_existing=True)
-            if q.bank_scope != 'public' or question_version_reference(q)!=ref['question_version_id']:
+            if q is None:
                 raise AppError('learning_task_stale_draft',status_code=409)
+            if question_version_reference(q)!=ref['question_version_id']:
+                raise AppError('learning_task_stale_draft',status_code=409)
+            # 2026-11-13 R77：追加后的二次复核也要放行“已核验的个人题”，
+            # 否则前面允许、这里又会把刚写进去的题判成非法。
+            if q.bank_scope!='public':
+                _cfg=q.grading_config or {}
+                _vstate=str((_cfg.get('math_verification') or {}).get('status') or '')
+                if not (q.bank_scope=='personal' and _vstate=='verified'):
+                    raise AppError('learning_task_stale_draft',status_code=409)
         for item in selected:
             item.removed_at=now
             db.add(LearningEvent(kp_id=item.kp_id,source_id=item.id,question_version_id=item.question_version_id,
@@ -215,6 +242,10 @@ def confirm_adjustment(factory, task_id, body, *, now):
         from backend.services.today_append_result import paper_time_estimates
         receipt.update(paper_time_estimates(db,active))
         if receipt['remaining_minutes']!=workload['remaining_minutes']:
+            import logging
+            logging.getLogger(__name__).warning(
+                'adjustment workload mismatch receipt_remaining=%s workload=%s active=%d',
+                receipt.get('remaining_minutes'), workload, len(active))
             raise AppError('learning_task_stale_draft',status_code=409)
         receipt.update(budget_minutes=row.budget_minutes,
             budget_overrun_minutes=workload['excess_minutes'],

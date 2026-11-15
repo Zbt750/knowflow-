@@ -561,3 +561,16 @@ def question_eligibility(question: Question, node: KnowledgePoint | None = None,
 
 def is_practice_eligible(question: Question, node: KnowledgePoint | None = None) -> bool:
     return question_eligibility(question, node).practice_eligible
+
+
+def personal_answer_allows_today(question: Question) -> bool:
+    """Today's paper requires independent personal-answer verification.
+
+    Reference-only practice eligibility is deliberately a separate capability.
+    Keep read-side append buttons aligned with the existing write-side gate.
+    """
+    if getattr(question, 'bank_scope', 'public') != 'personal':
+        return True
+    config = question.grading_config if isinstance(question.grading_config, dict) else {}
+    verification = config.get('math_verification')
+    return isinstance(verification, dict) and verification.get('status') in {'verified', 'auto_verified'}

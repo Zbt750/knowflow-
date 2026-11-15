@@ -282,15 +282,24 @@ def requirement_supported_by_family(user_requirement: str | None, spec: FamilySp
     # The supported family is lim(x->0) (e^(a*x)-1-a*x)/x^2,
     # with integer a in [1, 100].  Match structure, not a substring such as
     # the mere presence of "e" or "x" in an unrelated expression.
-    approaches_zero = bool(re.search(r"(?:x(?:\\?to|→|->|趋于)\{?0\}?|x趋于0)", compact))
-    exponential = bool(re.search(r"e\^\{?\d*x\}?", compact) or
-                        re.search(r"e\^\{?\d+\\?cdot?x\}?", compact))
+    approaches_zero = bool(re.search(r"x(?:\\?to|→|->|趋于|趋近)\{?0\}?", compact))
+    # Parse only the declared bounded expression, accepting the same exponent
+    # in TeX braces or ordinary parentheses. This is an intent scope check;
+    # the generated answer still needs the independent verifier below.
+    normalized = compact.replace("−", "-").replace("×", "*")
+    normalized = normalized.replace(r"\cdot", "*")
+    exponent = re.search(r"e\^(?:\{(?P<tex>\d*\*?x)\}|\((?P<paren>\d*\*?x)\)|(?P<plain>\d*\*?x))", normalized)
+    coefficient = None
+    if exponent:
+        term = next(value for value in exponent.groups() if value is not None)
+        coefficient = int(term.replace("*", "")[:-1] or "1")
     second_order_denominator = bool(
-        re.search(r"/(?:x(?:\^\{?2\}?|²))", compact)
-        or re.search(r"\}\{x(?:\^\{?2\}?|²)\}", compact))
-    cancellation_terms = bool(re.search(r"-1-\d*x", compact) or
-                              re.search(r"-1-\d+\\?cdot?x", compact))
-    return approaches_zero and exponential and second_order_denominator and cancellation_terms
+        re.search(r"(?:/|除以)x(?:\^\{?2\}?|²)", normalized)
+        or re.search(r"\}\{x(?:\^\{?2\}?|²)\}", normalized))
+    cancellation = re.search(r"-1-(\d*)\*?x", normalized)
+    cancellation_coefficient = int(cancellation[1] or "1") if cancellation else None
+    return (approaches_zero and coefficient is not None and 1 <= coefficient <= 100
+            and second_order_denominator and coefficient == cancellation_coefficient)
 
 
 def contract_for(spec: FamilySpec, *, node_code: str, question_type: str, difficulty: str) -> dict:

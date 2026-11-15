@@ -10,9 +10,26 @@ from sqlalchemy.orm import Session, sessionmaker
 
 
 def get_now() -> datetime:
-    """当前时刻的唯一来源；直接调用时返回 UTC 当前时间。"""
-    # 不要把 datetime.now() 直接写在路由里——那样跨天毕业就只能靠改系统时间测。
-    return datetime.now(timezone.utc)
+    """当前时刻的唯一来源；直接调用时返回 UTC 当前时间。
+
+    2026-11-13 R80：增加受控时钟偏移，用于跨天/七日调度验收。
+    只在非生产环境生效；生产（APP_ENV=production）永远忽略该变量。
+    偏移量随返回值生效，便于在报告里明确区分“真实等待”与“受控时钟模拟”。
+    """
+    import os
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    if os.environ.get("APP_ENV", "dev") == "production":
+        return now
+    offset = os.environ.get("KAOYAN_CLOCK_OFFSET_DAYS")
+    if not offset:
+        return now
+    try:
+        days = float(offset)
+    except (TypeError, ValueError):
+        return now
+    return now + timedelta(days=days)
 
 
 def get_time_provider() -> Callable[[], datetime]:

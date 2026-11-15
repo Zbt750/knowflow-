@@ -2,7 +2,8 @@ import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {h, reactive} from 'vue';
 import {all, deferred, flush, mountStateComponent, text} from './stateTestHost';
 import type {ChatMessage} from '../api/chat';
-const mocks = vi.hoisted(() => ({list: vi.fn(), history: vi.fn(), stream: vi.fn(), task: vi.fn(), create: vi.fn(), confirm: vi.fn(),remove:vi.fn(),cancel:vi.fn()}));
+const mocks = vi.hoisted(() => ({list: vi.fn(), history: vi.fn(), stream: vi.fn(), task: vi.fn(), create: vi.fn(), confirm: vi.fn(),remove:vi.fn(),cancel:vi.fn(),paperConfirm:vi.fn()}));
+vi.mock('../api/paperAdjustments',()=>({confirmPaperAdjustment:mocks.paperConfirm}));
 vi.mock('../api/chat', async original => ({...await original<typeof import('../api/chat')>(), listChatSessions: mocks.list, fetchChatMessages: mocks.history, streamChatAnswer: mocks.stream, createChatSession: mocks.create,deleteChatSession:mocks.remove,cancelGenerationConfirmation:mocks.cancel}));
 vi.mock('../api/learningTasks', async original => ({...await original<typeof import('../api/learningTasks')>(), fetchLearningTask: mocks.task, confirmLearningTask: mocks.confirm}));
 vi.mock('../api/practiceRequests', () => ({listPracticeRequests: async () => [], planPracticeRequest: vi.fn(), declinePracticeRequest: vi.fn()}));
@@ -26,6 +27,27 @@ beforeEach(() => {
   mocks.create.mockResolvedValue({session_id: 'today-study'});
 });
 afterEach(() => {unmount?.(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.resetAllMocks();});
+it('recovers a generating reply after refresh by reading history without another model request',async()=>{
+ vi.useFakeTimers();
+ storage.set(`learning-assistant:study:${day()}`,'today-study');
+ mocks.history.mockResolvedValueOnce([reply('u','user','生成个人题'),reply('a','assistant','', 'generating')])
+  .mockResolvedValue([reply('u','user','生成个人题'),reply('a','assistant','真实任务已完成并保存1道')]);
+ const mounted=mountStateComponent(Panel,{sessionId:null,mascot:false,open:true});unmount=mounted.unmount;await flush();
+ await vi.advanceTimersByTimeAsync(1500);await flush();
+ expect(text(mounted.root)).toContain('真实任务已完成并保存1道');
+ expect(mocks.history).toHaveBeenCalledTimes(2);expect(mocks.stream).not.toHaveBeenCalled();
+ await vi.advanceTimersByTimeAsync(4500);expect(mocks.history).toHaveBeenCalledTimes(2);
+});
+it('manual status recovery reads chat even without a planner task and preserves unsent input',async()=>{
+ storage.set(`learning-assistant:study:${day()}`,'today-study');
+ mocks.history.mockResolvedValueOnce([reply('u','user','生成个人题'),reply('a','assistant','等待确认')])
+  .mockResolvedValue([reply('u','user','生成个人题'),reply('a','assistant','生成已保存，不重试')]);
+ const mounted=mountStateComponent(Panel,{sessionId:null,mascot:false,open:true});unmount=mounted.unmount;await flush();
+ (all(mounted.root).find(n=>n.type==='textarea')!.props['onUpdate:modelValue'] as (v:string)=>void)('未发送的下一句');await flush();
+ await (all(mounted.root).find(n=>n.props['data-testid']==='task-refresh')!.props.onClick as ()=>Promise<void>)();await flush();
+ expect(text(mounted.root)).toContain('生成已保存，不重试');expect(all(mounted.root).find(n=>n.type==='textarea')!.value).toBe('未发送的下一句');
+ expect(mocks.stream).not.toHaveBeenCalled();
+});
 it('r6 latest answered task without a draft cannot leave an older confirmable card',async()=>{
   storage.set(`learning-assistant:study:${day()}`,'today-study');
   const old={task_id:'old-task',session_id:'today-study',goal:'旧安排',budget_minutes:60,status:'ready',draft_version:'old',trace:[],metrics:{},
@@ -404,4 +426,49 @@ it('bank preview displays the source version and its actual matching evidence be
  const host=mountStateComponent(Panel,{sessionId:null,mascot:false,open:true});unmount=host.unmount;await flush();
  expect(text(host.root)).toContain('题库真实题干');expect(text(host.root)).toContain('链式求导');expect(text(host.root)).toContain('version-id');expect(text(host.root)).toContain('尚未加入今日学习');
  expect(all(host.root).some(n=>n.props['data-testid']==='task-confirm')).toBe(true);expect(mocks.confirm).not.toHaveBeenCalled();
+});
+it('completed adjustment metadata renders its persisted receipt instead of an executable old card',async()=>{
+ const receipt={task_id:'paper-task',plan_id:'p',removed_item_ids:[],added_count:2,total_count:20,active_item_ids:['a','b'],added_items:[{item_id:'a',number:19,kp_name:'洛必达法则',stem:'实际新增题',source_category:'development_original',question_version_id:'immutable-v'}]};
+ mocks.task.mockResolvedValue({task_id:'paper-task',status:'ready',metrics:{commit:receipt}});
+ mocks.stream.mockImplementation(async(_id,_q,event)=>{event('meta',{message_id:'reply'});event('paper_adjustment_proposal',{task_id:'paper-task',draft_version:'v',remove_count:0,replacement_count:2});event('done',{message_id:'reply',status:'completed'});});
+ const mounted=mountStateComponent(Panel,{sessionId:null,currentPlanId:'p',mascot:false,open:true});unmount=mounted.unmount;await flush();
+ (all(mounted.root).find(n=>n.type==='textarea')!.props['onUpdate:modelValue'] as(v:string)=>void)('看看当前状态');await flush();
+ (all(mounted.root).find(n=>n.type==='form')!.props.onSubmit as(e:unknown)=>void)({preventDefault(){}});await flush();
+ expect(all(mounted.root).some(n=>n.props['data-testid']==='confirm-paper-adjustment')).toBe(false);
+ expect(text(mounted.root)).toContain('实际新增题');expect(text(mounted.root)).toContain('immutable-v');expect(text(mounted.root)).toContain('该次调整完成时共 20 道');
+ expect(text(mounted.root)).not.toContain('当前共');
+});
+it('recovers the inverse receipt rather than resurrecting the original replacement result',async()=>{
+ const original={task_id:'paper-task',plan_id:'p',removed_item_ids:['old'],added_count:2,total_count:20,active_item_ids:['a','b']};
+ const inverse={...original,removed_item_ids:['a','b'],added_count:0,restored_count:1,restored_item_ids:['old'],total_count:19};
+ mocks.task.mockResolvedValue({task_id:'paper-task',status:'ready',metrics:{commit:original,undo_commit:inverse}});
+ mocks.stream.mockImplementation(async(_id,_q,event)=>{event('meta',{message_id:'reply'});event('paper_adjustment_proposal',{task_id:'paper-task',draft_version:'v',remove_count:1,replacement_count:2});event('done',{message_id:'reply',status:'completed'});});
+ const mounted=mountStateComponent(Panel,{sessionId:null,currentPlanId:'p',mascot:false,open:true});unmount=mounted.unmount;await flush();
+ (all(mounted.root).find(n=>n.type==='textarea')!.props['onUpdate:modelValue'] as(v:string)=>void)('查看撤销结果');await flush();
+ (all(mounted.root).find(n=>n.type==='form')!.props.onSubmit as(e:unknown)=>void)({preventDefault(){}});await flush();
+ expect(text(mounted.root)).toContain('恢复 1 道');expect(text(mounted.root)).toContain('该次调整完成时共 19 道');
+ expect(all(mounted.root).some(n=>n.props['data-testid']==='confirm-paper-adjustment')).toBe(false);
+});
+it('viewed removal never grants second confirmation until the learner explicitly accepts',async()=>{
+ const ask=vi.fn().mockReturnValue(false);vi.stubGlobal('window',{addEventListener(){},removeEventListener(){},confirm:ask});
+ mocks.task.mockResolvedValue({task_id:'paper-task',status:'ready',metrics:{}});
+ mocks.paperConfirm.mockRejectedValue({code:'paper_viewed_confirmation_required'});
+ mocks.stream.mockImplementation(async(_id,_q,event)=>{event('meta',{message_id:'reply'});event('paper_adjustment_proposal',{task_id:'paper-task',draft_version:'version',remove_count:1,replacement_count:0});event('done',{message_id:'reply',status:'completed'});});
+ const mounted=mountStateComponent(Panel,{sessionId:null,currentPlanId:'p',mascot:false,open:true});unmount=mounted.unmount;await flush();
+ (all(mounted.root).find(n=>n.type==='textarea')!.props['onUpdate:modelValue'] as(v:string)=>void)('删除已浏览题');await flush();
+ (all(mounted.root).find(n=>n.type==='form')!.props.onSubmit as(e:unknown)=>void)({preventDefault(){}});await flush();
+ const button=all(mounted.root).find(n=>n.props['data-testid']==='confirm-paper-adjustment')!;expect(button).toBeTruthy();
+ (button.props.onClick as()=>void)();await flush();
+ expect(mocks.paperConfirm).toHaveBeenCalledExactlyOnceWith('paper-task','today-study','version',false);expect(ask).not.toHaveBeenCalled();
+ expect(all(mounted.root).some(n=>n.props['data-testid']==='viewed-removal-confirmation')).toBe(true);
+ (all(mounted.root).find(n=>n.props['data-testid']==='cancel-viewed-removal')!.props.onClick as()=>void)();await flush();
+ expect(mocks.paperConfirm).toHaveBeenCalledTimes(1);
+ expect(all(mounted.root).some(n=>n.props['data-testid']==='confirm-paper-adjustment')).toBe(true);
+ (all(mounted.root).find(n=>n.props['data-testid']==='confirm-paper-adjustment')!.props.onClick as()=>void)();await flush();
+ mocks.paperConfirm.mockResolvedValue({removed_item_ids:['viewed'],added_count:0,total_count:18,added_items:[]});
+ (all(mounted.root).find(n=>n.props['data-testid']==='accept-viewed-removal')!.props.onClick as()=>void)();await flush();
+ expect(mocks.paperConfirm).toHaveBeenLastCalledWith('paper-task','today-study','version',true);
+ expect(mocks.paperConfirm).toHaveBeenCalledTimes(3);
+ expect(all(mounted.root).some(n=>n.props['data-testid']==='viewed-removal-confirmation')).toBe(false);
+ expect(text(mounted.root)).toContain('该次调整完成时共 18 道');
 });

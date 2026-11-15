@@ -18,6 +18,15 @@ def record_activity(db, *, item_id, kind, idempotency_key, now):
         return old
     if item.completed_at is not None and kind in {'started','skipped'}:
         raise ValueError('practice_item_already_assessed')
+    if kind == 'skipped':
+        # The item lock serializes distinct request keys from double clicks or
+        # reloads. Skipping one queued item remains one learning fact.
+        previous = db.scalar(select(LearningEvent).where(
+            LearningEvent.source_id == item.id,
+            LearningEvent.event_type == 'scheduler_activity',
+            LearningEvent.payload['kind'].as_string() == 'skipped'))
+        if previous is not None:
+            return previous
     row = LearningEvent(kp_id=item.kp_id, source_id=item.id,
         question_version_id=item.question_version_id, event_type='scheduler_activity',
         evidence_level=None, payload={'scheduler_only':True,'kind':kind,

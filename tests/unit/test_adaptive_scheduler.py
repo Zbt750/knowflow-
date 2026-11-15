@@ -58,6 +58,16 @@ def test_unknown_does_not_mean_skip_and_errors_not_inferred():
     assert p.errors=={'calculation':1}
 
 
+def test_repeated_skip_receipts_do_not_inflate_daily_counts_or_learning():
+    events=[obs('skip1','skipped',q='same'),obs('skip2','skipped',q='same')]
+    p=replay(events,NOW)
+    assert p.skills['lhopital'].skipped == 1
+    assert not p.cards and not p.errors
+    assert p.skills['lhopital'].right == p.skills['lhopital'].wrong == 0
+    events.append(obs('skip3','skipped',q='same',at=NOW+timedelta(days=1)))
+    assert replay(events,NOW+timedelta(days=1)).skills['lhopital'].skipped == 2
+
+
 def test_error_categories_are_attributed_only_from_explicit_self_report():
     p=replay([obs(1,'wrong',error_kind='concept'),obs(2,'wrong')],NOW)
     assert p.errors=={'concept':1,'unclassified':1}

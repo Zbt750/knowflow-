@@ -86,7 +86,9 @@ const emit = defineEmits<{
     <QuestionSource :source="props.item.question_source" :trust="props.item.question_trust" :show-original-number="false" :is-variant="props.item.is_variant" />
     <p v-if="props.item.question_trust?.teaching_use === 'REFERENCE_ONLY'" class="answer-provenance" data-testid="teaching-reference-notice">参考学习题 · 暂不支持可靠自动判题</p>
     <p v-if="props.item.question_trust?.answer_provenance === 'ai_generated'" class="answer-provenance" data-testid="ai-answer-provenance">
-      {{ props.item.question_trust.content_trust === 'source_attested' && props.item.question_trust.answer_reliability === 'ai_generated_consistent'
+      {{ props.item.question_trust.bank_scope === 'personal' && props.item.question_trust.objective_feedback_eligible
+        ? '个人练习答案已在限定范围内独立验证 · 不计入公共题库或毕业证据'
+        : props.item.question_trust.content_trust === 'source_attested' && props.item.question_trust.answer_reliability === 'ai_generated_consistent'
         ? '来源与题面结构已机器校验 · AI答案经三角色交叉核对一致 · 题解未单独核验'
         : props.item.question_trust.answer_reliability === 'ai_disagreement'
         ? 'AI 答案存在独立求解分歧 · 已停用自动判题，仅供复习参考'

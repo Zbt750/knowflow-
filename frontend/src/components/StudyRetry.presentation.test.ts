@@ -5,6 +5,13 @@ vi.mock('./MarkdownContent.vue',()=>({default:{props:['text'],setup:(p:{text:str
 import StudyFocus from './StudyFocus.vue';
 import Picker from './KnowledgeQuestionPickerTree.vue';
 const cleanups:Array<()=>void>=[];afterEach(()=>cleanups.splice(0).forEach(fn=>fn()));
+it.each([true,false])('personal answer verification notice follows its actual feedback eligibility: %s',verified=>{
+ const view=mountStateComponent(StudyFocus,{item:{id:'personal',stem:'个人题',skill_tags:[],completed:false,
+  question_trust:{bank_scope:'personal',answer_provenance:'ai_generated',objective_feedback_eligible:verified}},
+  hasPrevious:false,hasNext:false,displayNumber:1});cleanups.push(view.unmount);
+ if(verified){expect(text(view.root)).toContain('个人练习答案已在限定范围内独立验证');expect(text(view.root)).not.toContain('暂无已核验参考答案');}
+ else expect(text(view.root)).toContain('暂无已核验参考答案');
+});
 it.each([['',true],['Z',true],['B',false]] as const)('single choice option %s enables submit only when valid', (selectedOption,disabled)=>{
  const view=mountStateComponent(StudyFocus,{item:{id:'i',question_type:'single_choice',options:{A:'甲',B:'乙'},stem:'题干',skill_tags:[],completed:false},selectedOption,hasPrevious:false,hasNext:false,displayNumber:1});cleanups.push(view.unmount);
  const submit=()=>all(view.root).find(n=>n.props['data-testid']==='submit-answer')!;

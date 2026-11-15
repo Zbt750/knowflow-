@@ -4,6 +4,9 @@ import { Marked } from "marked";
 // 普通代码块保持原样；明确标为 math/latex 的块交给 KaTeX。
 const mathStart = /\\\(|\\\[|\$\$|\$(?!\s)/;
 const mathSpan = /^(?:\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$|\$(?!\s)(?:\\.|[^$\n])*?\$(?!\d))/;
+// Personal model output may omit delimiters around a complete TeX expression.
+// Accept bounded, balanced single-line formulas only; code tokens remain code.
+const bareMathStart = /\\{1,2}(?:lim|frac|sqrt|sum|prod|int)(?![A-Za-z])/;
 const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 // Only repair a Markdown-escaped subscript immediately following a named math
 // operator. Preserve literal underscores in text/code and all other LaTeX.
@@ -37,6 +40,23 @@ const parser = new Marked({ gfm: true, breaks: true, tokenizer: {
     return { type: "displayMathBlock", raw: match[0], body };
   },
   renderer(token) { return `<div class="math-block">\\[${escapeHtml(token.body as string)}\\]</div>`; },
+}, {
+  name: "bareMath",
+  level: "inline",
+  start(source: string) { const at=source.search(bareMathStart);return at < 0 ? undefined : at; },
+  tokenizer(source: string) {
+    if (source.search(bareMathStart)!==0) return;
+    const candidate=source.match(/^[^\n\u4e00-\u9fff。；，！？]+/)?.[0].split(/(?==_{2,})/)[0].trimEnd();
+    if(!candidate || candidate.length>1200 || /\\(?:begin|end)\b/.test(candidate)) return;
+    let depth=0;
+    for(const char of candidate){if(char==='{')++depth;if(char==='}' && --depth<0)return;}
+    if(depth!==0)return;
+    // Normalize only known command escapes in undelimited expressions; never
+    // touch row separators in existing delimited matrices or other TeX.
+    const body=candidate.replace(/\\\\(?=(?:lim|frac|sqrt|sum|prod|int|to)(?![A-Za-z]))/g,'\\');
+    return {type:'bareMath',raw:candidate,body};
+  },
+  renderer(token) {return `\\(${escapeHtml(token.body as string)}\\)`;},
 }, {
   name: "preservedMath",
   level: "inline",

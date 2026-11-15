@@ -356,6 +356,46 @@ const orderedItems = computed(() => [...(active.value?.items ?? [])].sort((a, b)
   || a.ordinal - b.ordinal,
 ));
 const paperScrollRegion = ref<HTMLElement | null>(null);
+const paperViewportHeight = ref<number | null>(null);
+let paperViewportObserver: ResizeObserver | undefined;
+function updatePaperViewport(): void {
+  const region = paperScrollRegion.value;
+  if (mode.value !== 'paper') { paperViewportHeight.value = null; return; }
+  if (!region || typeof region.getBoundingClientRect !== 'function'
+      || typeof window.getComputedStyle !== 'function') return;
+  // The real header, wrapped actions, aside and theme padding determine the
+  // available space. A fixed subtraction clips the final question's controls.
+  let bottomInset = 8;
+  for (let parent = region.parentElement; parent && parent !== document.documentElement; parent = parent.parentElement) {
+    const style = window.getComputedStyle(parent);
+    bottomInset += (parseFloat(style.paddingBottom) || 0)
+      + (parseFloat(style.borderBottomWidth) || 0) + (parseFloat(style.marginBottom) || 0);
+  }
+  const viewportBottom = window.visualViewport
+    ? window.visualViewport.offsetTop + window.visualViewport.height : window.innerHeight;
+  paperViewportHeight.value = Math.max(0, Math.floor(viewportBottom - region.getBoundingClientRect().top - bottomInset));
+}
+watch([mode, paperScrollRegion], async () => {
+  await nextTick();
+  paperViewportObserver?.disconnect();
+  const region = paperScrollRegion.value;
+  if (mode.value === 'paper' && region?.parentElement) {
+    paperViewportObserver?.observe(region.parentElement);
+    const activeRegion = region.closest('.study-active');
+    if (activeRegion) paperViewportObserver?.observe(activeRegion);
+  }
+  updatePaperViewport();
+}, { flush: 'post' });
+onMounted(() => {
+  if (typeof ResizeObserver !== 'undefined') paperViewportObserver = new ResizeObserver(updatePaperViewport);
+  window.addEventListener('resize', updatePaperViewport);
+  window.visualViewport?.addEventListener('resize', updatePaperViewport);
+});
+onBeforeUnmount(() => {
+  paperViewportObserver?.disconnect();
+  window.removeEventListener('resize', updatePaperViewport);
+  window.visualViewport?.removeEventListener('resize', updatePaperViewport);
+});
 const remainingItems = computed(() => orderedItems.value.filter((item) => !item.completed));
 const wrongItems = computed(() => wrongAnswerItems(orderedItems.value, active.value?.retry_wrong_items ?? []));
 const wrongKpIds = computed(() => new Set(wrongItems.value.map(item=>item.kp_id)));
@@ -1200,7 +1240,8 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="study-active-layout">
-        <div ref="paperScrollRegion" class="study-active-main" data-testid="paper-scroll-region">
+        <div ref="paperScrollRegion" class="study-active-main" data-testid="paper-scroll-region"
+          :style="mode === 'paper' && paperViewportHeight !== null ? { '--paper-viewport-height': `${paperViewportHeight}px` } : undefined">
       <!-- 专注模式：逐题浏览，允许回看已完成题 -->
       <section
         v-if="mode === 'focus' && currentItem && currentItem.is_external_reference"
@@ -1778,7 +1819,7 @@ onBeforeUnmount(() => {
 }
 .study-active--paper .study-active-main {
   min-height: 0;
-  max-height: calc(100dvh - var(--topbar-height, 64px) - 160px);
+  max-height: var(--paper-viewport-height, calc(100dvh - var(--topbar-height, 64px) - 160px));
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior-y: contain;

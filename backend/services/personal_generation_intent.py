@@ -226,7 +226,27 @@ def _difficulty_for_text(text, fallback):
     return {"basic": "basic", "medium": "improved", "hard": "improved", "challenge": "comprehensive"}[requirement.target_level]
 
 
+def _generation_target_text(message):
+    """Keep requested topic clauses distinct from trailing content constraints.
+
+    After the first authoring instruction, another clause is a new allocation
+    only with an authoring verb, a question quota, or an explicit each-topic
+    directive. Preserve offsets and the full original user_requirement elsewhere.
+    """
+    output=list(message)
+    seen_request=False
+    for match in re.finditer(r"[^，,、；;。！？\n]+",message):
+        clause=match.group()
+        authoring=explicitly_generate(clause)
+        if authoring:seen_request=True
+        allocated=authoring or _count_in_prefix(clause) is not None or bool(re.search(r'(?:各|每个|每一|分别).{0,6}(?:道|题|知识点|节点)',clause))
+        if seen_request and not allocated:
+            output[match.start():match.end()]=' '*len(clause)
+    return ''.join(output)
+
+
 def _named_multi_targets(message, nodes, fallback_type, fallback_difficulty):
+    message = _generation_target_text(message)
     mentions = _explicit_node_mentions(message, nodes)
     distinct = {item[4].id for item in mentions}
     if len(distinct) < 2:
@@ -339,11 +359,12 @@ def generation_intent(db, message, ctx, request_key, *, generation_mode="ai_gene
     # parse the original wording again here: identical node names or shared
     # aliases can be ambiguous in text even after the learner selected one
     # concrete node in the confirmation card.
+    scope_text = _generation_target_text(message)
     if confirmed_kp_id is None and confirmed_targets is None:
-        mentions = _explicit_node_mentions(message, nodes)
+        mentions = _explicit_node_mentions(scope_text, nodes)
         matches = list({item[4].id: item[4] for item in mentions}.values())
         matched_ids = {node.id for node in matches}
-        matches.extend(node for node in nodes if node.code in message and node.id not in matched_ids)
+        matches.extend(node for node in nodes if node.code in scope_text and node.id not in matched_ids)
     else:
         mentions = []
         matches = []
@@ -371,7 +392,7 @@ def generation_intent(db, message, ctx, request_key, *, generation_mode="ai_gene
         matches = []
     else:
         targets = None
-        if confirmed_kp_id is None and not _explicit_node_mentions(message, nodes):
+        if confirmed_kp_id is None and not _explicit_node_mentions(scope_text, nodes):
             targets = _context_each_targets(message, nodes, ctx.knowledge_node_ids, types[0][0], difficulty)
         if targets is None and confirmed_kp_id is None:
             targets = _named_multi_targets(message, nodes, types[0][0], difficulty)

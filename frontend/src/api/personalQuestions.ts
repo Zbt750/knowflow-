@@ -18,7 +18,7 @@ export type DifficultySummary = {
 export type PersonalQuestion = { id:string;kp_id:string;bank_scope:'public'|'personal';hidden:boolean;
   verification?:'verified'|'auto_verified'|'rejected'|'needs_review'|'unverified';
   difficulty_summary?:DifficultySummary|null;
-  question_type:string;difficulty:string;stem:string;options:Record<string,string>|null;practice_eligible:boolean };
+  question_type:string;difficulty:string;stem:string;options:Record<string,string>|null;practice_eligible:boolean;can_append_to_today?:boolean };
 export type GenerationResult = {batch_id:string;status:string;question_ids:string[];message:string;
   append_results?:TodayAppendResult[];
   answer_verification_events?:Array<{event_id:string;question_id:string;question_version_id:string;

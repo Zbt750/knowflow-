@@ -8,7 +8,7 @@ import TodayAppendResult from './TodayAppendResult.vue';
 import {questionSourceLabel} from '../lib/questionSourceLabel';
 import { useRouter } from "vue-router";
 import { ApiError } from "../api/client";
-import { confirmPaperAdjustment as confirmPaperAdjustmentApi } from "../api/paperAdjustments";
+import { confirmPaperAdjustment as confirmPaperAdjustmentApi, type PaperAdjustmentReceipt } from "../api/paperAdjustments";
 import { cancelGenerationConfirmation, createChatSession, listChatSessions, fetchChatMessages, streamChatAnswer, type ChatMessage, type StudyContext, type AssistanceAction, type PersonalGenerationMode } from "../api/chat";
 import {listPracticeRequests,planPracticeRequest,declinePracticeRequest,type PracticeRequest} from "../api/practiceRequests";
 import { saveDeepQADraft } from "../lib/deepQADraft";
@@ -186,6 +186,24 @@ const paperAdjustmentDraft = ref<{
   task_id: string; draft_version: string; remove_count: number;
   replacement_count: number; workload: Record<string, unknown> | null;
 } | null>(null);
+const paperAdjustmentReceipt = ref<PaperAdjustmentReceipt|null>(null);
+const viewedRemovalConfirmation = ref<{task_id:string;draft_version:string}|null>(null);
+let paperAdjustmentEpoch = 0;
+async function readPaperAdjustmentProposal(data: Record<string,unknown>) {
+  const epoch=++paperAdjustmentEpoch;
+  viewedRemovalConfirmation.value=null;
+  const id=String(data.task_id);
+  paperAdjustmentDraft.value=null;
+  try {
+    const stored=await fetchLearningTask(id);
+    if(epoch!==paperAdjustmentEpoch)return;
+    if(stored.metrics.undo_commit || stored.metrics.commit){paperAdjustmentReceipt.value=(stored.metrics.undo_commit ?? stored.metrics.commit) as unknown as PaperAdjustmentReceipt;return;}
+    if(stored.status!=='ready')return;
+    paperAdjustmentDraft.value={task_id:id,draft_version:String(data.draft_version??''),
+      remove_count:Number(data.remove_count??0),replacement_count:Number(data.replacement_count??0),
+      workload:(data.workload as Record<string,unknown>|null)??null};
+  } catch { if(epoch===paperAdjustmentEpoch)error.value='调整方案状态暂时无法核对，请刷新后重试。'; }
+}
 const launcherPose = computed<MascotPose>(() => {
   if (generated.value?.question_ids.length) return 'encourage';
   if (generationConfirmation.value) return 'pencil';
@@ -208,23 +226,38 @@ function sendOnEnter(event: KeyboardEvent) {
   event.preventDefault();
   submitComposer();
 }
-function confirmPaperAdjustment() {
+function confirmPaperAdjustment(confirmViewed = false) {
   if (busy.value || refreshing.value || !paperAdjustmentDraft.value) return;
   const pending = paperAdjustmentDraft.value;
+  if(confirmViewed && (viewedRemovalConfirmation.value?.task_id!==pending.task_id
+    || viewedRemovalConfirmation.value?.draft_version!==pending.draft_version))return;
+  if(!confirmViewed)viewedRemovalConfirmation.value=null;
   const sessionId = String(assistantSessionId.value || props.sessionId || '');
   busy.value = true;
   error.value = '';
   // 必须用卡片绑定的 task_id + draft_version 调专用确认接口。
   // 之前这里是“把输入框填成确认调整再走普通聊天”，服务端会执行会话里最新的方案，
   // 旧卡片因此能把别的会话已经改过的卷再改一遍（R66-01）。
-  void confirmPaperAdjustmentApi(pending.task_id, sessionId, pending.draft_version, true)
-    .then(() => {
+  void confirmPaperAdjustmentApi(pending.task_id, sessionId, pending.draft_version, confirmViewed)
+    .catch((err: unknown) => {
+      if((err as {code?:string})?.code!=='paper_viewed_confirmation_required')throw err;
+      if(paperAdjustmentDraft.value?.task_id===pending.task_id
+        && paperAdjustmentDraft.value?.draft_version===pending.draft_version)
+        viewedRemovalConfirmation.value={task_id:pending.task_id,draft_version:pending.draft_version};
+      return null;
+    })
+    .then((receipt) => {
+      if(!receipt)return;
+      ++paperAdjustmentEpoch;
+      viewedRemovalConfirmation.value=null;
+      paperAdjustmentReceipt.value=receipt;
       paperAdjustmentDraft.value = null;
       emit('confirmed');
       notifyPracticeRequestsChanged();
     })
     .catch((err: unknown) => {
       paperAdjustmentDraft.value = null;
+      viewedRemovalConfirmation.value=null;
       const code = (err as { code?: string })?.code || '';
       error.value = code === 'learning_task_stale_draft'
         ? '这份调整方案已经失效：今日卷在其他会话发生了变化，请重新预览后再调整。原方案未执行。'
@@ -314,6 +347,41 @@ watch([messages, () => messages.value.at(-1)?.text, () => Object.values(taskSnap
 let epoch = 0;
 let poll: ReturnType<typeof setTimeout> | undefined;
 let pollGeneration = 0;
+let historyPoll: ReturnType<typeof setTimeout> | undefined;
+let historyRecoveryId = '';
+let historyRecoveryDeadline = 0;
+let historyReadFailures = 0;
+function stopHistoryPoll() { if(historyPoll)clearTimeout(historyPoll);historyPoll=undefined; }
+function recoverGeneratingReply(latest: ChatMessage | undefined) {
+  stopHistoryPoll();
+  if(latest?.status!=='generating' || !assistantSessionId.value){historyRecoveryId='';return;}
+  const owner=assistantSessionId.value, active=epoch, identity=`${owner}:${latest.message_id}`;
+  if(historyRecoveryId!==identity){historyRecoveryId=identity;historyRecoveryDeadline=Date.now()+120000;historyReadFailures=0;}
+  if(Date.now()>=historyRecoveryDeadline || historyReadFailures>=3){error.value='暂时无法恢复这条回复，请点“刷新状态”读取结果；不会重新生成题目。';return;}
+  historyPoll=setTimeout(async()=>{
+    if(active!==epoch || owner!==assistantSessionId.value)return;
+    if(busy.value){recoverGeneratingReply(latest);return;}
+    try{
+      const history=await fetchChatMessages(owner,'study');
+      if(active!==epoch || owner!==assistantSessionId.value)return;
+      if(busy.value){recoverGeneratingReply(latest);return;}
+      historyReadFailures=0;restoreHistory(history);
+    }catch{
+      if(active===epoch && owner===assistantSessionId.value){++historyReadFailures;recoverGeneratingReply(latest);}
+    }
+  },1500);
+}
+async function refreshStatus() {
+  if(busy.value || refreshing.value)return;
+  const active=epoch, owner=assistantSessionId.value;
+  if(owner){
+    refreshing.value=true;
+    try{const history=await fetchChatMessages(owner,'study');if(active!==epoch || owner!==assistantSessionId.value)return;restoreHistory(history);}
+    catch{if(active===epoch)error.value='暂时无法读取回复状态，请稍后重试；不会重新调用模型。';}
+    finally{if(active===epoch)refreshing.value=false;}
+  }
+  if(active===epoch)await refreshTask(active);
+}
 const labels: Record<string, string> = { search_knowledge: "定位知识范围", get_learning_state: "查看学习记录", find_questions: "查找可练题", get_question_availability: "查询题库库存", read_lesson: "读取知识讲解", validate_plan: "检查题目与时长" };
 const statusLabels: Record<string, string> = { created: "等待安排", running: "正在安排", ready: "草案已校验", needs_info: "需要补充信息", answered: "查询完成", failed: "本次未完成", cancelled: "已取消" };
 const legacyStorageKey = () => `learning-task:study:${studyDay()}`;
@@ -344,7 +412,7 @@ watch(() => props.sessionId, async () => {
   const hydration=new Promise<void>(resolve=>{finishHydration=resolve;});
   sessionHydration=hydration;
   assistantController?.abort(); assistantController = null;
-  stopPoll(); busy.value = false; refreshing.value = false; savedTaskId.value = null; task.value = null; goal.value = ""; error.value = "";
+  stopPoll(); stopHistoryPoll(); busy.value = false; refreshing.value = false; savedTaskId.value = null; task.value = null; goal.value = ""; error.value = "";
   messages.value = []; lastReplyKey = ""; failedTurn.value = null;
   for (const id of Object.keys(taskSnapshots)) delete taskSnapshots[id];
   generationConfirmation.value = null; generated.value = null;
@@ -510,6 +578,7 @@ function restoreHistory(history: ChatMessage[]) {
     error.value = '';
   }
   if (latest?.status === 'failed') failedTurnRetryable.value = latest.retryable !== false;
+  recoverGeneratingReply(latest);
 }
 function editFailedReply() {
   if (!failedTurn.value) return;
@@ -613,21 +682,15 @@ async function arrange(fresh = false, action: AssistanceAction = "auto", confirm
       }
       if (event === "done" || event === "error") terminal = true;
       if (event === 'done') notifyPracticeRequestsChanged();
-      if (event === 'paper_adjustment' && data.plan_id === props.currentPlanId && Array.isArray(data.active_item_ids)) { paperAdjustmentDraft.value = null; emit('confirmed'); }
+      if (event === 'paper_adjustment' && data.plan_id === props.currentPlanId && Array.isArray(data.active_item_ids)) { ++paperAdjustmentEpoch; paperAdjustmentReceipt.value=data as unknown as PaperAdjustmentReceipt; paperAdjustmentDraft.value = null; emit('confirmed'); }
       if (event === 'paper_adjustment_proposal' && data.cleared) {
         // 本次请求只返回说明（澄清/拒绝），没有形成待确认方案：清掉残留卡片。
-        paperAdjustmentDraft.value = null;
+        ++paperAdjustmentEpoch; paperAdjustmentDraft.value = null;
       }
       if (event === 'paper_adjustment_proposal' && data.task_id) {
         // 独立状态，绝不塞进 task.value：paper_adjustment 的 draft 没有 questions，
         // 复用普通草稿会按旧形状访问字段并让整页崩溃。
-        paperAdjustmentDraft.value = {
-          task_id: String(data.task_id),
-          draft_version: String(data.draft_version ?? ''),
-          remove_count: Number(data.remove_count ?? 0),
-          replacement_count: Number(data.replacement_count ?? 0),
-          workload: (data.workload as Record<string, unknown> | null) ?? null,
-        };
+        void readPaperAdjustmentProposal(data);
       }
       if (event === 'done' && wire.status === 'failed') {
         failed = true;
@@ -736,7 +799,7 @@ async function confirm(selectedTask?: LearningTask) {
     }
   } finally { if (active === epoch) busy.value = false; }
 }
-onBeforeUnmount(() => { ++epoch; assistantController?.abort(); assistantController = null; stopPoll(); });
+onBeforeUnmount(() => { ++epoch; assistantController?.abort(); assistantController = null; stopPoll(); stopHistoryPoll(); });
 function askHelp(action: AssistanceAction) {
   goal.value = ({ hint_1: "给我一点提示，不要告诉答案", hint_2: "请提示下一步，不要给最终结果", solution: "请讲解这道题的完整参考解答", process_review: "请辅助检查我的作答过程；缺少步骤时先问我" } as Record<string, string>)[action];
   void arrange(false, action);
@@ -863,7 +926,20 @@ function draftSummary(draft: Record<string, unknown> | null | undefined) {
             待确认的正式卷调整：移除 {{ paperAdjustmentDraft.remove_count }} 道，新增 {{ paperAdjustmentDraft.replacement_count }} 道
             <span v-if="paperAdjustmentDraft.workload">，预计剩余 {{ paperAdjustmentDraft.workload['remaining_minutes'] }} 分钟</span>。
           </p>
-          <button type="button" data-testid="confirm-paper-adjustment" :disabled="busy || refreshing" @click="confirmPaperAdjustment">{{ busy ? '正在确认…' : '确认调整' }}</button>
+          <div v-if="viewedRemovalConfirmation?.task_id === paperAdjustmentDraft.task_id && viewedRemovalConfirmation?.draft_version === paperAdjustmentDraft.draft_version" role="group" aria-label="已浏览题目二次确认" data-testid="viewed-removal-confirmation">
+            <p>所选题目已经浏览。确认移除这些已浏览题目吗？学习历史将保留，已开始、已提交、已完成和已跳过题目仍受保护。</p>
+            <button type="button" data-testid="cancel-viewed-removal" :disabled="busy || refreshing" @click="viewedRemovalConfirmation = null">取消，保留原卷</button>
+            <button type="button" data-testid="accept-viewed-removal" :disabled="busy || refreshing" @click="confirmPaperAdjustment(true)">{{ busy ? '正在确认…' : '确认移除已浏览题目' }}</button>
+          </div>
+          <button v-else type="button" data-testid="confirm-paper-adjustment" :disabled="busy || refreshing" @click="confirmPaperAdjustment(false)">{{ busy ? '正在确认…' : '确认调整' }}</button>
+        </section>
+        <section v-if="paperAdjustmentReceipt" data-testid="paper-adjustment-receipt" aria-live="polite">
+          <p>调整已完成：移除 {{ paperAdjustmentReceipt.removed_item_ids.length }} 道，新增 {{ paperAdjustmentReceipt.added_count }} 道，<template v-if="paperAdjustmentReceipt.restored_count">恢复 {{ paperAdjustmentReceipt.restored_count }} 道，</template>该次调整完成时共 {{ paperAdjustmentReceipt.total_count }} 道。</p>
+          <article v-for="item in paperAdjustmentReceipt.added_items ?? []" :key="item.item_id">
+            <strong>第 {{ item.number }} 题 · {{ item.kp_name }}</strong>
+            <MarkdownContent :text="item.stem" />
+            <small>来源：{{ questionSourceLabel(item.source_category) }} · 题目版本：{{ item.question_version_id }}</small>
+          </article>
         </section>
       </div>
       <div v-if="error || failedTurn" role="alert" class="frog-chat-error" data-testid="frog-turn-error">
@@ -898,7 +974,7 @@ function draftSummary(draft: Record<string, unknown> | null | undefined) {
           <span class="frog-composer-shortcut">Enter 发送 · Shift + Enter 换行</span>
         </div>
         <div class="frog-chat-actions frog-chat-actions--utility">
-          <button v-if="task || savedTaskId" type="button" data-testid="task-refresh" :disabled="busy || refreshing" @click="refreshTask()">{{ refreshing ? '正在读取…' : '刷新状态' }}</button>
+          <button v-if="assistantSessionId || task || savedTaskId" type="button" data-testid="task-refresh" :disabled="busy || refreshing" @click="refreshStatus()">{{ refreshing ? '正在读取…' : '刷新状态' }}</button>
           <button v-if="task && task.status !== 'cancelled' && !task.metrics.commit" type="button" data-testid="task-cancel" @click="cancel">取消本次安排</button>
           <span>安排由你确认 · 新题先预览，再决定是否加入</span>
         </div>

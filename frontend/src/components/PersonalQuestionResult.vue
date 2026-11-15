@@ -41,7 +41,12 @@ const hasVerifiedAnswerReference = computed(() =>
   (props.generation.answer_verified_explanation_reference_question_ids ?? [])
     .some(id => verifiedAnswerIds.value.has(id)));
 const canAddAllQuestions = computed(() =>
-  questions.value.length > 0 && questions.value.every(question => question.practice_eligible));
+  questions.value.length === new Set(props.generation.question_ids).size
+  && questions.value.length > 0
+  && questions.value.every(question => (question.can_append_to_today ?? question.practice_eligible)
+    && !(props.generation.unverified_reference_question_ids ?? []).includes(question.id)
+    && (!(props.generation.reference_only_question_ids ?? []).includes(question.id)
+      || verifiedAnswerIds.value.has(question.id))));
 const alreadyAdded = computed(() => {
   const ids = props.generation.question_ids ?? [];
   if (!ids.length || !currentPlanId.value || props.generation.plan_id !== currentPlanId.value) return false;
@@ -118,7 +123,7 @@ async function loadQuestions(generation: GenerationResult): Promise<void> {
 }
 
 async function addToToday(): Promise<void> {
-  if (adding.value || !questions.value.length) return;
+  if (adding.value || loading.value || !canAddAllQuestions.value) return;
   adding.value = true;
   error.value = "";
   try {

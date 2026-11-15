@@ -1,4 +1,4 @@
-"""Homepage semantic proposals only; no database or formal-write capability."""
+﻿"""Homepage semantic proposals only; no database or formal-write capability."""
 import copy
 import json
 import re
@@ -53,7 +53,15 @@ def validate(intent,text,paper,context=None):
     if intent.operation=='restore_recent_removed':
         edit=context.get('home_last_edit') or {}
         removed=edit.get('removed_questions') or []
-        if not removed or intent.quantity is None or intent.quantity>len(removed):
+        if not removed:return clarify('上一轮没有可恢复的题目；当前方案未改变。')
+        if intent.refs:
+            # 点名知识点的恢复：只恢复到该知识点被移除的题，不扩大到其他知识点。
+            refs=reference_map(paper)
+            wanted={refs[key]['value'] for key in intent.refs if key in refs and refs[key]['kind']=='scope'}
+            scoped=[row for row in removed if str(row.get('kp_id')) in {str(v) for v in wanted}]
+            if not scoped:return clarify('上一轮没有从这个知识点移除题目；当前方案未改变。')
+            return intent
+        if intent.quantity is None or intent.quantity>len(removed):
             return clarify('上一轮没有足够的可恢复题目；当前方案未改变。')
         return intent
     if intent.operation in {'topic_remove_questions','exclude_scope','topic_target','subject_topic_replace'}:
@@ -251,9 +259,25 @@ def _subject_topic_replace_request(text,paper):
         unattempted_only=bool(re.search(r'(?:没(?:有)?做过|未(?:曾)?学习过?|没有(?:学习|做过)|从未(?:学习|做过)|没学过)',text)))
 
 
+def _topic_restore_intent(text,paper):
+    """「恢复刚才删掉的某知识点」是撤销删除，不是再删一遍。
+
+    2026-11-12 实测：用户说“恢复刚才删掉的洛必达法则”，旧逻辑因为句子里有
+    “删掉”而落入 remove 分支，回了一句“已经没有题目，不需要再删除”，
+    导致删除后无法用自然语言恢复。
+    """
+    if not re.search(r'恢复|还原|加回|放回|撤回',text):return None
+    if not re.search(r'删除|删掉|移除|去掉|刚才|上一版|上一轮|原方案',text):return None
+    matches=_matched_topic_refs(text,paper)
+    if not matches:return None
+    return HomeIntent(operation='restore_recent_removed',refs=[key for key,_ in matches],terms=text)
+
+
 def _topic_removal_intent(text,paper):
     refs=_matched_topic_refs(text,paper)
     if not refs:return None
+    # 恢复类说法即使包含“删掉”也不是删除请求。
+    if re.search(r'恢复|还原|加回|放回|撤回',text):return None
     # A singular count is a question-level delete request. Do not reinterpret
     # “删除一道某知识点的题” as deleting the entire topic's question set.
     # If no question identity is supplied, the legacy exact-delete validator
@@ -286,17 +310,42 @@ def _topic_count_intent(text,paper,context=None):
     """
     refs=reference_map(paper)
     scopes=_topic_scopes(paper)
-    clauses=[part.strip() for part in re.split(r'[，,；;。！？?\n]',text) if part.strip()]
+    # A delimiter separates operations unless it belongs to a displayed topic
+    # name. This also handles the ordinary Chinese enumeration comma without
+    # splitting a real topic such as “概念甲、概念乙”.
+    protected=[]
+    for _,_,names in scopes:
+        for name in names:
+            protected.extend((match.start(),match.end()) for match in re.finditer(re.escape(name),text))
+    boundaries=[match.start() for match in re.finditer(r'[，,、；;。！？?\n]',text)
+        if not any(start<=match.start()<end for start,end in protected)]
+    starts=[0]+[position+1 for position in boundaries]
+    ends=boundaries+[len(text)]
+    clauses=[text[start:end].strip() for start,end in zip(starts,ends) if text[start:end].strip()]
     edits=[];underspecified=False;unresolved_actions=0;inherited_actions=0
     add_words=r'(?:增加|添加|追加|补充|补|再加|多安排|加上|加(?!入))'
     remove_words=r'(?:减少|减去|减掉|少安排|少(?:掉)?)(?!有)'
     context=context or {}
-    for clause in clauses:
-        aliases=[]
+    def named_matches(clause):
+        matches=[]
         for key,row,names in scopes:
-            for alias in names:
+            aliases=list(names)
+            name=row.get('name','')
+            if len(name)==1:
+                # A real one-character topic (堆/栈/树) needs an explicit
+                # count/action binding. Do not interpret “一堆资料” as 堆.
+                action='(?:'+add_words+'|'+remove_words+')'
+                count=r'(?:[零〇一二两三四五六七八九十百千]+|[1-9]\d*)\s*(?:道|题)'
+                topic=re.escape(name)
+                before=rf'(?:^|[把将给让\s]){topic}(?:的)?(?:题目?|知识点)?\s*(?:再)?{action}\s*{count}'
+                after=rf'{action}\s*{count}\s*{topic}(?:的)?(?:题目?|知识点)?(?:$|\s)'
+                if re.search(before,clause) or re.search(after,clause):aliases.append(name)
+            for alias in aliases:
                 if alias in clause:
-                    aliases.append((key,row,alias));break
+                    matches.append((key,row,alias));break
+        return matches
+    for clause in clauses:
+        aliases=named_matches(clause)
         verbs=list(re.finditer(add_words+r'\s*(?:几|一些|若干|[零〇一二两三四五六七八九十百千]+|[1-9]\d*)?\s*道?',clause))
         verbs += list(re.finditer(remove_words+r'\s*(?:几|一些|若干|[零〇一二两三四五六七八九十百千]+|[1-9]\d*)?\s*道?',clause))
         if not verbs:
@@ -355,7 +404,7 @@ def _topic_count_intent(text,paper,context=None):
     # If an operation is named but its topic was not part of the displayed
     # proposal, fail closed rather than accidentally appending elsewhere.
     named_topic_actions=inherited_actions+sum(1 for clause in clauses if re.search(add_words+'|'+remove_words,clause)
-        and any(alias in clause for _,_,names in scopes for alias in names))
+        and named_matches(clause))
     if unresolved_actions or len(edits)!=named_topic_actions:
         return clarify('该知识点不在当前方案中；请先把它加入方案，再调整题量。')
     intent=HomeIntent(operation='topic_count',refs=[key for key,_ in edits],deltas=[delta for _,delta in edits],
@@ -431,6 +480,8 @@ def parse_rule(text,paper,context=None):
         return validate(HomeIntent(operation='restore_recent_removed',quantity=quantity),text,paper,context)
     subject_local=_subject_topic_replace_request(text,paper)
     if subject_local is not None:return validate(subject_local,text,paper,context)
+    topic_restore=_topic_restore_intent(text,paper)
+    if topic_restore is not None:return validate(topic_restore,text,paper,context)
     topic_removal=_topic_removal_intent(text,paper)
     if topic_removal is not None:return validate(topic_removal,text,paper,context)
     topic_target=_topic_target_intent(text,paper)
@@ -522,7 +573,7 @@ def parse_rule(text,paper,context=None):
             or bank.get('excluded_question_types')):
         return HomeIntent(operation='select_bank',quantity=bank['count'],terms=text)
     if re.search(r'加进去|加入范围|增加知识点',text):return HomeIntent(operation='scope_add',terms=text)
-    if re.search(r'重点加强|多练|加强|多安排',text) and any(
+    if re.search(r'重点加强|多练|加强|多安排',text) and _topic_quantity(text)[0] is None and any(
             v['kind']=='scope' and v['name'] and v['name'] in text for v in refs.values()):
         return clarify('想增加几道该知识点的题？请给出数量；原方案已保留。')
     if re.search(r'只(?:练|做|保留)|替换',text):return validate(HomeIntent(operation='replace',terms=text),text,paper)
@@ -576,12 +627,12 @@ def resolve(text,paper,provider_factory=None,*,history_factory=None,context=None
         try:
             if provider_factory is None:raise ValueError('provider_unavailable')
             refs={k:{'kind':v['kind'],'name':v['name']} for k,v in reference_map(paper).items()}
-            context=json.dumps({'input':text,'references':refs,
+            prompt_context=json.dumps({'input':text,'references':refs,
                 'current_plan':{'question_count':len((paper or {}).get('questions',[])),
                     'budget_minutes':(paper or {}).get('budget_minutes'),
                     'total_minutes':(paper or {}).get('total_minutes')},
                 'history':history_factory() if history_factory else []},ensure_ascii=False)
-            if len(context)>18000:raise ValueError('context_limit')
+            if len(prompt_context)>18000:raise ValueError('context_limit')
             provider=copy.copy(provider_factory());provider.timeout=min(float(provider.timeout),6);provider.max_tokens=min(provider.max_tokens,1200)
             provider.structured_generation=True
             trace['model_calls']=1
@@ -591,7 +642,7 @@ def resolve(text,paper,provider_factory=None,*,history_factory=None,context=None
                 '追加保留全部原题，只有明确只练或替换才可replace；删除目标不唯一必须clarify。'
                 '复合指令不得只执行一半，应clarify。生成试卷只给generate_guidance。'
                 '例如再加一道某知识点为append且quantity=1；删除多道候选中未指定的一道应clarify。'
-                'Schema:'+json.dumps(HomeIntent.model_json_schema(),ensure_ascii=False)}, {'role':'user','content':context}],attempt=1)
+                'Schema:'+json.dumps(HomeIntent.model_json_schema(),ensure_ascii=False)}, {'role':'user','content':prompt_context}],attempt=1)
             if len(raw)>16000:raise ValueError('output_limit')
             result=HomeIntent.model_validate_json(raw)
         except Exception as exc:

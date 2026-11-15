@@ -213,6 +213,15 @@ def route_message(message, context, *, action="auto", task=None, classifier=None
             r'加入|追加|加到|安排|放进|放到|生成.{0,6}(?:卷|计划)|创建.{0,6}(?:计划|专项)', positive_query_text)):
         return CapabilityRoute('data_query',read_only_query,1,'explicit_read_only_bank_query',write_risk=False)
     # NB-02：明确否定约束（别加入/不要生成/只讲/只查）优先，尊重用户限定。
+    # Consent is action-scoped: requesting a new personal question while
+    # declining insertion still belongs to generation's separate confirmation.
+    # 明确的“生成一道（类似的）题/变式”必须进入 AI 出题，而不是只读查询或通用问答。
+    from backend.services.personal_generation_intent import explicitly_generate
+    if (explicitly_generate(text)
+            and re.search(r'(?:生成|出一道|出题|新编|变式|再来一道|编一道)', text)
+            and (re.search(r'题', text) or re.search(r'加入|放进|加到', text) or re.search(r'(?:让我|给我)?看看', text))
+            and not re.search(r'计划|方案|专项训练|出题卡|题库|检索|找(?:一|几)?道', text)):
+        return CapabilityRoute('generation','generate',1,'explicit_generation_request',write_risk=True)
     if re.search(r'(?:别|不要|不用|无需|不需要|不(?=加入|生成|出题|修改|写入|调整|安排)).{0,8}(?:加入|生成|出题|修改|写入|调整|安排)|只(?:想)?(?:给|帮我|要)?(?:讲|解释|查询|查看|看看)', text):
         explanation = _explanation_request(text)
         if explanation:
@@ -254,13 +263,6 @@ def route_message(message, context, *, action="auto", task=None, classifier=None
         return CapabilityRoute('planner','plan',1,'explicit_scope_plan',write_risk=False)
     if re.search(r'再来(?:几|一)道|再来几题|再加几道', text):
         return CapabilityRoute('planner','plan',1,'append_more_request',write_risk=False)
-    # 明确的“生成一道（类似的）题/变式”必须进入 AI 出题，而不是只读查询或通用问答。
-    from backend.services.personal_generation_intent import explicitly_generate
-    if (explicitly_generate(text)
-            and re.search(r'(?:生成|出一道|出题|新编|变式|再来一道|编一道)', text)
-            and (re.search(r'题', text) or re.search(r'加入|放进|加到', text) or re.search(r'(?:让我|给我)?看看', text))
-            and not re.search(r'计划|方案|专项训练|出题卡|题库|检索|找(?:一|几)?道', text)):
-        return CapabilityRoute('generation','generate',1,'explicit_generation_request',write_risk=True)
     # 口语检索：“查一下/查查 … 的题”是只读题库检索。
     if re.search(r'(?:查(?:一下|查|询)|搜一下|搜搜).{0,14}(?:题|习题|练习)', text) and not re.search(r'生成|出题|查题库', text):
         return CapabilityRoute('data_query','find',1,'explicit_read_only_bank_query',write_risk=False)

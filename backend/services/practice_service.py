@@ -430,9 +430,9 @@ def append_questions_to_plan(
         _require_assessable_leaf(session, question.kp_id)
         if not question_eligibility(question, node).practice_eligible:
             raise ValueError("question_not_practice_eligible")
-        verification = ((question.grading_config or {}).get("math_verification") or {}).get("status")
-        if (not allow_personal_practice and question.bank_scope == "personal"
-                and verification not in {"verified", "auto_verified"}):
+        from backend.services.question_eligibility import personal_answer_allows_today
+        # Share exactly the existing write gate with read-side append capability.
+        if not personal_answer_allows_today(question):
             raise ValueError("question_not_practice_eligible")
     # Bind a newly introduced public topic before materializing its items.
     # Otherwise its first answer is mistaken for legacy unbound history.
@@ -526,6 +526,46 @@ def _order_paper_items(items, candidate_question_ids=None):
         order={qid:index for index,qid in enumerate(candidate_question_ids)}
         return sorted(items,key=lambda entry:order.get(entry[3],len(order)))
     return sorted(items,key=lambda entry:QUESTION_TYPE_ORDER.get(entry[2],len(QUESTION_TYPE_ORDER)))
+
+
+def _personal_due_questions(session, kp_ids, now, *, exclude, limit):
+    """最近一次个人复习已到期的个人 AI 题。
+
+    2026-11-13 R81（R80-BUG-01）：公共题到期走 kp_states.next_review_at，
+    个人题的复习时间记录在 question_attempts.next_review_at，之前的候选构建
+    完全不读它，所以个人题即使到期也不会回到今日计划。这里按“每题最近一次
+    个人复习记录”判断到期，并排除停用/隐藏/无当前版本/本次已选中的题。
+    """
+    if not kp_ids:
+        return []
+    latest = (select(QuestionAttempt.question_id.label("qid"),
+                     func.max(QuestionAttempt.submitted_at).label("at"))
+              .where(QuestionAttempt.reason_code.in_(
+                  ("personal_review_scheduled", "personal_review_completed")))
+              .group_by(QuestionAttempt.question_id).subquery())
+    stmt = (select(Question)
+        .join(latest, latest.c.qid == Question.id)
+        .join(QuestionAttempt,
+              (QuestionAttempt.question_id == latest.c.qid)
+              & (QuestionAttempt.submitted_at == latest.c.at))
+        .where(Question.bank_scope == "personal",
+               Question.is_active.is_(True),
+               Question.is_hidden.is_(False),
+               Question.current_version_id.is_not(None),
+               Question.kp_id.in_(list(kp_ids)),
+               QuestionAttempt.next_review_at.is_not(None),
+               QuestionAttempt.next_review_at <= now)
+        .order_by(QuestionAttempt.next_review_at)
+        .limit(max(1, limit) * max(1, len(list(kp_ids)))))
+    rows = list(session.scalars(stmt))
+    seen = {str(x) for x in exclude}
+    unique = []
+    for row in rows:
+        if str(row.id) in seen:
+            continue
+        seen.add(str(row.id))
+        unique.append(row)
+    return unique
 
 
 def preview_initial_questions(session: Session, *, selected_kp_ids: list[UUID], now: datetime,
@@ -650,10 +690,26 @@ def preview_initial_questions(session: Session, *, selected_kp_ids: list[UUID], 
         from backend.services.adaptive_scheduler import Candidate, allocate
         projection = read_projection(session, now, unique_kp_ids)
         if projection.cards:
+            # 2026-11-13 R81：个人 AI 题到期后必须重新进入计划，而且不能
+            # 被“新题把预算占满”挤掉。这里先给到期个人题预留分钟，再让
+            # 公共新题在剩余预算里分配；个人题仍只记 attempts，不写 kp_states。
+            _cap = minute_limit or budget_minutes(budget)
+            _personal_due = []
+            _due_minutes = 0
+            for _row in _personal_due_questions(session, unique_kp_ids, now,
+                    exclude=set(), limit=per_kp_limit):
+                _m = _row.estimated_minutes if type(_row.estimated_minutes) is int and _row.estimated_minutes > 0 else 0
+                if _m <= 0:
+                    continue
+                if _due_minutes + _m > _cap:
+                    break
+                _personal_due.append((_row, _m))
+                _due_minutes += _m
+            _alloc_limit = max(5, _cap - _due_minutes)
             qualified = [q for q in adaptive_rows if q.current_version_id]
             allocation = allocate([Candidate(str(q.id), str(q.current_version_id),
                 str(q.kp_id), q.estimated_minutes, q.variant_group) for q in qualified],
-                projection, now, minute_limit or budget_minutes(budget), per_node_new_limit=per_kp_limit)
+                projection, now, _alloc_limit, per_node_new_limit=per_kp_limit)
             by_id = {str(q.id): q for q in qualified}
             picked_items = []
             for candidate, kind in allocation['items']:
@@ -664,6 +720,17 @@ def preview_initial_questions(session: Session, *, selected_kp_ids: list[UUID], 
                 picked_items.append((q.kp_id,item,q.question_type,q.id,None))
             if selection_diagnostics is not None:
                 selection_diagnostics['adaptive'] = {k:v for k,v in allocation.items() if k!='items'}
+            # 再把预留好的到期个人题放进去（与公共题同一份预算，不越界）。
+            _already = {str(entry[1].question_id) for entry in picked_items}
+            for _row, _m in _personal_due:
+                if str(_row.id) in _already:
+                    continue
+                if sum((entry[1].estimated_minutes or 0) for entry in picked_items) + _m > _cap:
+                    break
+                _item = SelectionItem(str(_row.id), _row.question_type, _row.is_variant,
+                    _m, Priority.DUE_REVIEW, '个人题到期复习', is_review=True)
+                picked_items.append((_row.kp_id, _item, _row.question_type, _row.id, None))
+                _already.add(str(_row.id))
     # 只在初次组卷时排一次序。已有卷和后续追加仍按原 ordinal 保持稳定。
     picked_items = _order_paper_items(picked_items,candidate_question_ids)
     if minute_limit is not None:

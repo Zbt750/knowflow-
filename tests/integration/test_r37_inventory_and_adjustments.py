@@ -41,7 +41,12 @@ def _eligible_alternative(factory, kp_id, exclude):
         rows=db.scalars(select(Question).where(Question.kp_id==kp_id,
             Question.bank_scope=='public',Question.id!=exclude).order_by(Question.id)).all()
         q=next(row for row in rows if row.current_version_id and question_eligibility(row,node).practice_eligible)
-        return q.id,question_version_reference(q)
+        result=(q.id,question_version_reference(q))
+        # 2026-11-13 R84：这个只读查询会顺带触发 answer_verification_events 的读取；
+        # 不显式结束事务时连接回池后仍是 idle in transaction，持有 relation 锁，
+        # 下一个用例的 TRUNCATE 就会一直等锁（r37 后续 EE 的直接原因）。
+        db.rollback()
+        return result
 
 
 def test_append_only_chat_adjustment_commits_real_eligible_item(session_factory):

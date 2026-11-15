@@ -195,6 +195,10 @@ def _result_view(db, row):
             result['adjustment_error']=notice
             if (row.context or {}).get('request_origin') in {'system','chat'}:
                 result['adjustment_origin']=row.context['request_origin']
+        # 2026-11-13 R73：待确认的超预算草案必须始终作为候选返回。
+        # 旧条件 `not result.get('receipt')` 会在“今日卷已生成”时把候选吞掉：
+        # 用户随后又说“再多安排2道”，刷新后只看到上一份已确认方案，
+        # 完全看不到自己刚提交的 22 道草案，也无法接受/返回。
         if _workload_pending(row) and not result.get('receipt'):
             result['workload_candidate']=_preview_view(db,row)
         if active is row:
@@ -1728,13 +1732,23 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
             source=_history_paper(db,session.id,stack[-1]) if stack else None
             removed_ids={row.get('question_id') for row in (edit or {}).get('removed_questions',[])}
             candidates=[q for q in (source or {}).get('questions',[]) if q.get('question_id') in removed_ids]
-            if not current or not candidates or len(candidates)<int(intent.quantity or 1):
+            # 点名知识点的恢复：只恢复该知识点被移除的题，不顺手恢复别的话题。
+            wanted_kp_ids=set()
+            if intent.refs:
+                from backend.services.home_intent import reference_map as _ref_map
+                current_refs=_ref_map(current or {})
+                wanted_kp_ids={str(current_refs[key]['value']) for key in intent.refs
+                    if key in current_refs and current_refs[key]['kind']=='scope'}
+                candidates=[q for q in candidates if str(q['kp_id']) in wanted_kp_ids]
+            restore_limit=(len(candidates) if intent.quantity is None
+                else int(intent.quantity))
+            if not current or not candidates or len(candidates)<restore_limit or restore_limit<1:
                 return notice('无法从上一版有效方案核验要恢复的题目；当前预览保持不变。')
-            add=candidates[:int(intent.quantity or 1)]
+            add=candidates[:restore_limit]
             restored=deepcopy(current)
             current_ids={q['question_id'] for q in current['questions']}
             add=[q for q in add if q['question_id'] not in current_ids]
-            if len(add)!=int(intent.quantity or 1):return notice('待恢复题目已在当前方案中或版本不匹配；当前预览保持不变。')
+            if len(add)!=restore_limit:return notice('待恢复题目已在当前方案中或版本不匹配；当前预览保持不变。')
             restored['questions']=[*current['questions'],*add]
             restored['selected_kp_ids']=list(dict.fromkeys([*current['selected_kp_ids'],*[q['kp_id'] for q in add]]))
             restored['allocation_kp_ids']=list(dict.fromkeys(q['kp_id'] for q in restored['questions']))
@@ -2201,11 +2215,11 @@ def adjust(db, body, recommendations, now, *, intent_provider_factory=None):
                     if '[underspecified_quantities_defaulted_to_one]' in intent.terms:
                         row.message+=' 原话未给具体数量，每个“几道”先按1道拟成草案，可继续调整。'
                 if subject_plan_summary:
-                    selection_basis=('从未作答的' if subject_plan_summary['unattempted_only']
-                        else '未学习或学习记录较少的')
-                    row.message+=(f" 已按{selection_basis}{subject_plan_summary['subject']}知识点替换当前范围，"
+                    selection_basis=('真实作答中的错误观察和到期记录，围绕' if subject_plan_summary['subject']=='薄弱点'
+                        else '从未作答的' if subject_plan_summary['unattempted_only'] else '未学习或学习记录较少的')
+                    row.message+=(f" 已按{selection_basis}{subject_plan_summary['subject']}知识点重新规划当前范围，"
                         f"安排{subject_plan_summary['topic_count']}个知识点，题目预计{paper['total_minutes']}分钟，预算{minutes}分钟；"
-                        '原数学范围已从当前待确认方案移除，尚未生成正式今日卷。')
+                        '以上为新的待确认范围，尚未生成正式今日卷。')
                 if topic_removal_summaries:
                     row.message+=' 知识点批量调整：'+'；'.join(
                         f"{item['name']}原有{item['before_count']}道，计划移除{item['before_count']}道，"

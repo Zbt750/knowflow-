@@ -134,7 +134,10 @@ def read_practice_activity(item_id: UUID, db: Session=Depends(get_db)):
 
 
 def _question_trust_view(question: Question, node: KnowledgePoint | None = None) -> QuestionTrustView:
-    return QuestionTrustView(**question_eligibility(question, node).public_dict())
+    from backend.services.question_eligibility import personal_answer_allows_today
+    trust = question_eligibility(question, node)
+    return QuestionTrustView(**trust.public_dict(),
+        can_append_to_today=trust.practice_eligible and personal_answer_allows_today(question))
 
 
 @router.get("/question-availability", response_model=QuestionAvailabilityView)

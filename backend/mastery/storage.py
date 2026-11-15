@@ -18,6 +18,7 @@ from backend.models.learning import (
     KnowledgePoint,
     LearningEvent,
     PracticeItem,
+    Question,
     QuestionAttempt,
 )
 
@@ -198,6 +199,12 @@ def policy_for_node(
             LearningEvent.kp_id == kp_id,
             LearningEvent.payload["changes_mastery"].as_boolean().is_not(False),
         )
+        # Personal AI practice questions live in today's paper but are never
+        # formal graduation evidence, so a personal item must not make this
+        # node look like a "started learner with prior formal history".
+        # 2026-11-13 R78：个人题加入今日卷后作答被这里判成
+        # graduation_set_binding_missing_for_started_learner，提交直接失败。
+        _personal_questions = select(Question.id).where(Question.bank_scope == "personal")
         has_history = bool(
             (state and (state.state != "unseen" or state.mastered_at is not None
                         or bool(state.evidence_window)))
@@ -208,8 +215,12 @@ def policy_for_node(
                 # is not a learning action and must not be treated as legacy
                 # mastery history. Completed items remain activity evidence for
                 # older deployments that predate QuestionAttempt/LearningEvent.
-                or db.scalar(select(exists().where(PracticeItem.kp_id == kp_id,
-                    True if bind_if_unset else PracticeItem.completed_at.is_not(None))))))
+                or db.scalar(select(exists().where(
+                    PracticeItem.kp_id == kp_id,
+                    (True if bind_if_unset else PracticeItem.completed_at.is_not(None)),
+                    (PracticeItem.question_id.is_(None))
+                    | (PracticeItem.question_id.notin_(_personal_questions)),
+                )))))
         )
         if has_history:
             if binding_status == "legacy_history_unbound":

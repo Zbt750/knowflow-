@@ -99,3 +99,21 @@ def test_public_training_entry_stays_disabled_without_service_or_database_access
     for message in ("给我安排30分钟洛必达专项", "给当前专项追加三道题", "暂停当前专项",
                     "给我生成三道洛必达法则单选题、两道隐函数求导填空题"):
         assert public_parser(message) is None
+
+
+def test_content_constraint_topic_is_not_a_second_generation_allocation():
+    from backend.models.learning import KnowledgePoint
+    from backend.services.personal_generation_intent import generation_intent
+    from backend.schemas.learning_assistant import StudyContext
+    nodes=[KnowledgePoint(id=uuid4(),code='TEST_FIXTURE.det.properties',name='行列式的性质',subject='数学',is_active=True,is_assessable=True),
+        KnowledgePoint(id=uuid4(),code='TEST_FIXTURE.det',name='行列式',subject='数学',is_active=True,is_assessable=True)]
+    class ReadNodes:
+        def scalars(self,statement):return nodes
+    text='用奶蛙AI给我生成一道行列式的性质练习题，考查三阶可逆矩阵和伴随矩阵的行列式关系，先生成个人参考题，不加入今日卷。'
+    result=generation_intent(ReadNodes(),text,StudyContext(),uuid4())
+    assert len(result.targets)==1 and result.targets[0].kp_id==nodes[0].id
+    assert result.targets[0].count==1 and result.append_to_today is False
+    assert result.user_requirement==text
+    explicit='给我生成一道行列式的性质单选题，再生成一道行列式单选题。'
+    multiple=generation_intent(ReadNodes(),explicit,StudyContext(),uuid4())
+    assert [(t.kp_id,t.count) for t in multiple.targets]==[(nodes[0].id,1),(nodes[1].id,1)]

@@ -23,6 +23,7 @@ class QuestionTrustView(BaseModel):
     auto_review_version: str | None = None
     auto_review_snapshot_sha256: str | None = None
     practice_eligible: bool = False
+    can_append_to_today: bool | None = None
     grading_capability: Literal["deterministic", "final_answer_limited", "process_review_only", "unsupported"] = "unsupported"
     evidence_capability: str = "self_report_only"
     answer_comparison_method: str | None = None

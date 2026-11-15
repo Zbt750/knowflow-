@@ -699,7 +699,8 @@ watch(rootScope,(scope)=>{if(scope && selectedPath.value.length && selectedPath.
                 <span class="tag tag--muted">{{ typeLabel(question.question_type) }}</span>
                 <span class="tag tag--muted">{{ question.difficulty }}</span>
                 <span v-if="question.is_variant" class="tag">变式题</span>
-                <button type="button" :disabled="addingQuestionId !== null || !question.trust.practice_eligible" @click="addOnlineQuestion(question.id, question.kp_id)">{{ addingQuestionId === question.id ? '正在加入…' : '加入今日学习' }}</button>
+                <button type="button" :disabled="addingQuestionId !== null || !(question.trust.can_append_to_today ?? question.trust.practice_eligible)" @click="addOnlineQuestion(question.id, question.kp_id)">{{ addingQuestionId === question.id ? '正在加入…' : '加入今日学习' }}</button>
+                <p v-if="question.bank_scope === 'personal' && question.trust.can_append_to_today === false" class="hint">这道个人练习尚未满足今日卷准入条件，不能加入；请保留为参考或重新生成通过独立核验的题目。</p>
                 <button v-if="question.bank_scope === 'personal'" type="button" class="quiet-action" :disabled="visibilityBusyId !== null" @click="setPersonalQuestionHidden({id:question.id,kp_id:question.kp_id,bank_scope:'personal',hidden:false,question_type:question.question_type,difficulty:question.difficulty,stem:question.stem,options:question.options ?? null,practice_eligible:question.trust.practice_eligible}, true)">{{ visibilityBusyId === question.id ? '处理中…' : '隐藏' }}</button>
               </li>
             </ul>

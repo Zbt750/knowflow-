@@ -26,6 +26,9 @@ def test_registry_has_ten_bounded_families_and_only_declared_canonical_node_code
     "根据当前洛必达知识点，给我出一道稍难的极限题，要求只生成一道、答案与解析一致；不确定的内容标明未核验，不加入今日学习。",
     r"给我生成一道题：计算 lim_{x→0}(e^{3x}-1-3x)/x²",
     r"计算极限：\lim_{x\to 0}\frac{e^{3x}-1-3x}{x^2}",
+    "采用 e^(7x)-1-7x 除以 x² 在 x趋近0时的极限",
+    "计算 x->0 时 (e^(7*x)-1-7*x)/x^2",
+    r"计算 \lim_{x\to 0}\frac{e^{7\cdot x}-1-7\cdot x}{x^2}",
 ])
 def test_exp_limit_family_accepts_topic_only_or_its_supported_formula(requirement):
     assert requirement_supported_by_family(requirement, FAMILIES["exp_limit"])
@@ -34,6 +37,9 @@ def test_exp_limit_family_accepts_topic_only_or_its_supported_formula(requiremen
 @pytest.mark.parametrize("requirement", [
     "给我生成一道洛必达法则的单选题：求 x 趋于正无穷时 (5x²−3x+1)/(2x²+x−4) 的极限。",
     r"计算 lim_{x→1}(x^3-1)/(x-1)",
+    "计算 x->0 时 (e^(7x)-1-8x)/x^2",
+    "计算 x->0 时 (e^(101x)-1-101x)/x^2",
+    "计算 x->0 时 (e^(7x)-1-7x)/x^3",
 ])
 def test_exp_limit_family_refuses_explicit_formula_outside_its_contract(requirement):
     assert not requirement_supported_by_family(requirement, FAMILIES["exp_limit"])

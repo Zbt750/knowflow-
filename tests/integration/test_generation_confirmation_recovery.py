@@ -322,7 +322,11 @@ def runtime_select_role(factory, schema):
         with admin_engine.begin() as connection:
             assert connection.scalar(text("SELECT current_database()")).endswith("_test")
             assert connection.scalar(text("SELECT inet_server_port()")) != 5433
-            assert connection.scalar(text("SELECT current_user")) == "kaoyan_admin"
+            from sqlalchemy.engine import make_url
+            assert connection.scalar(text("SELECT current_user")) == make_url(admin_url).username
+            assert connection.scalar(text("SELECT current_database()")) == owner.url.database
+            assert connection.scalar(text("SELECT inet_server_port()")) == owner.url.port
+            assert connection.scalar(text("SELECT rolsuper OR rolcreaterole FROM pg_roles WHERE rolname=current_user"))
             # A NOLOGIN role avoids creating credentials. The test connection
             # authenticates as the normal test app role, then SET ROLE below.
             connection.exec_driver_sql(f'CREATE ROLE "{role}" NOLOGIN')

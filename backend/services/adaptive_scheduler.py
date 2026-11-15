@@ -66,6 +66,7 @@ def replay(observations, now):
     projection = Projection()
     seen = set()
     skill_opportunities = set()
+    skip_opportunities = set()
     for o in sorted(observations, key=lambda o: (o.at, o.attempt_id)):
         if o.at.tzinfo is None:
             raise ValueError('timezone_required')
@@ -75,7 +76,11 @@ def replay(observations, now):
         skill = projection.skills.setdefault(o.kp_id, Skill())
         # Exposure is a fact even if scoring is unknown; it is not mastery.
         if o.result == 'skipped':
-            skill.skipped += 1
+            day = o.at.astimezone(timezone(timedelta(hours=8))).date()
+            opportunity = (o.kp_id, o.question_id, o.version_id, day)
+            if opportunity not in skip_opportunities:
+                skip_opportunities.add(opportunity)
+                skill.skipped += 1
             continue
         skill.last_at = max(skill.last_at or o.at, o.at)
         if o.result not in {'right', 'wrong'}:

@@ -81,6 +81,16 @@ def test_database_url() -> str:
     return TEST_DATABASE_URL
 
 
+@pytest.fixture(autouse=True)
+def _clear_idle_transactions():
+    """占位：R82 实测跨测试 terminate 会误杀正常连接并制造 ERROR，已停用。
+
+    全量 pytest 的事务锁问题要在具体测试里显式 ROLLBACK，
+    不能用跨测试清理掩盖（详见 R82 报告）。
+    """
+    yield
+
+
 def pytest_sessionfinish(session,exitstatus):
     if os.environ.get('PHASE45I_CLOSE_OFFLINE')!='1':return
     import json

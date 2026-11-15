@@ -213,3 +213,19 @@ def test_legacy_or_unknown_answer_never_becomes_eligible_from_legacy_config(answ
     assert result.practice_eligible is False
     assert result.answer_comparison_method is None
     assert result.evidence_capability != "verified_objective"
+
+
+@pytest.mark.parametrize('status,allowed',[
+    ('verified',True),('auto_verified',True),('needs_review',False),
+    ('unverified',False),('rejected',False),(None,False),
+])
+def test_today_append_independent_personal_verification_gate(status,allowed):
+    from backend.services.question_eligibility import personal_answer_allows_today
+    question=Question(bank_scope='personal',grading_config={'math_verification':{'status':status}})
+    assert personal_answer_allows_today(question) is allowed
+
+
+def test_today_append_personal_gate_rejects_missing_or_malformed_verification():
+    from backend.services.question_eligibility import personal_answer_allows_today
+    for config in [None,{}, {'math_verification':None},{'math_verification':'verified'}]:
+        assert not personal_answer_allows_today(Question(bank_scope='personal',grading_config=config))

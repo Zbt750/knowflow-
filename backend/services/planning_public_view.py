@@ -191,7 +191,11 @@ def public_task(factory,result,*,now=None):
         # turns the card into a new-paper preview and hides its confirm action.
         operation=context.get('daily_plan_operation') or (handoff.get('constraints') or {}).get('daily_plan_operation')
         plan_id=context.get('current_plan_id') or (context.get('current_plan') or {}).get('plan_id')
-        if operation=='append' and plan_id:
+        paper_adjustment = bool(context.get('paper_adjustment')
+            and isinstance(row.draft,dict) and row.draft.get('kind')=='paper_adjustment')
+        if paper_adjustment:
+            plan_id=row.draft.get('plan_id')
+        if (operation=='append' or paper_adjustment) and plan_id:
             try:
                 plan=db.get(DailyPlan,UUID(str(plan_id)))
                 local_day=now.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat()

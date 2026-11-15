@@ -5,6 +5,14 @@ from backend.services.paper_adjustment_chat import (
     _replacement_fill_candidates, _requested_408_topic_scope, _topic_count_batch, parse_command,
 )
 
+@pytest.mark.parametrize('text',['先取消这次408替换方案，保留当前正式卷。','请取消本次数学调整方案。','帮我撤回刚才的替换方案，其他不动。'])
+def test_scoped_pending_cancellation_precedes_subject_replacement(text):
+    assert parse_command(text)['action']=='cancel'
+
+@pytest.mark.parametrize('text',['不要取消这次408替换方案。','能否取消这次408替换方案？','如果取消这次替换方案呢？'])
+def test_cancellation_questions_and_denials_preserve_the_draft(text):
+    assert parse_command(text)=={'action':'query','text':text,'revoke_proposal':False}
+
 
 @pytest.mark.parametrize('text',[
     '不要删除第1题','能不能减少一道题？','如果换成408呢','先不要替换',
@@ -153,3 +161,58 @@ def test_single_math_topic_replacement_does_not_expand_to_the_whole_math_paper()
     assert not _is_whole_math_replacement('把洛必达法则的题目全部换成408操作系统的题目。')
     assert _is_whole_math_replacement('把今天的数学题全部换成408。')
     assert _is_whole_math_replacement('把全部数学内容换成408。')
+
+
+@pytest.mark.parametrize('text',[
+ '给今天的408卷增加两道堆的题、增加两道二叉搜索树的题，其他不变，先给我看待确认方案。',
+ '堆增加2道，二叉搜索树增加2道，其他不变，先预览。',
+ '堆增加两道、二叉搜索树增加两道。',
+])
+def test_named_single_character_topic_and_enumeration_batch(text):
+    nodes=[NS(id=UUID(int=701),name='堆'),NS(id=UUID(int=702),name='二叉搜索树')]
+    edits,error=_topic_count_batch(text,nodes)
+    assert error is None,error
+    assert [(node.id,delta) for node,delta in edits]==[(nodes[0].id,2),(nodes[1].id,2)]
+
+
+def test_one_character_topic_does_not_match_unrelated_word():
+    nodes=[NS(id=UUID(int=711),name='堆'),NS(id=UUID(int=712),name='二叉搜索树'),NS(id=UUID(int=713),name='洛必达法则')]
+    edits,error=_topic_count_batch('一堆资料需要整理，二叉搜索树增加2道，洛必达法则减少1道。',nodes)
+    assert error is None
+    assert [(node.id,delta) for node,delta in edits]==[(nodes[1].id,2),(nodes[2].id,-1)]
+
+
+def test_enumeration_inside_displayed_topic_name_is_not_an_operation_boundary():
+    nodes=[NS(id=UUID(int=721),name='概念甲、概念乙'),NS(id=UUID(int=722),name='二叉搜索树')]
+    edits,error=_topic_count_batch('概念甲、概念乙增加2道、二叉搜索树减少1道。',nodes)
+    assert error is None
+    assert [(node.id,delta) for node,delta in edits]==[(nodes[0].id,2),(nodes[1].id,-1)]
+
+
+@pytest.mark.parametrize('text',[
+ '取消这次删除方案，保留当前正式卷。',
+ '先取消刚才的追加方案，原卷不动。',
+ '撤回本次多知识点方案。',
+])
+def test_cancel_pending_proposal_is_independent_of_operation_type(text):
+    assert parse_command(text)['action']=='cancel'
+
+@pytest.mark.parametrize('text',[
+ '不要取消这次删除方案。','能不能取消这次删除方案？','如果取消这次删除方案会怎么样？',
+])
+def test_cancel_pending_proposal_queries_and_denials_do_not_cancel(text):
+    assert parse_command(text)['action']=='query'
+
+
+@pytest.mark.parametrize('message,expected',[
+ ('给我生成一道洛必达法则练习题，不加入今日卷。','generation'),
+ ('用奶蛙AI给我生成一道行列式的性质练习题，考查三阶可逆矩阵和伴随矩阵的行列式关系，先生成个人参考题，不加入今日卷。','generation'),
+ ('不要生成新题，也不要加入今日卷。','qa'),
+ ('先不生成洛必达法则题，只看看。','data_query'),
+])
+def test_generation_consent_is_separate_from_paper_insertion(message,expected):
+    from backend.services.assistant_router import route_message
+    from backend.schemas.learning_assistant import StudyContext
+    route=route_message(message,StudyContext())
+    assert route.capability==expected
+    if expected!='generation':assert route.write_risk is False

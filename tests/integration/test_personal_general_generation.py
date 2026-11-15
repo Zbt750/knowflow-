@@ -102,19 +102,15 @@ def test_unregistered_topic_and_all_supported_types_save_versions_but_not_plans(
         for table in (DailyPlan, PracticeItem, LearningEvent, QuestionAttempt):
             assert db.scalar(select(func.count()).select_from(table)) == 0
         assert db.get(KpState, kp).state == "unseen"
-    added = append_personal(f, question_ids=[UUID(result["question_ids"][0])], now=NOW)
-    assert added["added"] == 1
-    assert append_personal(f, question_ids=[UUID(result["question_ids"][0])], now=NOW)["added"] == 0
-    with f.begin() as db:
-        verdict = submit_answer(db, item_id=UUID(added["numbers"][0]["item_id"]),
-            selected_option="A" if kind == "single_choice" else None,
-            raw_answer=None if kind == "single_choice" else "4", confidence="high",
-            idempotency_key="TEST_FIXTURE_general_" + kind, now=NOW)
-        assert verdict.result == "unknown"
-        assert verdict.effective_confirmation_count == 0
+    # Saved reference material is not an independently verified practice item.
+    # Explicit personal-bank permission must still fail closed at admission.
+    for _ in range(2):
+        with pytest.raises(ValueError, match="question_not_practice_eligible"):
+            append_personal(f, question_ids=[UUID(result["question_ids"][0])], now=NOW)
+    with f() as db:
         assert db.get(KpState, kp).mastered_at is None
-        assert db.scalar(select(func.count()).select_from(QuestionAttempt)) == 1
-        assert db.scalar(select(func.count()).select_from(LearningEvent)) == 1
+        for table in (DailyPlan, PracticeItem, QuestionAttempt, LearningEvent):
+            assert db.scalar(select(func.count()).select_from(table)) == 0
 
 
 def test_confirmed_wrong_integral_limit_is_rejected_before_any_save(general_bank):
@@ -279,3 +275,26 @@ def test_general_assistant_confirmation_then_save_uses_same_business_stream(gene
     with f() as db:
         assert db.scalar(select(func.count()).select_from(Question)) == 1
         assert db.scalar(select(func.count()).select_from(PracticeItem)) == 0
+
+
+def test_reference_only_practice_and_today_append_are_distinct_capabilities(general_bank):
+    from backend.services.personal_question_service import bank_rows
+    from backend.api.routes.study import _question_trust_view
+    from backend.services.question_eligibility import personal_answer_allows_today
+    factory,kp=general_bank
+    generated=run_generation(factory,request(kp),GeneralModel(),now=NOW)
+    assert len(generated['question_ids'])==1
+    with factory() as db:
+        q=db.get(Question,UUID(generated['question_ids'][0]));node=db.get(KnowledgePoint,kp)
+        assert question_eligibility(q,node).practice_eligible
+        assert not personal_answer_allows_today(q)
+        trust=_question_trust_view(q,node)
+        assert trust.practice_eligible and trust.can_append_to_today is False
+        row=bank_rows(db,scope='personal',kp_id=kp)['items'][0]
+        assert row['practice_eligible'] and row['can_append_to_today'] is False
+        assert db.scalar(select(func.count()).select_from(PracticeItem))==0
+    with pytest.raises(ValueError,match='question_not_practice_eligible'):
+        append_personal(factory,question_ids=[UUID(qid) for qid in generated['question_ids']],now=NOW)
+    with factory() as db:
+        assert db.scalar(select(func.count()).select_from(PracticeItem))==0
+        assert db.scalar(select(func.count()).select_from(QuestionAttempt))==0

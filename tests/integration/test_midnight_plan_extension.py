@@ -47,20 +47,23 @@ def midnight_bank(test_database_url):
 
 
 def personal(factory, kp, now):
+    # Midnight semantics require an admissible personal item. Use the existing
+    # independently verified family instead of an unverified free-form series.
     from uuid import uuid4
-    class MidnightModel(GeneralModel):
-        def complete(self, messages, *, attempt=1):
-            raw,usage=super().complete(messages,attempt=attempt)
-            data=json.loads(raw)
-            first=2 if now==BEFORE else 3
-            data.update(stem=f'SYNTHETIC 午夜测试：等比级数首项为{first}、公比为1/2，求其和。',
-                correct_answer=str(first*2),final_value=str(first*2),
-                explanation=f'公比绝对值小于1，和为{first}/(1-1/2)={first*2}。')
-            return json.dumps(data,ensure_ascii=False),usage
-    result = run_generation(factory, PersonalGenerationRequest(request_key=uuid4(), generation_mode="ai_generated",
-        targets=[GenerationTarget(kp_id=kp, question_type="calculation", count=1)]), MidnightModel(), now=now)
-    assert len(result["question_ids"]) == 1, result
-    return result["question_ids"][0]
+    with factory.begin() as db:
+        node=db.scalar(select(KnowledgePoint).where(KnowledgePoint.code=='math.exam.c431f98f817c'))
+        if node is None:
+            node=KnowledgePoint(code='math.exam.c431f98f817c',name='定积分的计算',subject='考研数学',is_active=True,is_assessable=True)
+            db.add(node);db.flush();db.add(KpState(kp_id=node.id))
+        personal_kp=node.id
+    result=run_generation(factory,PersonalGenerationRequest(request_key=uuid4(),generation_mode='deterministic_fast',
+        targets=[GenerationTarget(kp_id=personal_kp,question_type='single_choice',count=1)]),GeneralModel(),now=now)
+    assert len(result['question_ids'])==1,result
+    with factory() as db:
+        question=db.get(Question,UUID(result['question_ids'][0]))
+        assert question.grading_config['math_verification']['status'] in {'verified','auto_verified'}
+    return result['question_ids'][0]
+
 
 
 def test_generate_2359_keeps_yesterday_and_freezes_today_after_materialization(midnight_bank):

@@ -13,6 +13,11 @@ export interface PaperAdjustmentProposal {
 export interface PaperAdjustmentReceipt {
   task_id: string; plan_id: string; removed_item_ids: string[];
   added_count: number; total_count: number; active_item_ids: string[];
+  before_count?: number;
+  restored_count?: number;
+  restored_item_ids?: string[];
+  added_items?: {item_id:string;question_id:string;question_version_id:string;number:number;
+    stem:string;kp_name:string;source_category:string}[];
 }
 export const proposePaperAdjustment = (body: {
   session_id: string; plan_id: string; remove_item_ids: string[];

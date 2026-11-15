@@ -107,7 +107,7 @@ def bank_rows(db, *, scope="personal", kp_id=None, search="", include_hidden=Fal
     if search: stmt = stmt.where(Question.stem.contains(search, autoescape=True))
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     rows = list(db.scalars(stmt.order_by(Question.created_at.desc(), Question.id).limit(limit).offset(offset)))
-    from backend.services.question_eligibility import question_eligibility
+    from backend.services.question_eligibility import question_eligibility, personal_answer_allows_today
     def verification_state(q):
         config = q.grading_config or {}
         state = (config.get("math_verification") or {}).get("status")
@@ -122,7 +122,8 @@ def bank_rows(db, *, scope="personal", kp_id=None, search="", include_hidden=Fal
         "verification": verification_state(q),
         "difficulty_summary": ((q.grading_config or {}).get('generation') or {}).get('difficulty_summary'),
         "generation_batch_id": str(q.generation_batch_id) if q.generation_batch_id else None,
-        "practice_eligible": question_eligibility(q, db.get(KnowledgePoint, q.kp_id)).practice_eligible}
+        "practice_eligible": question_eligibility(q, db.get(KnowledgePoint, q.kp_id)).practice_eligible,
+        "can_append_to_today": question_eligibility(q, db.get(KnowledgePoint, q.kp_id)).practice_eligible and personal_answer_allows_today(q)}
         for q in rows]}
 
 

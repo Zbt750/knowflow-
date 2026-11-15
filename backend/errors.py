@@ -32,6 +32,9 @@ class ErrorResponse(BaseModel):
 # 唯一错误响应契约：{"error": {"code": ..., "message": ...}}
 # 前端按 code 分支，不解析 message 的自然语言文案。
 SAFE_MESSAGES: dict[str, str] = {
+    "paper_restore_not_admitted": "原题的准入资格或冻结版本已变化，本次未恢复题目；今日卷和历史记录保持不变。",
+    "paper_undo_no_operation": "没有找到当前卷可撤销的替换记录，今日卷保持不变。",
+    "paper_reversal_confirmation_required": "撤销涉及已浏览题目或超出预算，请核对撤销方案并明确确认；今日卷尚未改变。",
     "paper_budget_confirmation_required": "调整后的剩余用时超出预算，请先明确接受超预算调整；正式卷尚未改变。",
     "paper_budget_unknown": "部分题目缺少可靠的冻结版本用时，无法核验调整预算；正式卷尚未改变。",
     "home_selection_unavailable": "选题校验暂时不可用，原方案已保留；本次未生成正式试卷。",

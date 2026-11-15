@@ -31,7 +31,10 @@ def bank_selection_request(text):
     negated_new=bool(re.search(r'(?:不要|不用|别|不必|无需).{0,4}新编',text))
     explicit_new=bool(re.search(r'新编|(?:直接|重新)?生成.{0,8}(?:新的|新题)|不用查.{0,8}题库.{0,8}(?:直接)?出题',text)) and not negated_new
     bank_source=bool(re.search(r'(?:从|查|找|在).{0,8}(?:我的|个人|已有|现有)?题库|已有题目|题库里',text)) and not explicit_new
-    requested=bool(re.search(r'(?:添加|增加|再加|额外加|追加|补(?:充)?|再补|加入|加进|加到|加上|加|再来|(?:给我|帮我|请)?来|选|找|检索).{0,24}(?:一道|两道|[1-9]\d*道|题|练习)',operation))
+    # 「多安排2道」与「增加2道」是同一个用户动作。2026-11-12 实测：用户在首页说
+    # “把行列式的性质多安排2道”，解析器不认识「多安排」，把它当成“没说数量”，
+    # 回了一句“想增加几道”。这里补上口语化增量动词，交给后续数量解析。
+    requested=bool(re.search(r'(?:添加|增加|再加|额外加|追加|多安排|补(?:充)?|再补|加入|加进|加到|加上|加|再来|(?:给我|帮我|请)?来|选|找|检索).{0,24}(?:一道|两道|[1-9]\d*道|题|练习)',operation))
     if bank_source and re.search(r'(?:来|拿(?:来)?).{0,5}(?:一道|一题)|(?:找|选|出).{0,10}(?:一道|题)',operation):requested=True
     if not requested or re.match(r'^(?:为什么|为何|如何|怎么|能否|是否)',operation):return None
     count=re.search(QUESTION_COUNT_PATTERN,operation)
@@ -45,7 +48,7 @@ def bank_selection_request(text):
     question_type=next(iter(requested_types)) if len(requested_types)==1 else None
     narrow=bool(re.search(r'只保留前[一二两三四五六七八九十\d]+个(?:推荐)?知识点',text))
     explicit_replace=bool(re.search(r'不要原来的推荐.{0,20}(?:只做|只练)|只(?:练|做)(?!\s*\d+\s*道)[^，,。；;]{0,24}(?:洛必达|知识点|范围|线性代数|矩阵|行列式|积分|极限)|系统推荐范围.{0,8}(?:改成|改为|替换为)|(?:知识点)?范围.{0,8}(?:改成|改为|替换为)|(?:原来的推荐|原推荐|系统推荐).{0,4}(?:全部)?替换(?:成|为)|不保留.{0,10}(?:原推荐|系统推荐)',text))
-    add_operation=bool(re.search(r'(?:再)?(?:给我)?加\s*(?:[一二两三四五六七八九十]|[1-9]\d*)\s*道|(?:给我|帮我|请)?来\s*(?:[一二两三四五六七八九十]|[1-9]\d*)?\s*(?:一道|一题|题目)|(?:给我|帮我|请)来一道|添加|增加|再加|额外加|追加|补充|再补|加入|加进|加到|加上|再来|(?:基础上|推荐.*)加|今日卷|放(?:进|入|到|在).{0,10}(?:今日|今天)(?:学习)?卷',operation))
+    add_operation=bool(re.search(r'(?:再)?(?:给我)?加\s*(?:[一二两三四五六七八九十]|[1-9]\d*)\s*道|(?:给我|帮我|请)?来\s*(?:[一二两三四五六七八九十]|[1-9]\d*)?\s*(?:一道|一题|题目)|(?:给我|帮我|请)来一道|添加|增加|再加|额外加|追加|补充|再补|加入|加进|加到|加上|再来|多安排|(?:基础上|推荐.*)加|今日卷|放(?:进|入|到|在).{0,10}(?:今日|今天)(?:学习)?卷',operation))
     add_operation = add_operation or bool(re.search(r'补(?:充)?\s*'+QUESTION_COUNT_PATTERN, operation))
     scope_mode='narrow' if narrow else 'replace' if explicit_replace else 'append' if add_operation else 'replace'
     append=scope_mode=='append'

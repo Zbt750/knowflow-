@@ -708,6 +708,35 @@ def test_cross_subject_replacement_uses_six_low_history_408_topics_and_keeps_mat
     assert after['learning_tasks']==before['learning_tasks']+2
 
 
+def test_named_addition_over_budget_keeps_baseline_and_latest_candidate(client,home,session_factory):
+    sid=UUID(home['session_id'])
+    with session_factory.begin() as db:
+        node,_=_add_synthetic_topic(db,code='synthetic.pending.implicit',name='隐函数求导（待确认）',question_count=12)
+        other,_=_add_synthetic_topic(db,code='synthetic.pending.other',name='线性代数（待确认）')
+        ids=[str(node.id),str(other.id)];target_id=str(node.id)
+    base=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,'goal':'','action':'default',
+        'selected_kp_ids':ids,'budget_minutes':90}).json()
+    original=read_home_domain(client,sid)
+    assert set(original['draft']['selected_kp_ids'])==set(ids)
+    count=sum(q['kp_id']==target_id for q in original['draft']['questions'])
+    assert 0<count<12
+    addition=12-count  # Fill the known 12-question inventory: at least120min.
+    result=client.post(ROOT,json={'session_id':str(sid),'request_key':uuid4().hex,
+        'goal':f'再给我增加{addition}道隐函数求导的题目','action':'adjust',
+        'expected_version':base['draft_version']})
+    assert result.status_code==200,result.text
+    recovered=read_home_domain(client,sid)
+    assert recovered['draft']==original['draft']
+    candidate=recovered['workload_candidate']
+    assert candidate['context']['workload_pending'] is True
+    assert candidate['draft']['total_minutes']>90
+    assert sum(q['kp_id']==target_id for q in candidate['draft']['questions'])==count+addition==12
+    assert [(q['question_id'],q['question_version_id']) for q in candidate['draft']['questions'] if q['kp_id']!=target_id]==[
+        (q['question_id'],q['question_version_id']) for q in original['draft']['questions'] if q['kp_id']!=target_id]
+    assert formal_rows(session_factory)['daily_plans']==0
+    assert formal_rows(session_factory)['practice_items']==0
+
+
 def test_r46_named_topic_decrease_restore_partial_undo_and_full_reset_are_real_draft_transitions(client,home,session_factory):
     sid=UUID(home['session_id'])
     with session_factory.begin() as db:
@@ -734,6 +763,12 @@ def test_r46_named_topic_decrease_restore_partial_undo_and_full_reset_are_real_d
     add_view=added.json()
     assert add_view.get('status')=='ready',add_view
     add_domain=read_home_domain(client,sid)
+    if add_domain.get('workload_candidate'):
+        # The accepted baseline remains top-level until the increased workload
+        # is accepted. Check the latest pending candidate, not the fallback.
+        assert add_domain['draft']==base_domain['draft']
+        assert add_domain['workload_candidate']['context']['workload_pending'] is True
+        add_domain=add_domain['workload_candidate']
     after_add=next(row['assigned_count'] for row in add_domain['draft']['scope_nodes'] if row['kp_id']==implicit_id)
     assert after_add==initial_count+2, {'response':add_view,'draft':add_domain['draft']}
     assert next(q for q in add_domain['draft']['questions'] if q['kp_id']==other_id)==baseline_other

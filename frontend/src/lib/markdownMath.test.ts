@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { markdownWithMath } from "./markdownMath";
 
 describe("math survives Markdown parsing", () => {
+  it('protects actual undelimited personal-question formulas without changing their value',()=>{
+    const html=markdownWithMath(String.raw`计算极限：\lim_{x\to 0}\frac{e^{83x}-1-83x}{x^2}=____。`);
+    expect(html).toContain(String.raw`\(\lim_{x\to 0}\frac{e^{83x}-1-83x}{x^2}\)=____。`);
+    expect(markdownWithMath(String.raw`C. \frac{6889}{2}`)).toContain(String.raw`\(\frac{6889}{2}\)`);
+    expect(markdownWithMath(String.raw`计算：\\frac{6889}{2}。`)).toContain(String.raw`\(\frac{6889}{2}\)`);
+  });
+  it('leaves code, paths, incomplete expressions and existing math delimiters intact',()=>{
+    expect(markdownWithMath(String.raw`代码：\frac{1}{`)).not.toContain(String.raw`\(`);
+    expect(markdownWithMath(String.raw`C:\temp\file.txt`)).not.toContain(String.raw`\(`);
+    expect(markdownWithMath('`\\frac{1}{2}`')).toContain('<code>\\frac{1}{2}</code>');
+    expect(markdownWithMath(String.raw`\(\frac{1}{2}\)`)).toContain(String.raw`\(\frac{1}{2}\)`);
+    expect(markdownWithMath(String.raw`\(\frac{1}{2}\)`)).not.toContain(String.raw`\(\(`);
+  });
   it('keeps normal Setext headings and inline math headings while protecting display derivations',()=>{
     expect(markdownWithMath('普通标题\n====\n')).toContain('<h1>普通标题</h1>');
     expect(markdownWithMath(String.raw`行内公式 \(x^2\)

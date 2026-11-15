@@ -28,6 +28,69 @@ from backend.mastery.types import DomainLearningEvent
 MAX_ITEM_SUBMISSIONS = 20
 MAX_PREVIOUS_QUESTION_RECORDS = 64
 
+# 2026-11-13 R79：个人 AI 题的独立复习节奏。
+# 个人题不属于毕业证据，也不更新 kp_states 的可靠掌握度；
+# 但它必须有自己的复习记录（否则“答对/答错”对计划毫无影响）。
+# 间隔按答对次数递增，答错回到 1 天。
+PERSONAL_REVIEW_INTERVALS_DAYS = (1, 3, 7, 14, 30, 60)
+PERSONAL_REVIEW_REASON_COMPLETED = "personal_review_completed"
+PERSONAL_REVIEW_REASON_SCHEDULED = "personal_review_scheduled"
+
+
+def personal_review_transition(db: Session, *, question, item, objective_result: str,
+                               now: datetime) -> tuple[datetime, dict[str, Any]]:
+    """按题目版本累计个人复习阶段，返回 (next_review_at, 记录)。
+
+    只读同一 question_id + question_version_id 的个人复习记录，
+    绝不影响 kp_states / 毕业题集 / 公共题库。
+    """
+    from datetime import timedelta
+    previous = db.scalar(select(QuestionAttempt).where(
+        QuestionAttempt.question_id == question.id,
+        QuestionAttempt.question_version_id == item.question_version_id,
+        QuestionAttempt.reason_code.in_((PERSONAL_REVIEW_REASON_SCHEDULED,
+                                         PERSONAL_REVIEW_REASON_COMPLETED)),
+    ).order_by(QuestionAttempt.submitted_at.desc()).limit(1))
+    previous_stage = 0
+    previous_next = None
+    if previous is not None:
+        prev = (previous.grading_evidence or {}).get("personal_review") or {}
+        try:
+            previous_stage = int(prev.get("review_stage") or 0)
+        except (TypeError, ValueError):
+            previous_stage = 0
+        previous_next = previous.next_review_at.isoformat() if previous.next_review_at else None
+    right = objective_result == "right"
+    if right:
+        stage = previous_stage + 1
+        index = min(stage - 1, len(PERSONAL_REVIEW_INTERVALS_DAYS) - 1)
+        interval_days = PERSONAL_REVIEW_INTERVALS_DAYS[index]
+        reason = (PERSONAL_REVIEW_REASON_COMPLETED
+                  if stage >= len(PERSONAL_REVIEW_INTERVALS_DAYS)
+                  else PERSONAL_REVIEW_REASON_SCHEDULED)
+    else:
+        stage = 0
+        interval_days = PERSONAL_REVIEW_INTERVALS_DAYS[0]
+        reason = PERSONAL_REVIEW_REASON_SCHEDULED
+    next_review_at = now + timedelta(days=interval_days)
+    record = {
+        "scope": "personal_only",
+        "policy": "personal_review_v1",
+        "objective_result": objective_result,
+        "previous_review_stage": previous_stage,
+        "review_stage": stage,
+        "interval_days": interval_days,
+        "last_review_at": now.isoformat(),
+        "next_review_at": next_review_at.isoformat(),
+        "previous_next_review_at": previous_next,
+        "reason_code": reason,
+        "affects_graduation": False,
+        "affects_public_bank": False,
+        "affects_kp_mastery": False,
+    }
+    return next_review_at, record
+
+
 
 def _scoped_question_history(other, content_hash: str):
     """Retain uncertain first retests, then use a newly observed version boundary.
@@ -391,14 +454,26 @@ def submit_answer(db: Session, *, item_id: UUID, raw_answer: str | None,
     # answer_not_verified，应保留为参考作答（unknown，不计掌握度/毕业证据）。
     if getattr(verdict, "method", None) == "unsupported_v1" and getattr(verdict, "reason", None) == "unsupported_question":
         raise AppError("answer_grading_unsupported", status_code=422)
+    # 2026-11-13 R79：个人题独立复习记录。
+    # 只有“答案已独立核验”的个人题才进入个人复习节奏；未核验的题仍然
+    # 只记 answer_recorded_only，避免把不可靠答案当成学习进度。
+    personal_next_review_at = None
+    personal_record = None
+    if (question.bank_scope == 'personal'
+            and evidence.get('personal_answer_independently_verified')):
+        personal_next_review_at, personal_record = personal_review_transition(
+            db, question=question, item=item, objective_result=verdict.result, now=now)
+        evidence['personal_review'] = personal_record
     attempt = QuestionAttempt(
         id=attempt_id,
         practice_item_id=item.id, question_id=question.id, kp_id=item.kp_id,
         raw_answer=raw_answer.strip() if raw_answer and raw_answer.strip() else None,
         self_grade=None, objective_result=verdict.result, grading_evidence=evidence,
         idempotency_key=idempotency_key, submitted_at=now,
-        result_state=result.snapshot.state.value, reason_code=result.reason_code,
-        next_review_at=result.snapshot.next_review_at,
+        question_version_id=item.question_version_id,
+        result_state=result.snapshot.state.value,
+        reason_code=(personal_record['reason_code'] if personal_record else result.reason_code),
+        next_review_at=(personal_next_review_at if personal_record else result.snapshot.next_review_at),
     )
     db.add(attempt)
     db.flush()

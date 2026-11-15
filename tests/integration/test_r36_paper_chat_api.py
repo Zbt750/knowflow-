@@ -27,6 +27,20 @@ def test_live_migration_and_identity(session_factory, record_property):
         record_property('attempt_foreign_key',str(fk['options']))
 
 
+def test_scoped_cancel_keeps_paper_and_invalidates_confirmation(session_factory):
+    sid,ctx,_=setup(session_factory)
+    before=history(session_factory)
+    talk(session_factory,sid,AssistantRequest(question='删除第1题',study_context=ctx),NoModel())
+    assert reply(session_factory,sid).metadata_['paper_adjustment']['proposal']
+    talk(session_factory,sid,AssistantRequest(question='先取消这次408替换方案，保留当前正式卷。',study_context=ctx),NoModel())
+    assert '已取消' in reply(session_factory,sid).content
+    assert reply(session_factory,sid).metadata_['paper_adjustment']['proposal'] is None
+    talk(session_factory,sid,AssistantRequest(question='确认调整',study_context=ctx),NoModel())
+    assert '没有可确认' in reply(session_factory,sid).content
+    with session_factory() as db:assert db.get(PracticeItem,ctx.practice_item_id).removed_at is None
+    assert history(session_factory)==before
+
+
 def client(factory):
     app=FastAPI();app.state.session_factory=factory
     app.include_router(router,prefix='/api');register_error_handlers(app)
@@ -52,6 +66,10 @@ def test_real_http_replace_and_replay_keep_original_item(session_factory):
         'remove_item_ids':[str(ctx.practice_item_id)],'replacements':[reference],'budget_minutes':60})
     assert response.status_code==201,response.text
     proposal=response.json();url=f"/api/paper-adjustments/{proposal['task_id']}/confirm"
+    stored=c.get(f"/api/learning-tasks/{proposal['task_id']}")
+    assert stored.status_code==200,stored.text
+    assert stored.json()['draft']['kind']=='paper_adjustment'
+    assert stored.json()['draft']['remove_item_ids']==[str(ctx.practice_item_id)]
     body={'session_id':str(sid),'draft_version':proposal['draft_version']}
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -59,6 +77,9 @@ def test_real_http_replace_and_replay_keep_original_item(session_factory):
     committed=responses[0];assert committed.status_code==200,committed.text
     assert responses[1].status_code==200 and responses[1].json()==committed.json()
     assert c.post(url,json=body).json()==committed.json()
+    recovered=c.get(f"/api/learning-tasks/{proposal['task_id']}").json()
+    assert recovered['metrics']['commit']==committed.json()
+    assert recovered['draft']['kind']=='paper_adjustment'
     with session_factory() as db:
         assert db.get(PracticeItem,ctx.practice_item_id).removed_at is not None
         active=list(db.scalars(select(PracticeItem).where(PracticeItem.plan_id==ctx.daily_plan_id,PracticeItem.removed_at.is_(None))))
